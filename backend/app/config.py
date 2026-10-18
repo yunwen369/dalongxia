@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +49,10 @@ ENV_FILE = PROJECT_DIR / ".env"  # 本地环境变量文件（禁止入库）
 # =============================================================
 # 三、网络与韧性参数（规范 §6.5，取值固定）
 # =============================================================
-MAX_RETRY = 2  # 网络抖动最大重试次数
+MAX_RETRY = 3  # 本次指令要求每源重试 3 次（规范 §6.5 为 2 次，已在评审记录登记）
 REQUEST_TIMEOUT = 20  # 对外 HTTP 默认超时（秒）
 DATASOURCE_TIMEOUT = 15  # 单数据源全链路超时（秒）
-RETRY_BACKOFF = (1.0, 2.0)  # 指数退避间隔（秒）
+RETRY_BACKOFF = (1.0, 2.0, 4.0)  # 指数退避间隔（秒）
 RATE_LIMIT_MIN_DELAY = 0.3  # 串行调用最小随机延时（秒）
 RATE_LIMIT_MAX_DELAY = 1.0  # 串行调用最大随机延时（秒）
 BROWSER_USER_AGENT = (  # 统一浏览器 UA，降低被源站风控概率
@@ -60,6 +60,74 @@ BROWSER_USER_AGENT = (  # 统一浏览器 UA，降低被源站风控概率
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
+
+# 数据源基址（允许环境变量覆盖，便于故障演练与联调；生产默认值不变）
+TENCENT_QUOTE_BASE = os.environ.get("OPENBB_TENCENT_QUOTE_BASE", "https://qt.gtimg.cn")
+TENCENT_KLINE_BASE = os.environ.get(
+    "OPENBB_TENCENT_KLINE_BASE", "https://ifzq.gtimg.cn"
+)
+TENCENT_SEARCH_BASE = os.environ.get(
+    "OPENBB_TENCENT_SEARCH_BASE", "https://smartbox.gtimg.cn"
+)
+SINA_QUOTE_BASE = os.environ.get("OPENBB_SINA_QUOTE_BASE", "https://hq.sinajs.cn")
+
+# 站点 Referer（部分源站缺 Referer 会返回 403）
+TENCENT_REFERER = "https://gu.qq.com/"
+SINA_REFERER = "https://finance.sina.com.cn/"
+EASTMONEY_REFERER = "https://data.eastmoney.com/"
+CNINFO_REFERER = "http://www.cninfo.com.cn/"
+
+# 数据源开关（环境变量仅用于故障演练；默认全部启用）
+PROVIDER_SWITCHES: Dict[str, bool] = {
+    "tencent": os.environ.get("OPENBB_DISABLE_TENCENT") != "1",
+    "sina": os.environ.get("OPENBB_DISABLE_SINA") != "1",
+    "eastmoney": os.environ.get("OPENBB_DISABLE_EASTMONEY") != "1",
+    "cninfo": os.environ.get("OPENBB_DISABLE_CNINFO") != "1",
+    # 东财 F10 datacenter 与 push2 行情通道分离，避免误伤概况接口
+    "em_f10": os.environ.get("OPENBB_DISABLE_EM_F10") != "1",
+}
+
+# 指数基线：code 为北向统一代码，tencent 为腾讯请求代码
+MARKET_INDEXES: List[Dict[str, str]] = [
+    {"code": "000001", "name": "上证指数", "market": "a", "tencent": "sh000001"},
+    {"code": "399001", "name": "深证成指", "market": "a", "tencent": "sz399001"},
+    {"code": "399006", "name": "创业板指", "market": "a", "tencent": "sz399006"},
+    {"code": "000300", "name": "沪深300", "market": "a", "tencent": "sh000300"},
+    {"code": "HSI", "name": "恒生指数", "market": "hk", "tencent": "hkHSI"},
+    {"code": "HSTECH", "name": "恒生科技指数", "market": "hk", "tencent": "hkHSTECH"},
+    {"code": "DJI", "name": "道琼斯", "market": "us", "tencent": "usDJI"},
+    {"code": "IXIC", "name": "纳斯达克", "market": "us", "tencent": "usIXIC"},
+    {"code": "INX", "name": "标普500", "market": "us", "tencent": "usINX"},
+]
+
+# 指数代码别名：前端/旧接口可能只传 000001、SPX 等
+INDEX_CODE_ALIASES: Dict[str, str] = {
+    "000001": "000001",
+    "399001": "399001",
+    "399006": "399006",
+    "000300": "000300",
+    "SH000001": "000001",
+    "SZ399001": "399001",
+    "SZ399006": "399006",
+    "SH000300": "000300",
+    "HSI": "HSI",
+    "HSTECH": "HSTECH",
+    "DJI": "DJI",
+    "IXIC": "IXIC",
+    "INX": "INX",
+    "SPX": "INX",
+}
+
+# 周期与复权枚举：内部统一值 → 腾讯/akshare 参数
+PERIOD_MAP: Dict[str, str] = {
+    "daily": "day",
+    "weekly": "week",
+    "monthly": "month",
+    "日k": "day",
+    "周k": "week",
+    "月k": "month",
+}
+ADJUST_VALUES = ("", "qfq", "hfq")
 
 # =============================================================
 # 四、缓存 TTL 表（单位：秒，规范 §6.8）
@@ -94,10 +162,10 @@ MARKETS: Dict[str, str] = {
 
 # stage 取值：installed=依赖已装但业务未接入；pending=尚未接入；disabled=已禁用
 DATA_SOURCES: Dict[str, Dict[str, Any]] = {
-    "akshare": {"label": "akshare（东财/新浪等）", "module": "akshare", "enabled": True, "stage": "installed"},
-    "tencent": {"label": "腾讯行情", "module": None, "enabled": True, "stage": "pending"},
-    "eastmoney": {"label": "东方财富", "module": None, "enabled": True, "stage": "pending"},
-    "sina": {"label": "新浪财经", "module": None, "enabled": True, "stage": "pending"},
+    "akshare": {"label": "akshare（东财/新浪等）", "module": "akshare", "enabled": True, "stage": "installed", "active": True},
+    "tencent": {"label": "腾讯行情", "module": "requests", "enabled": True, "stage": "installed", "active": True},
+    "eastmoney": {"label": "东方财富", "module": "requests", "enabled": True, "stage": "installed", "active": True},
+    "sina": {"label": "新浪财经", "module": "requests", "enabled": True, "stage": "installed", "active": True},
     "ths": {"label": "同花顺", "module": None, "enabled": True, "stage": "pending"},
     "cls": {"label": "财联社", "module": None, "enabled": True, "stage": "pending"},
     "fund": {"label": "天天基金/蛋卷", "module": None, "enabled": True, "stage": "pending"},

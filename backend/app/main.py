@@ -43,7 +43,8 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
-from backend.app.routers import system  # noqa: E402
+from backend.app.core.errors import ErrorCode, api_error  # noqa: E402
+from backend.app.routers import market, system  # noqa: E402
 
 logger = logging.getLogger("openbb_cn")
 
@@ -144,7 +145,8 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
     else:
         message = f"请求未能完成（HTTP {exc.status_code}），请稍后重试。"
     logger.warning("HTTP 异常：%s %s -> %s", request.method, request.url.path, exc.status_code)
-    return JSONResponse(status_code=200, content={"data": None, "error": message})
+    code = ErrorCode.NOT_FOUND if exc.status_code == 404 else ErrorCode.INVALID_PARAM
+    return JSONResponse(status_code=200, content=api_error(code, message))
 
 
 async def _validation_exception_handler(
@@ -160,7 +162,7 @@ async def _validation_exception_handler(
     logger.warning("参数校验失败：%s %s -> %s", request.method, request.url.path, field_text)
     return JSONResponse(
         status_code=200,
-        content={"data": None, "error": f"请求参数不合法，请检查：{field_text}。"},
+        content=api_error(ErrorCode.INVALID_PARAM, f"请求参数不合法，请检查：{field_text}。"),
     )
 
 
@@ -169,10 +171,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     logger.exception("未捕获异常：%s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=200,
-        content={
-            "data": None,
-            "error": "服务内部异常，请稍后重试；如持续出现，请查看 logs/app.log。",
-        },
+        content=api_error(ErrorCode.INTERNAL_ERROR),
     )
 
 
@@ -196,6 +195,7 @@ def create_app() -> FastAPI:
 
     # API 必须先于根路径静态挂载注册，保证 /api/* 不被 StaticFiles 截获
     application.include_router(system.router)
+    application.include_router(market.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

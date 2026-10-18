@@ -17,6 +17,7 @@ from fastapi import APIRouter
 
 from backend.app import config
 from backend.app.core import cache
+from backend.app.core.errors import ok
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ def _datasource_status() -> Dict[str, Dict[str, Any]]:
 
         if not meta.get("enabled"):
             status_text = "已禁用"
+        elif meta.get("active"):
+            status_text = "已接入"
         elif meta.get("stage") == "installed":
             status_text = "已安装（业务待接入）" if installed else "依赖缺失"
         else:
@@ -79,7 +82,7 @@ def health() -> Dict[str, Any]:
         "ai": {"configured": ai_config.configured, "source": ai_config.source},
         "server_time": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
-    return {"data": data, "error": None}
+    return ok(data)
 
 
 @router.post("/cache/clear")
@@ -90,4 +93,4 @@ def clear_cache_endpoint() -> Dict[str, Any]:
         Dict[str, Any]: {"data": {"removed": 删除文件数}, "error": null}
     """
     removed = cache.clear_cache()
-    return {"data": {"removed": removed}, "error": None}
+    return ok({"removed": removed})

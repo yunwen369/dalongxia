@@ -495,3 +495,166 @@ body {
   }
 }
 
+
+/* =============================================================
+ * 阶段 4 · 真实行情验证面板
+ * 说明：本页是技术验证界面，数值全部来自 /api/market/*；不使用演示数据。
+ * ============================================================= */
+.market-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.market-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-widget);
+}
+
+.market-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-aux);
+}
+
+.market-controls input,
+.market-controls select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-aux);
+}
+
+.market-controls input {
+  width: 110px;
+}
+
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.market-card {
+  min-height: 300px;
+}
+
+.market-card.wide {
+  grid-column: 1 / -1;
+  min-height: 220px;
+}
+
+.market-chart {
+  width: 100%;
+  height: 280px;
+}
+
+.table-scroll {
+  max-height: 340px;
+  overflow: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-aux);
+}
+
+.data-table th,
+.data-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-widget);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.data-table td.num,
+.data-table th.num {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.flat { color: var(--text-dim); }
+.num { font-family: var(--font-mono); }
+
+.search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.search-row input {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-aux);
+}
+
+.search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-aux);
+  cursor: pointer;
+}
+
+.search-item:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.notice.error {
+  border-color: var(--up);
+  color: var(--up);
+}
+
+@media (max-width: 1200px) {
+  .market-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .market-controls input {
+    width: 90px;
+  }
+}

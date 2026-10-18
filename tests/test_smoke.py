@@ -24,7 +24,8 @@ def test_health_returns_data() -> None:
     assert response.status_code == 200
 
     payload = response.json()
-    assert set(payload.keys()) == {"data", "error"}
+    assert {"data", "error"} <= set(payload.keys())
+    assert payload.get("error_code") is None
     assert payload["error"] is None
 
     data = payload["data"]

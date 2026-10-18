@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="css/app.css">
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
   <script src="vendor/echarts.min.js" defer></script>
+  <script src="js/market.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
 <body>
@@ -66,14 +67,14 @@
           <li class="sidebar-item">设置（待接入）</li>
         </ul>
         <div class="sidebar-divider"></div>
-        <div class="notice">阶段 1：仅验证四区布局、单端口同源与健康检查。</div>
+        <div class="notice">阶段 4：A股行情 7 接口真实数据验证；数据源/口径徽章显示实际命中通道。</div>
       </aside>
 
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
       <main class="workspace" role="main">
         <div class="toolbar">
           <span class="page-title" id="page-title">首页 · 市场总览</span>
-          <span class="badge accent">阶段 1 · 环境初始化</span>
+          <span class="badge accent">阶段 4 · 行情数据</span>
           <span class="badge" id="build-badge">构建标识加载中</span>
           <span class="badge" id="health-badge">健康检查中</span>
           <span class="toolbar-spacer"></span>
@@ -81,65 +82,114 @@
         </div>
 
         <section class="viewport" id="viewport">
-          <div class="grid">
-            <!-- 市场总览占位：不填任何假数据 -->
-            <article class="card span-24">
-              <div class="card-header">
-                <span class="card-title">核心指数行情</span>
-                <span class="badge">数据源：待接入</span>
-                <span class="badge">口径：占位</span>
-              </div>
-              <div class="card-body">
-                <div class="placeholder-value">—</div>
-                <p>指数行情将在阶段 3 接入 akshare 真实数据；本页不展示任何演示数值。</p>
-              </div>
-            </article>
+          <div class="market-panel">
+            <div class="market-controls">
+              <label>市场
+                <select id="mk-market">
+                  <option value="a">A股</option>
+                  <option value="hk">港股</option>
+                  <option value="us">美股</option>
+                </select>
+              </label>
+              <label>代码
+                <input id="mk-symbol" value="600519" autocomplete="off" aria-label="股票代码">
+              </label>
+              <label>周期
+                <select id="mk-period">
+                  <option value="日k">日K</option>
+                  <option value="周k">周K</option>
+                  <option value="月k">月K</option>
+                </select>
+              </label>
+              <label>复权
+                <select id="mk-adjust">
+                  <option value="qfq">前复权</option>
+                  <option value="hfq">后复权</option>
+                  <option value="">不复权</option>
+                </select>
+              </label>
+              <button class="icon-button" id="mk-load" type="button">加载行情</button>
+              <button class="icon-button" id="mk-refresh" type="button">刷新</button>
+              <span class="toolbar-spacer"></span>
+              <span class="badge" id="mk-source">数据源：—</span>
+              <span class="badge" id="mk-caliber">口径：—</span>
+              <span class="badge" id="mk-status">状态：—</span>
+              <span class="badge" id="mk-asof">时间：—</span>
+            </div>
 
-            <!-- 指数走势图容器占位 -->
-            <article class="card span-24">
-              <div class="card-header">
-                <span class="card-title">指数走势</span>
-                <span class="badge">ECharts 本地加载</span>
-              </div>
-              <div class="card-body">
-                <div class="placeholder-value">—</div>
-                <p>图表容器已预留，本地 <code>vendor/echarts.min.js</code> 已就绪，数据接入后渲染。</p>
-              </div>
-            </article>
+            <div class="market-grid">
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">核心指数行情</span>
+                  <span class="badge" id="mk-index-badge">加载中</span>
+                </div>
+                <div class="card-body table-scroll" id="mk-index-table">—</div>
+              </article>
 
-            <!-- 数据源状态：由 /api/health 真实返回后渲染 -->
-            <article class="card span-24">
-              <div class="card-header">
-                <span class="card-title">数据源接入状态</span>
-                <span class="badge">来自 /api/health</span>
-              </div>
-              <div class="card-body">
-                <ul class="source-list" id="source-list">
-                  <li class="source-item">
-                    <span class="source-name">等待健康检查</span>
-                    <span class="source-status">—</span>
-                  </li>
-                </ul>
-              </div>
-            </article>
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">上证指数走势</span>
+                  <span class="badge" id="mk-index-kline-badge">加载中</span>
+                </div>
+                <div class="card-body">
+                  <div class="market-chart" id="mk-index-chart"></div>
+                </div>
+              </article>
 
-            <!-- 系统信息：由 /api/health 真实返回后渲染 -->
-            <article class="card span-24">
-              <div class="card-header">
-                <span class="card-title">运行环境</span>
-                <span class="badge">本机</span>
-              </div>
-              <div class="card-body">
-                <div id="system-info">等待健康检查返回。</div>
-              </div>
-            </article>
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">实时报价</span>
+                  <span class="badge" id="mk-quote-badge">加载中</span>
+                </div>
+                <div class="card-body table-scroll" id="mk-quote-table">—</div>
+              </article>
 
-            <!-- 全宽提示条 -->
-            <div class="span-48">
-              <div class="notice">
-                本页为阶段 1 占位页：只验证「127.0.0.1:6900 单端口同源 + /api/health 真实返回 + 四区布局」，
-                不包含任何业务接口，也不使用 mock 行情数据。
-              </div>
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">K线</span>
+                  <span class="badge" id="mk-kline-badge">加载中</span>
+                </div>
+                <div class="card-body">
+                  <div class="market-chart" id="mk-kline-chart"></div>
+                </div>
+              </article>
+
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">分时</span>
+                  <span class="badge" id="mk-minute-badge">加载中</span>
+                </div>
+                <div class="card-body">
+                  <div class="market-chart" id="mk-minute-chart"></div>
+                </div>
+              </article>
+
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title">搜索</span>
+                  <span class="badge" id="mk-search-badge">腾讯智能联想</span>
+                </div>
+                <div class="card-body">
+                  <div class="search-row">
+                    <input id="mk-search-input" placeholder="输入代码 / 名称 / 拼音" autocomplete="off">
+                    <button class="icon-button" id="mk-search-button" type="button">搜索</button>
+                  </div>
+                  <div class="search-list" id="mk-search-list">—</div>
+                </div>
+              </article>
+
+              <article class="card market-card wide">
+                <div class="card-header">
+                  <span class="card-title">个股概况</span>
+                  <span class="badge" id="mk-profile-badge">加载中</span>
+                </div>
+                <div class="card-body table-scroll" id="mk-profile-table">—</div>
+              </article>
+            </div>
+
+            <div class="notice" id="mk-notice">
+              本页所有数值均来自真实接口；数据源与口径徽章显示实际命中通道。
+              休市/盘后显示“收盘快照”，不伪装盘中实时；搜索与概况字段以源站返回为准。
             </div>
           </div>
         </section>
