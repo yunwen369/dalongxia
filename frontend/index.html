@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenBB 中文投研工作台</title>
+  <!-- 主题变量与布局样式：尺寸与色板来自规范 v7.0 §7.4 -->
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/app.css">
+  <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
+  <script src="vendor/echarts.min.js" defer></script>
+  <script src="js/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ① 主菜单条：高 64px，通栏顶部 -->
+    <header class="topbar" role="banner">
+      <div class="logo">
+        <span class="logo-mark" aria-hidden="true">OB</span>
+        <span>OpenBB 中文投研工作台</span>
+      </div>
+
+      <nav class="nav" id="main-nav" aria-label="主菜单">
+        <button class="nav-item active" type="button" data-view="home">首页</button>
+        <button class="nav-item" type="button" data-view="charting">图表</button>
+        <button class="nav-item" type="button" data-view="news">新闻</button>
+        <button class="nav-item" type="button" data-view="sectors">板块</button>
+        <button class="nav-item" type="button" data-view="stock">个股</button>
+        <button class="nav-item" type="button" data-view="sector-val">估值</button>
+        <button class="nav-item" type="button" data-view="fund">场外基金</button>
+        <button class="nav-item" type="button" data-view="portfolio">持仓</button>
+        <button class="nav-item" type="button" data-view="yjb">养基宝</button>
+        <button class="nav-item" type="button" data-view="connectors">连接器</button>
+        <button class="nav-item" type="button" data-view="settings">设置</button>
+      </nav>
+
+      <div class="topbar-actions">
+        <input
+          class="global-search"
+          id="global-search"
+          type="search"
+          placeholder="搜索股票 / 基金 / 板块（Ctrl+K）"
+          autocomplete="off"
+          aria-label="全局搜索"
+        >
+        <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）">主题</button>
+        <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉">AI 助手</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <!-- ② 可折叠仪表板侧栏：宽 236px -->
+      <aside class="sidebar" role="complementary" aria-label="仪表板侧栏">
+        <div class="sidebar-title">仪表板</div>
+        <div class="sidebar-heading">市场总览</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item active">市场总览（当前）</li>
+          <li class="sidebar-item">我的自选（待接入）</li>
+          <li class="sidebar-item">新建仪表板（待接入）</li>
+          <li class="sidebar-item">组件库（待接入）</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading">系统</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item">数据连接器（待接入）</li>
+          <li class="sidebar-item">设置（待接入）</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="notice">阶段 1：仅验证四区布局、单端口同源与健康检查。</div>
+      </aside>
+
+      <!-- ③ 主工作区：工具栏 52px + 视图区 -->
+      <main class="workspace" role="main">
+        <div class="toolbar">
+          <span class="page-title" id="page-title">首页 · 市场总览</span>
+          <span class="badge accent">阶段 1 · 环境初始化</span>
+          <span class="badge" id="build-badge">构建标识加载中</span>
+          <span class="badge" id="health-badge">健康检查中</span>
+          <span class="toolbar-spacer"></span>
+          <button class="icon-button" id="refresh-button" type="button" title="刷新健康检查（F5）">刷新</button>
+        </div>
+
+        <section class="viewport" id="viewport">
+          <div class="grid">
+            <!-- 市场总览占位：不填任何假数据 -->
+            <article class="card span-24">
+              <div class="card-header">
+                <span class="card-title">核心指数行情</span>
+                <span class="badge">数据源：待接入</span>
+                <span class="badge">口径：占位</span>
+              </div>
+              <div class="card-body">
+                <div class="placeholder-value">—</div>
+                <p>指数行情将在阶段 3 接入 akshare 真实数据；本页不展示任何演示数值。</p>
+              </div>
+            </article>
+
+            <!-- 指数走势图容器占位 -->
+            <article class="card span-24">
+              <div class="card-header">
+                <span class="card-title">指数走势</span>
+                <span class="badge">ECharts 本地加载</span>
+              </div>
+              <div class="card-body">
+                <div class="placeholder-value">—</div>
+                <p>图表容器已预留，本地 <code>vendor/echarts.min.js</code> 已就绪，数据接入后渲染。</p>
+              </div>
+            </article>
+
+            <!-- 数据源状态：由 /api/health 真实返回后渲染 -->
+            <article class="card span-24">
+              <div class="card-header">
+                <span class="card-title">数据源接入状态</span>
+                <span class="badge">来自 /api/health</span>
+              </div>
+              <div class="card-body">
+                <ul class="source-list" id="source-list">
+                  <li class="source-item">
+                    <span class="source-name">等待健康检查</span>
+                    <span class="source-status">—</span>
+                  </li>
+                </ul>
+              </div>
+            </article>
+
+            <!-- 系统信息：由 /api/health 真实返回后渲染 -->
+            <article class="card span-24">
+              <div class="card-header">
+                <span class="card-title">运行环境</span>
+                <span class="badge">本机</span>
+              </div>
+              <div class="card-body">
+                <div id="system-info">等待健康检查返回。</div>
+              </div>
+            </article>
+
+            <!-- 全宽提示条 -->
+            <div class="span-48">
+              <div class="notice">
+                本页为阶段 1 占位页：只验证「127.0.0.1:6900 单端口同源 + /api/health 真实返回 + 四区布局」，
+                不包含任何业务接口，也不使用 mock 行情数据。
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ④ 右侧 Copilot 抽屉：宽 400px，默认隐藏 -->
+  <aside class="copilot" id="copilot" aria-label="AI 助手抽屉" aria-hidden="true">
+    <div class="copilot-header">
+      <span>AI 助手 · Copilot</span>
+      <button class="icon-button" id="copilot-close" type="button" title="关闭抽屉（Esc）">关闭</button>
+    </div>
+    <div class="copilot-body">
+      <p>Copilot 将在阶段 6 接入，使用用户自备的 OpenAI 兼容接口。</p>
+      <p>当前未配置 AI 密钥。请通过项目根目录 <code>.env</code> 或后续「设置 → AI 设置」填写，密钥不会回显、不会写入日志。</p>
+    </div>
+    <div class="copilot-footer">非投资建议 · 数据以真实接口为准</div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <div style="padding:16px;color:#f6f6f6;">当前浏览器禁用了 JavaScript，请启用后重新打开本页。</div>
+  </noscript>
+</body>
+</html>

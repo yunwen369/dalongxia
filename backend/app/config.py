@@ -1,0 +1,293 @@
+"""全局配置唯一来源。
+
+本模块集中管理路径、服务端口、超时、缓存 TTL、数据源开关、配色常量与
+AI 密钥读取逻辑，是全站唯一权威配置来源（规范 v7.0 §5.6 / §10.11）。
+
+安全约束：
+1. 本文件不得出现任何明文密钥、Token 或密码；
+2. AI Key 的读取优先级为「进程环境变量 > 项目 .env > data/ai_config.json」；
+3. 对外暴露配置时必须调用 get_public_ai_config()，密钥仅返回掩码；
+4. 任何日志都不得打印 api_key 原文。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+# =============================================================
+# 一、应用身份与服务参数（规范 §5.4 / §5.6）
+# =============================================================
+APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
+APP_VERSION = "0.1.0"  # 语义化版本号，与项目状态文档保持一致
+BUILD_TAG = "v0.1.0-20261019"  # 构建标识，写入 /api/health 的 build 字段
+
+HOST = "127.0.0.1"  # 仅监听本机回环地址，不对外网暴露
+PORT = 6900  # 固定端口，复刻 OpenBB ODP 本地连接器约定，禁止静默更换
+BASE_URL = f"http://{HOST}:{PORT}"  # 同源访问基址，前端与 API 共用
+
+# =============================================================
+# 二、目录与文件路径（全部由本文件派生，业务代码禁止另行拼接）
+# =============================================================
+APP_DIR = Path(__file__).resolve().parent  # backend/app
+PROJECT_DIR = APP_DIR.parents[1]  # openbb-cn 工程根目录
+FRONTEND_DIR = PROJECT_DIR / "frontend"  # 前端静态资源目录
+DATA_DIR = PROJECT_DIR / "data"  # 运行时数据目录
+CACHE_DIR = DATA_DIR / "cache"  # 两级缓存的磁盘目录
+EXPORT_DIR = DATA_DIR / "exports"  # 导出文件预留目录
+LOG_DIR = PROJECT_DIR / "logs"  # 日志目录，按天滚动
+AI_CONFIG_FILE = DATA_DIR / "ai_config.json"  # AI 配置落盘文件（含密钥，禁止入库）
+YJB_TOKEN_FILE = DATA_DIR / "yjb_token.json"  # 养基宝 Token 落盘文件（禁止入库）
+ENV_FILE = PROJECT_DIR / ".env"  # 本地环境变量文件（禁止入库）
+
+# =============================================================
+# 三、网络与韧性参数（规范 §6.5，取值固定）
+# =============================================================
+MAX_RETRY = 2  # 网络抖动最大重试次数
+REQUEST_TIMEOUT = 20  # 对外 HTTP 默认超时（秒）
+DATASOURCE_TIMEOUT = 15  # 单数据源全链路超时（秒）
+RETRY_BACKOFF = (1.0, 2.0)  # 指数退避间隔（秒）
+RATE_LIMIT_MIN_DELAY = 0.3  # 串行调用最小随机延时（秒）
+RATE_LIMIT_MAX_DELAY = 1.0  # 串行调用最大随机延时（秒）
+BROWSER_USER_AGENT = (  # 统一浏览器 UA，降低被源站风控概率
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+# =============================================================
+# 四、缓存 TTL 表（单位：秒，规范 §6.8）
+# =============================================================
+TTL: Dict[str, int] = {
+    "realtime_quote": 15,  # 实时报价 / 大盘指数快照
+    "index_quote": 15,  # 指数行情快照
+    "kline": 60,  # 历史 K 线
+    "minute": 30,  # 分时数据
+    "sector": 30,  # 板块行情
+    "fund_flow": 60,  # 资金流向
+    "news_flash": 60,  # 新闻滚动快讯
+    "sentiment": 300,  # 本地利好利空分析结果
+    "fund_nav": 300,  # 基金净值
+    "fund_holding": 3600,  # 基金持仓（季报口径）
+    "profile": 3600,  # 公司概况
+    "financial": 3600,  # 财报 / 财务指标
+    "search": 600,  # 搜索联想列表
+    "yjb_status": 300,  # 养基宝绑定状态
+    "fund_performance": 3600,  # 基金阶段业绩 / 分红
+}
+
+# =============================================================
+# 五、市场枚举与数据源开关（健康检查据此报告真实接入状态）
+# =============================================================
+MARKETS: Dict[str, str] = {
+    "a": "A股",
+    "us": "美股",
+    "hk": "港股",
+    "fund": "场外基金",
+}
+
+# stage 取值：installed=依赖已装但业务未接入；pending=尚未接入；disabled=已禁用
+DATA_SOURCES: Dict[str, Dict[str, Any]] = {
+    "akshare": {"label": "akshare（东财/新浪等）", "module": "akshare", "enabled": True, "stage": "installed"},
+    "tencent": {"label": "腾讯行情", "module": None, "enabled": True, "stage": "pending"},
+    "eastmoney": {"label": "东方财富", "module": None, "enabled": True, "stage": "pending"},
+    "sina": {"label": "新浪财经", "module": None, "enabled": True, "stage": "pending"},
+    "ths": {"label": "同花顺", "module": None, "enabled": True, "stage": "pending"},
+    "cls": {"label": "财联社", "module": None, "enabled": True, "stage": "pending"},
+    "fund": {"label": "天天基金/蛋卷", "module": None, "enabled": True, "stage": "pending"},
+    "yangjibao": {"label": "养基宝（非官方）", "module": None, "enabled": False, "stage": "disabled"},
+}
+
+# =============================================================
+# 六、全站配色常量（唯一权威来源，前端 theme.css 必须一致，规范 §7.4 / §9.4）
+# =============================================================
+COLOR_UP = "#FF4B4B"  # 红涨：涨、正收益
+COLOR_DOWN = "#00B061"  # 绿跌：跌、负收益
+COLOR_WARN = "#E8A33D"  # 警示色
+COLOR_INFO = "#4B9EFF"  # 信息色
+
+# =============================================================
+# 七、日志格式（规范 §6.10）
+# =============================================================
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+# =============================================================
+# 八、AI 配置读取与脱敏（规范 §5.6 / §10.11）
+# =============================================================
+@dataclass(frozen=True)
+class AIConfig:
+    """AI 服务配置。
+
+    Attributes:
+        base_url: OpenAI 兼容接口基址。
+        api_key: 接口密钥，repr=False 确保对象被打印时不会泄露。
+        model: 模型名称。
+        source: 配置来源，取值 env / dotenv / file / none。
+    """
+
+    base_url: str = ""
+    api_key: str = field(default="", repr=False)
+    model: str = ""
+    source: str = "none"
+
+    @property
+    def configured(self) -> bool:
+        """判断 AI 配置是否完整可用。"""
+        return bool(self.base_url and self.api_key and self.model)
+
+
+def _read_dotenv(path: Path) -> Dict[str, str]:
+    """读取项目 .env 文件，返回键值字典。
+
+    Args:
+        path: .env 文件路径。
+
+    Returns:
+        Dict[str, str]: 解析后的键值对；文件不存在或解析失败时返回空字典。
+
+    Notes:
+        仅做最简解析（KEY=VALUE、忽略 # 注释、去除成对引号），
+        不引入额外依赖；解析失败不抛出异常，避免阻断服务启动。
+    """
+    result: Dict[str, str] = {}
+    if not path.is_file():
+        return result
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                result[key] = value
+    except OSError as exc:
+        # 只记录路径与异常类型，绝不记录文件内容（可能含密钥）
+        logger.warning("读取 .env 失败：%s（%s）", path, type(exc).__name__)
+    return result
+
+
+def _read_ai_config_file(path: Path) -> Dict[str, Any]:
+    """读取 data/ai_config.json，返回字典。
+
+    Args:
+        path: AI 配置文件路径。
+
+    Returns:
+        Dict[str, Any]: 配置字典；文件缺失或格式错误时返回空字典。
+    """
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("读取 AI 配置失败：%s（%s）", path, type(exc).__name__)
+        return {}
+
+
+def _first_non_empty(*values: Optional[str]) -> str:
+    """返回第一个非空字符串，用于多来源优先级取值。"""
+    for value in values:
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def load_ai_config() -> AIConfig:
+    """按优先级加载 AI 配置。
+
+    优先级：进程环境变量 > 项目 .env > data/ai_config.json。
+    同时兼容 OPENAI_* 与规范示例中的 AI_* 两套变量名。
+
+    Returns:
+        AIConfig: 已脱敏保护的配置对象；未配置时各字段为空、source="none"。
+    """
+    dotenv = _read_dotenv(ENV_FILE)
+    file_config = _read_ai_config_file(AI_CONFIG_FILE)
+
+    base_url = _first_non_empty(
+        os.environ.get("OPENAI_BASE_URL"),
+        os.environ.get("AI_BASE_URL"),
+        dotenv.get("OPENAI_BASE_URL"),
+        dotenv.get("AI_BASE_URL"),
+        file_config.get("base_url"),
+    )
+    api_key = _first_non_empty(
+        os.environ.get("OPENAI_API_KEY"),
+        os.environ.get("AI_API_KEY"),
+        dotenv.get("OPENAI_API_KEY"),
+        dotenv.get("AI_API_KEY"),
+        file_config.get("api_key"),
+    )
+    model = _first_non_empty(
+        os.environ.get("OPENAI_MODEL"),
+        os.environ.get("AI_MODEL"),
+        dotenv.get("OPENAI_MODEL"),
+        dotenv.get("AI_MODEL"),
+        file_config.get("model"),
+    )
+
+    # 判定来源仅用于界面提示，不涉及密钥内容
+    if os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_API_KEY"):
+        source = "env"
+    elif dotenv.get("OPENAI_API_KEY") or dotenv.get("AI_API_KEY"):
+        source = "dotenv"
+    elif file_config.get("api_key"):
+        source = "file"
+    else:
+        source = "none"
+
+    return AIConfig(base_url=base_url, api_key=api_key, model=model, source=source)
+
+
+def mask_secret(secret: str) -> str:
+    """对密钥做掩码处理，供界面与健康检查展示。
+
+    Args:
+        secret: 原始密钥。
+
+    Returns:
+        str: 未配置返回空串；已配置返回首 3 位 + 掩码 + 末 4 位。
+    """
+    if not secret:
+        return ""
+    if len(secret) <= 8:
+        return "已配置（长度不足，已隐藏）"
+    return f"{secret[:3]}****{secret[-4:]}"
+
+
+def get_public_ai_config() -> Dict[str, Any]:
+    """返回可安全暴露给前端的 AI 配置（密钥只给掩码）。
+
+    Returns:
+        Dict[str, Any]: 含 configured/base_url/model/api_key/source 的字典。
+    """
+    config = load_ai_config()
+    return {
+        "configured": config.configured,
+        "base_url": config.base_url,
+        "model": config.model,
+        "api_key": mask_secret(config.api_key),
+        "source": config.source,
+    }
+
+
+def ensure_runtime_dirs() -> None:
+    """创建运行时必需目录（幂等，失败时记录日志但不抛出）。"""
+    for directory in (DATA_DIR, CACHE_DIR, EXPORT_DIR, LOG_DIR):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("创建目录失败：%s（%s）", directory, type(exc).__name__)

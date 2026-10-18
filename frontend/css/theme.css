@@ -1,0 +1,69 @@
+/* =============================================================
+ * OpenBB 中文投研工作台 · 主题变量
+ * 依据《工作规范》v7.0 §7.4 / §9.4，与后端 config.py 配色常量保持一致。
+ * 深色为默认主题；浅色通过 [data-theme="light"] 切换（Ctrl+M）。
+ * ============================================================= */
+
+:root {
+  /* ---------- 应用背景与面板 ---------- */
+  --bg-app: #070707;          /* 最外层应用背景 */
+  --bg-widget: #151518;       /* widget 卡片底色 */
+  --bg-panel: #131313;        /* 面板 / 工具栏背景 */
+  --bg-sidebar: #101013;      /* 侧边栏背景 */
+  --bg-hover: #1c1c20;        /* 悬停态背景 */
+
+  /* ---------- 边框与文字 ---------- */
+  --border: #2a2a2a;          /* 常规边框 */
+  --border-strong: #3a3a3a;   /* 强调边框 */
+  --text: #f6f6f6;            /* 主文字 */
+  --text-dim: #a2a2a2;        /* 次要文字 */
+  --text-muted: #7a7a82;      /* 更弱的辅助文字 */
+
+  /* ---------- 品牌色（Burgundy 系） ---------- */
+  --accent: #b47da0;          /* 品牌主色 */
+  --accent-strong: #9b5181;   /* 品牌强调 */
+  --accent-deep: #822661;     /* 品牌深色 */
+
+  /* ---------- 涨跌与状态色（红涨绿跌） ---------- */
+  --up: #ff4b4b;              /* 涨 / 正收益 */
+  --down: #00b061;            /* 跌 / 负收益 */
+  --warn: #e8a33d;            /* 警示 */
+  --info: #4b9eff;            /* 信息 */
+  --danger: #ff4b4b;          /* 危险操作 */
+
+  /* ---------- 字体 ---------- */
+  --font: Inter, "PingFang SC", "Microsoft YaHei", "微软雅黑", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  /* ---------- 布局固定尺寸（逐字不得改动） ---------- */
+  --menu-w: 64px;             /* 主菜单条高度（顶部通栏） */
+  --sidebar-w: 236px;         /* 侧边栏宽度 */
+  --toolbar-h: 52px;          /* 工具栏高度 */
+  --copilot-w: 400px;         /* 右侧 Copilot 抽屉宽度 */
+  --cell: 40px;               /* 网格基准单元 */
+  --radius: 8px;              /* 统一圆角 */
+  --radius-sm: 5px;           /* 小圆角 */
+
+  /* ---------- 字号体系 ---------- */
+  --fs-page-title: 16px;      /* 页面标题 */
+  --fs-section: 14px;         /* 区块标题 */
+  --fs-body: 13px;            /* 正文 */
+  --fs-aux: 12px;             /* 辅助文字 */
+}
+
+/* 浅色主题：仅覆盖颜色，不动布局尺寸 */
+[data-theme="light"] {
+  --bg-app: #f2f2f4;
+  --bg-widget: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-sidebar: #fafafa;
+  --bg-hover: #eeeeF2;
+  --border: #dcdcdc;
+  --border-strong: #c4c4c4;
+  --text: #1a1a1a;
+  --text-dim: #5a5a5a;
+  --text-muted: #7a7a7a;
+  --accent: #822661;
+  --accent-strong: #9b5181;
+  --accent-deep: #822661;
+}

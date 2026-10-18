@@ -1,0 +1,208 @@
+"""两级缓存模块（内存 TTL + 磁盘兜底）。
+
+对应规范 v7.0 §6.5 / §6.8：
+1. 内存缓存使用 threading.Lock 保护，命中且未过期直接返回；
+2. 磁盘缓存位于 data/cache/<md5(key)>.json，用于上游异常时兜底；
+3. is_meaningful() 拦截空值与错误结构，防止一次空结果永久污染缓存；
+4. clear_cache() 同时清空内存与磁盘，供 /api/cache/clear 调用。
+
+注意：缓存值必须可 JSON 序列化；DataFrame 请先在 provider 层转为 dict/list。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple
+
+from backend.app import config
+
+logger = logging.getLogger(__name__)
+
+_MEMORY: Dict[str, Tuple[float, Any]] = {}  # 键 -> (写入时间戳, 值)
+_LOCK = threading.Lock()  # 保护内存字典的并发读写
+
+
+def is_meaningful(value: Any) -> bool:
+    """判断缓存值是否有效，拦截空值与错误结构。
+
+    Args:
+        value: 待判断的缓存值。
+
+    Returns:
+        bool: 有效返回 True；None/空列表/空字符串/空字典/含 error 的字典返回 False。
+    """
+    if value is None:
+        return False
+    if isinstance(value, (str, list, tuple, dict, set)) and len(value) == 0:
+        return False
+    if isinstance(value, dict) and value.get("error"):
+        return False
+    # pandas.DataFrame 等对象带 empty 属性时一并拦截
+    empty_attr = getattr(value, "empty", None)
+    if isinstance(empty_attr, bool) and empty_attr:
+        return False
+    return True
+
+
+def _disk_path(key: str) -> Path:
+    """把缓存键映射为磁盘文件路径（md5 避免中文与非法字符）。"""
+    digest = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return config.CACHE_DIR / f"{digest}.json"
+
+
+def _read_disk(key: str) -> Optional[Tuple[float, Any]]:
+    """读取磁盘缓存，返回 (时间戳, 值)；失败时返回 None。"""
+    path = _disk_path(key)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        timestamp = float(payload["ts"])
+        return timestamp, payload.get("value")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("读取磁盘缓存失败：%s（%s）", path.name, type(exc).__name__)
+        return None
+
+
+def _write_disk(key: str, timestamp: float, value: Any) -> bool:
+    """原子写入磁盘缓存，成功返回 True。"""
+    path = _disk_path(key)
+    temp_path = path.with_suffix(".tmp")
+    try:
+        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(
+            {"ts": timestamp, "value": value},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        temp_path.write_text(text, encoding="utf-8")
+        temp_path.replace(path)  # 原子替换，避免读到半截文件
+        return True
+    except (OSError, TypeError, ValueError) as exc:
+        # TypeError 通常来自 DataFrame 等不可序列化对象，仅记录类型不打印值
+        logger.warning("写入磁盘缓存失败：%s（%s）", path.name, type(exc).__name__)
+        temp_path.unlink(missing_ok=True)
+        return False
+
+
+def get(key: str, ttl: int, *, allow_stale: bool = False) -> Optional[Any]:
+    """读取缓存。
+
+    Args:
+        key: 缓存键。
+        ttl: 有效期（秒）。
+        allow_stale: 为 True 时允许返回已过期但仍在磁盘上的旧值（降级兜底）。
+
+    Returns:
+        Optional[Any]: 命中返回值；未命中或已过期返回 None。
+    """
+    now = time.time()
+    with _LOCK:
+        memory_item = _MEMORY.get(key)
+        if memory_item is not None:
+            timestamp, value = memory_item
+            if now - timestamp <= ttl:
+                return value
+            _MEMORY.pop(key, None)  # 内存过期即移除，避免无限增长
+
+    disk_item = _read_disk(key)
+    if disk_item is None:
+        return None
+    timestamp, value = disk_item
+    if now - timestamp <= ttl:
+        with _LOCK:
+            _MEMORY[key] = (timestamp, value)  # 回填内存，减少磁盘 IO
+        return value
+    if allow_stale and is_meaningful(value):
+        return value
+    return None
+
+
+def set(key: str, value: Any, ttl: Optional[int] = None) -> bool:  # noqa: ARG001
+    """写入缓存（内存 + 磁盘）。
+
+    Args:
+        key: 缓存键。
+        value: 缓存值，必须可 JSON 序列化才能落盘。
+        ttl: 预留参数，当前由读取方按数据类传入；写入时不裁剪。
+
+    Returns:
+        bool: 有效值写入成功返回 True；空值或写入失败返回 False。
+    """
+    if not is_meaningful(value):
+        # 关键防污染：空值绝不写入，避免后续正常数据被旧空结果遮蔽
+        return False
+    timestamp = time.time()
+    with _LOCK:
+        _MEMORY[key] = (timestamp, value)
+    _write_disk(key, timestamp, value)
+    return True
+
+
+def get_or_load(key: str, ttl: int, loader: Callable[[], Any]) -> Any:
+    """缓存优先读取；未命中时调用 loader，失败则回退磁盘旧值。
+
+    Args:
+        key: 缓存键。
+        ttl: 有效期（秒）。
+        loader: 上游取数函数，无参数、返回可缓存值。
+
+    Returns:
+        Any: 缓存值或 loader 返回值。
+
+    Raises:
+        Exception: 上游失败且无可用磁盘兜底时，原样抛出由路由层统一处理。
+    """
+    cached = get(key, ttl)
+    if cached is not None:
+        return cached
+
+    try:
+        value = loader()
+    except Exception:
+        stale = get(key, ttl, allow_stale=True)
+        if stale is not None:
+            logger.warning("上游取数失败，已使用磁盘缓存兜底：key=%s", key)
+            return stale
+        raise
+
+    set(key, value)
+    return value
+
+
+def clear_cache() -> int:
+    """清空内存与磁盘缓存。
+
+    Returns:
+        int: 删除的磁盘缓存文件数量。
+    """
+    with _LOCK:
+        _MEMORY.clear()
+
+    removed = 0
+    if config.CACHE_DIR.is_dir():
+        for path in config.CACHE_DIR.glob("*.json"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("删除缓存文件失败：%s（%s）", path.name, type(exc).__name__)
+    logger.info("缓存已清空，删除磁盘文件 %d 个", removed)
+    return removed
+
+
+def stats() -> Dict[str, int]:
+    """返回缓存规模，供诊断使用。
+
+    Returns:
+        Dict[str, int]: 内存条目数与磁盘文件数。
+    """
+    with _LOCK:
+        memory_count = len(_MEMORY)
+    disk_count = len(list(config.CACHE_DIR.glob("*.json"))) if config.CACHE_DIR.is_dir() else 0
+    return {"memory": memory_count, "disk": disk_count}
