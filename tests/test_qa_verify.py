@@ -366,10 +366,10 @@ def test_stock_profile_real() -> None:
 
 
 def test_stock_holders_real() -> None:
-    """十大股东：至少 3 名、比例为正、报告期存在。"""
+    """十大股东：报告期须为完整披露期（≥5 名），比例为正。"""
     data = _success("/api/stock/holders", {"symbol": "688012"})
     assert data["top10"], "十大股东为空"
-    assert len(data["top10"]) >= 3
+    assert len(data["top10"]) >= 5, f"股东名单不完整：{len(data['top10'])} 名"
     assert data["top10_period"]
     first = data["top10"][0]
     assert first["name"]

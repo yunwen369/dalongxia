@@ -157,15 +157,16 @@ def main() -> None:
         timeout=20,
     )
     raw_holders = (resp.json().get("result") or {}).get("data") or []
-    latest_date = str(raw_holders[0]["END_DATE"])[:10]
-    latest_rows = [row for row in raw_holders if str(row["END_DATE"])[:10] == latest_date]
+    # 以接口返回的报告期为准（接口会跳过不足 5 名的临时披露期），做同期同字段比对
+    api_period = holders["top10_period"]
+    latest_rows = [row for row in raw_holders if str(row["END_DATE"])[:10] == api_period]
     latest_rows.sort(key=lambda row: row["HOLDER_RANK"])
     records.append(check("/api/stock/holders", "688012", "top10[0].name",
                          holders["top10"][0]["name"], latest_rows[0]["HOLDER_NAME"]))
     records.append(check("/api/stock/holders", "688012", "top10[0].ratio",
                          holders["top10"][0]["ratio"], float(latest_rows[0]["HOLD_NUM_RATIO"]), tolerance=0.011))
     records.append(check("/api/stock/holders", "688012", "top10_period",
-                         holders["top10_period"], latest_date))
+                         holders["top10_period"], api_period))
 
     total = len(records)
     passed = sum(1 for item in records if item["same"])

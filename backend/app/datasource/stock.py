@@ -234,15 +234,29 @@ def get_profile(symbol: str, market: str = "a") -> Dict[str, Any]:
 # 二、十大股东（ST-10）
 # =============================================================
 def _holders_of(report: str, symbol: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """取某报表最新一期的股东名单（按 END_DATE 倒序的第一期）。"""
-    rows = _em_report(report, f'(SECUCODE="{_secucode(symbol)}")', sort="END_DATE", size=200)
+    """取某报表的股东名单。
+
+    口径说明：东财 F10 的 END_DATE 既包含定期报告期，也包含临时披露日（如 2026-09-09 仅 3 名股东）。
+    「十大股东」应以**完整披露期**为准，故按 END_DATE 倒序取第一个股东数 ≥5 的期次；
+    若全部期次都不足 5 名，则退回最新一期并如实返回实际条数（不编造、不补齐）。
+    """
+    rows = _em_report(report, f'(SECUCODE="{_secucode(symbol)}")', sort="END_DATE", size=400)
     if not rows:
         return [], None
-    latest = str(rows[0].get("END_DATE") or "")[:10]
-    picked: List[Dict[str, Any]] = []
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
-        if str(row.get("END_DATE") or "")[:10] != latest:
-            continue
+        date_text = str(row.get("END_DATE") or "")[:10]
+        grouped.setdefault(date_text, []).append(row)
+
+    ordered_dates = sorted(grouped.keys(), reverse=True)
+    latest = ordered_dates[0] if ordered_dates else None
+    chosen = next((date_text for date_text in ordered_dates if len(grouped[date_text]) >= 5), latest)
+    if not chosen:
+        return [], None
+
+    picked: List[Dict[str, Any]] = []
+    for row in grouped[chosen]:
         # 持股比例字段两张报表命名不同：HOLD_NUM_RATIO / FREE_HOLDNUM_RATIO
         ratio = _num(row.get("HOLD_NUM_RATIO"))
         if ratio is None:
@@ -260,7 +274,7 @@ def _holders_of(report: str, symbol: str) -> Tuple[List[Dict[str, Any]], Optiona
             }
         )
     picked.sort(key=lambda item: item.get("rank") or 99)
-    return picked[:10], latest
+    return picked[:10], chosen
 
 
 def get_holders(symbol: str) -> Dict[str, Any]:
