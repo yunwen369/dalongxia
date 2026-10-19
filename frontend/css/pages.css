@@ -1,0 +1,477 @@
+/* =============================================================
+ * OpenBB 中文投研工作台 · 阶段 5.1 页面样式
+ * 适用视图：#/sectors、#/stock、#/sector-val
+ * 依据《设计基准说明书_阶段5.1》§2.1–§2.3：48 列栅格（单元 40px）、
+ * 圆角 8px、间距 8 的倍数、字号 16/14/13/12、红涨绿跌、语义状态色。
+ * 说明：本文件只新增，不改动 theme.css / app.css 既有规则。
+ * ============================================================= */
+
+/* ---------- 页面容器 ---------- */
+.page-view[hidden] {
+  display: none !important;
+}
+
+.page-view {
+  display: block;
+  /* 与 .viewport 同构：占满剩余高度并独立滚动，避免长页撑破外壳 */
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* ---------- 48 列栅格（P0-03 修复：12 列 → 48 列） ---------- */
+.pg-grid {
+  display: grid;
+  grid-template-columns: repeat(48, 1fr);
+  gap: 16px;
+  padding: 0 0 16px;
+}
+
+.g-3 { grid-column: span 12; }
+.g-4 { grid-column: span 16; }
+.g-5 { grid-column: span 20; }
+.g-6 { grid-column: span 24; }
+.g-7 { grid-column: span 28; }
+.g-8 { grid-column: span 32; }
+.g-12 { grid-column: span 48; }
+
+/* ---------- 卡片 / 区块 ---------- */
+.pg-card {
+  background: var(--bg-widget);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  min-width: 0; /* 关键：允许表格在栅格内收缩，1024 下不撑破容器 */
+}
+
+.pg-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pg-card-title {
+  font-size: var(--fs-section);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pg-card-sub {
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+}
+
+.pg-spacer {
+  flex: 1 1 auto;
+}
+
+.pg-body {
+  min-height: 120px;
+  position: relative;
+}
+
+.pg-body.tall {
+  min-height: 300px;
+}
+
+/* ---------- 徽章：数据源 + 口径 ---------- */
+.badge-src,
+.badge-caliber {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 20px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-src {
+  border-color: var(--accent-strong);
+  color: var(--accent);
+}
+
+.badge-caliber {
+  border-color: var(--border-strong);
+}
+
+/* 语义状态色：正常=绿/蓝、降级=橙、不可用=红（P2-03，不复用涨色） */
+.state-ok {
+  color: #3ecf8e;
+  border-color: #3ecf8e;
+}
+
+.state-degraded {
+  color: #b77f3d;
+  border-color: #b77f3d;
+}
+
+.state-unavailable {
+  color: #ff5a5a;
+  border-color: #ff5a5a;
+}
+
+/* ---------- Tab ---------- */
+.pg-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pg-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pg-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.pg-tab.active {
+  background: var(--accent-deep);
+  color: #fff;
+}
+
+/* ---------- 表格 ---------- */
+.pg-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pg-table-wrap.short {
+  max-height: 260px;
+}
+
+.pg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+}
+
+.pg-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-widget-2, #1a1a1e);
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pg-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.pg-table tbody tr {
+  cursor: pointer;
+}
+
+.pg-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.pg-table .num {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.pg-table .name {
+  color: var(--text);
+}
+
+/* 红涨绿跌 */
+.up { color: var(--up); }
+.down { color: var(--down); }
+.flat { color: var(--text-muted); }
+
+/* ---------- 图表容器 ---------- */
+.pg-chart {
+  width: 100%;
+  height: 320px;
+}
+
+.pg-chart.small {
+  height: 220px;
+}
+
+/* ---------- 四态：加载 / 空 / 错 / 默认 ---------- */
+.pg-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 140px;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+}
+
+.pg-state .pg-state-title {
+  color: var(--text);
+}
+
+.pg-state .pg-state-hint {
+  color: var(--text-muted);
+  font-size: var(--fs-aux);
+}
+
+.pg-btn {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 4px 12px;
+  font-size: var(--fs-aux);
+  cursor: pointer;
+}
+
+.pg-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 骨架屏 */
+.pg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.pg-skeleton span {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--border) 37%, var(--bg-hover) 63%);
+  background-size: 400% 100%;
+  animation: pg-shimmer 1.4s ease infinite;
+}
+
+.pg-skeleton span:nth-child(1) { width: 92%; }
+.pg-skeleton span:nth-child(2) { width: 78%; }
+.pg-skeleton span:nth-child(3) { width: 86%; }
+.pg-skeleton span:nth-child(4) { width: 64%; }
+.pg-skeleton span:nth-child(5) { width: 74%; }
+
+@keyframes pg-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ---------- 摘要卡 ---------- */
+.pg-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pg-summary-item {
+  flex: 1 1 120px;
+  min-width: 100px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--bg-widget-2, #1a1a1e);
+}
+
+.pg-summary-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pg-summary-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+}
+
+/* 指标网格：用于舆情等 3–5 个指标并排展示，1024 下自动降为两列 */
+.pg-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.pg-metric-cell {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--bg-widget-2, #1a1a1e);
+  min-width: 0;
+}
+
+.pg-metric-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pg-metric-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+/* ---------- 报价大卡 ---------- */
+.pg-quote-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.pg-quote-name {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pg-quote-price {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.pg-quote-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px 16px;
+  margin-top: 8px;
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+}
+
+.pg-quote-meta b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+/* ---------- 新闻 / 列表 ---------- */
+.pg-news-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.pg-news-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pg-news-title {
+  flex: 1 1 auto;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-news-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.pg-news-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.chip {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+.chip.up { color: var(--up); border-color: var(--up); }
+.chip.down { color: var(--down); border-color: var(--down); }
+
+/* ---------- 财务页签 ---------- */
+.pg-fin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* ---------- 1024 断点适配（P0-05 / A-17） ---------- */
+@media (max-width: 1200px) {
+  .pg-grid {
+    grid-template-columns: repeat(48, 1fr);
+    gap: 12px;
+  }
+
+  .g-7,
+  .g-5,
+  .g-6 {
+    grid-column: span 48; /* 主辅栏上下堆叠，不挤压右栏 */
+  }
+
+  .pg-table-wrap {
+    overflow-x: auto; /* 表格横向滚动不截断列 */
+  }
+
+  .pg-chart {
+    height: 260px;
+  }
+
+  .pg-card {
+    padding: 10px 12px;
+  }
+
+  .pg-card-head {
+    row-gap: 6px;
+  }
+
+  .badge-src,
+  .badge-caliber {
+    white-space: normal; /* 允许换行但不压字 */
+    height: auto;
+    line-height: 18px;
+    padding: 1px 6px;
+  }
+}

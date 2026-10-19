@@ -7,10 +7,14 @@
   <!-- 主题变量与布局样式：尺寸与色板来自规范 v7.0 §7.4 -->
   <link rel="stylesheet" href="css/theme.css">
   <link rel="stylesheet" href="css/app.css">
+  <!-- 阶段 5.1 三视图样式：48 列栅格、四态、双徽章、1024 断点 -->
+  <link rel="stylesheet" href="css/pages.css">
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
   <script src="vendor/echarts.min.js" defer></script>
   <script src="js/market.js" defer></script>
   <script src="js/app.js" defer></script>
+  <!-- 阶段 5.1：#/sectors、#/stock、#/sector-val 三视图与 hash 路由 -->
+  <script src="js/pages.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -193,6 +197,16 @@
             </div>
           </div>
         </section>
+
+        <!-- ===== 阶段 5.1 三视图容器：由 pages.js 按 hash 路由填充 ===== -->
+        <!-- #/sectors 板块分析（S-01~S-07） -->
+        <section class="page-view" id="page-sectors" hidden aria-label="板块分析"></section>
+        <!-- #/stock 个股详情 FinScope（ST-01~ST-10） -->
+        <section class="page-view" id="page-stock" hidden aria-label="个股详情"></section>
+        <!-- #/sector-val 单板块估值（V-01~V-04） -->
+        <section class="page-view" id="page-sector-val" hidden aria-label="单板块估值"></section>
+        <!-- #/news 占位：批次 5.2 落地，本批仅承接跳转参数 -->
+        <section class="page-view" id="page-news" hidden aria-label="新闻资讯"></section>
       </main>
     </div>
   </div>
