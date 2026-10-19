@@ -1,0 +1,309 @@
+/* =============================================================
+ * OpenBB 中文投研工作台 · 全局交互（阶段 6）
+ * 职责：Toast、模态框、Ctrl+K 命令面板（切视图 / 加组件 / 清缓存 / 切主题）。
+ * 依赖：I18N.t（文案）、/api/widgets（组件列表）、/api/cache/clear（清缓存）。
+ * 约束：不新增配色；所有文案走 i18n；错误提示为中文且含下一步动作。
+ * ============================================================= */
+
+(function () {
+  "use strict";
+
+  /** 取翻译（I18N 未加载时兜底返回原文 key）。 */
+  function t(key, vars) {
+    return window.I18N ? window.I18N.t(key, vars) : key;
+  }
+
+  /** 轻提示：复用页面底部 #toast。 */
+  function toast(message) {
+    var node = document.getElementById("toast");
+    if (!node) {
+      return;
+    }
+    node.textContent = message;
+    node.classList.add("show");
+    window.clearTimeout(toast._timer);
+    toast._timer = window.setTimeout(function () {
+      node.classList.remove("show");
+    }, 2600);
+  }
+
+  /** 创建元素。 */
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) {
+      node.className = cls;
+    }
+    if (text !== undefined && text !== null) {
+      node.textContent = String(text);
+    }
+    return node;
+  }
+
+  /**
+   * 模态框。
+   * options: {title, message, input:bool, defaultValue, confirmText, onConfirm(value), onCancel}
+   */
+  function modal(options) {
+    var overlay = el("div", "ui-overlay");
+    var box = el("div", "ui-modal");
+    box.appendChild(el("div", "ui-modal-title", options.title || ""));
+    if (options.message) {
+      box.appendChild(el("div", "ui-modal-message", options.message));
+    }
+    var input = null;
+    if (options.input) {
+      input = document.createElement("input");
+      input.className = "ui-modal-input";
+      input.value = options.defaultValue || "";
+      box.appendChild(input);
+    }
+    var actions = el("div", "ui-modal-actions");
+    var cancel = el("button", "pg-btn", options.cancelText || t("action.cancel"));
+    cancel.type = "button";
+    var confirm = el("button", "pg-btn primary", options.confirmText || t("action.confirm"));
+    confirm.type = "button";
+    actions.appendChild(cancel);
+    actions.appendChild(confirm);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        close();
+        if (options.onCancel) {
+          options.onCancel();
+        }
+      }
+      if (event.key === "Enter" && input) {
+        event.preventDefault();
+        confirm.click();
+      }
+    }
+    cancel.addEventListener("click", function () {
+      close();
+      if (options.onCancel) {
+        options.onCancel();
+      }
+    });
+    confirm.addEventListener("click", function () {
+      var value = input ? input.value.trim() : true;
+      close();
+      if (options.onConfirm) {
+        options.onConfirm(value);
+      }
+    });
+    document.addEventListener("keydown", onKey);
+  }
+
+  // =============================================================
+  // Ctrl+K 命令面板
+  // =============================================================
+  var widgetCache = null;
+
+  /** 视图命令（含快捷键说明）。 */
+  function viewCommands() {
+    return [
+      { id: "view:home", group: "palette.views", label: t("nav.home"), run: function () { location.hash = "#/home"; } },
+      { id: "view:dashboard", group: "palette.views", label: t("nav.dashboard"), run: function () { location.hash = "#/dashboard"; } },
+      { id: "view:sectors", group: "palette.views", label: t("nav.sectors"), run: function () { location.hash = "#/sectors"; } },
+      { id: "view:stock", group: "palette.views", label: t("nav.stock"), run: function () { location.hash = "#/stock?symbol=688012&market=a"; } },
+      { id: "view:sector-val", group: "palette.views", label: t("nav.sectorVal"), run: function () { location.hash = "#/sector-val?board=半导体&market=cn"; } },
+      { id: "view:news", group: "palette.views", label: t("nav.news"), run: function () { location.hash = "#/news"; } },
+      { id: "view:fund", group: "palette.views", label: t("nav.fund"), run: function () { location.hash = "#/fund?code=017811"; } },
+      { id: "view:portfolio", group: "palette.views", label: t("nav.portfolio"), run: function () { location.hash = "#/portfolio"; } },
+      { id: "view:connectors", group: "palette.views", label: t("nav.connectors"), run: function () { location.hash = "#/connectors"; } },
+      { id: "view:settings", group: "palette.views", label: t("nav.settings"), run: function () { location.hash = "#/settings"; } }
+    ];
+  }
+
+  /** 操作命令。 */
+  function actionCommands() {
+    return [
+      {
+        id: "action:cache", group: "palette.actions", label: t("palette.clearCache"),
+        run: function () {
+          fetch("/api/cache/clear", { method: "POST" })
+            .then(function (response) { return response.json(); })
+            .then(function (body) {
+              toast(body.error ? t("toast.cacheFailed") : t("toast.cacheCleared"));
+            })
+            .catch(function () { toast(t("toast.cacheFailed")); });
+        }
+      },
+      {
+        id: "action:theme", group: "palette.actions", label: "切换主题（Ctrl+M）",
+        run: function () {
+          var current = document.documentElement.getAttribute("data-theme") || "dark";
+          var next = current === "dark" ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", next);
+          try { localStorage.setItem("openbb-theme", next); } catch (error) { /* 隐私模式忽略 */ }
+          toast(next === "dark" ? t("toast.themeDark") : t("toast.themeLight"));
+        }
+      }
+    ];
+  }
+
+  /** 组件命令：按 /api/widgets 注册表动态生成。 */
+  function widgetCommands(callback) {
+    if (widgetCache) {
+      callback(buildWidgetCommands(widgetCache));
+      return;
+    }
+    fetch("/api/widgets", { cache: "no-store" })
+      .then(function (response) { return response.json(); })
+      .then(function (body) {
+        widgetCache = (body.data && body.data.items) || [];
+        callback(buildWidgetCommands(widgetCache));
+      })
+      .catch(function () { callback([]); });
+  }
+
+  /** 把注册表项转成命令。 */
+  function buildWidgetCommands(items) {
+    return items.map(function (item) {
+      return {
+        id: "widget:" + item.id,
+        group: "palette.widgets",
+        label: item.id + " " + item.title,
+        run: function () {
+          if (window.Dashboard && window.Dashboard.addWidgetById) {
+            window.Dashboard.addWidgetById(item.id);
+            location.hash = "#/dashboard";
+            toast("已添加：" + item.title);
+          } else {
+            toast("仪表板尚未就绪，请先打开仪表板页");
+          }
+        }
+      };
+    });
+  }
+
+  var paletteNode = null;
+  var paletteState = { items: [], index: 0 };
+
+  /** 渲染候选列表。 */
+  function renderPaletteList(input) {
+    if (!paletteNode) {
+      return;
+    }
+    var keyword = (input || "").trim().toLowerCase();
+    var list = paletteNode.querySelector(".ui-palette-list");
+    list.innerHTML = "";
+    var filtered = paletteState.items.filter(function (item) {
+      return !keyword || (item.label + " " + item.group).toLowerCase().indexOf(keyword) >= 0;
+    });
+    if (!filtered.length) {
+      list.appendChild(el("div", "ui-palette-empty", t("palette.noResult")));
+      return;
+    }
+    paletteState.index = Math.min(paletteState.index, filtered.length - 1);
+    filtered.forEach(function (item, position) {
+      var row = el("div", "ui-palette-item" + (position === paletteState.index ? " active" : ""));
+      row.appendChild(el("span", "ui-palette-group", t(item.group)));
+      row.appendChild(el("span", "ui-palette-label", item.label));
+      row.addEventListener("click", function () {
+        closePalette();
+        item.run();
+      });
+      list.appendChild(row);
+    });
+    paletteNode._filtered = filtered;
+  }
+
+  /** 关闭命令面板。 */
+  function closePalette() {
+    if (paletteNode) {
+      paletteNode.remove();
+      paletteNode = null;
+    }
+  }
+
+  /** 打开命令面板。 */
+  function openPalette() {
+    if (paletteNode) {
+      closePalette();
+      return;
+    }
+    paletteNode = el("div", "ui-overlay ui-palette-overlay");
+    var box = el("div", "ui-palette");
+    var input = document.createElement("input");
+    input.className = "ui-palette-input";
+    input.placeholder = t("palette.placeholder");
+    box.appendChild(input);
+    var list = el("div", "ui-palette-list");
+    box.appendChild(list);
+    box.appendChild(el("div", "ui-palette-hint", t("palette.hint")));
+    paletteNode.appendChild(box);
+    document.body.appendChild(paletteNode);
+
+    paletteState.items = viewCommands().concat(actionCommands());
+    paletteState.index = 0;
+    renderPaletteList("");
+    widgetCommands(function (commands) {
+      paletteState.items = paletteState.items.concat(commands);
+      renderPaletteList(input.value);
+    });
+
+    input.addEventListener("input", function () {
+      paletteState.index = 0;
+      renderPaletteList(input.value);
+    });
+    input.addEventListener("keydown", function (event) {
+      var filtered = paletteNode && paletteNode._filtered ? paletteNode._filtered : [];
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        paletteState.index = Math.min(paletteState.index + 1, filtered.length - 1);
+        renderPaletteList(input.value);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        paletteState.index = Math.max(paletteState.index - 1, 0);
+        renderPaletteList(input.value);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        var target = filtered[paletteState.index];
+        if (target) {
+          closePalette();
+          target.run();
+        }
+      } else if (event.key === "Escape") {
+        closePalette();
+      }
+    });
+    paletteNode.addEventListener("click", function (event) {
+      if (event.target === paletteNode) {
+        closePalette();
+      }
+    });
+    input.focus();
+  }
+
+  /** 绑定全局快捷键：Ctrl+K 面板、Esc 关闭。 */
+  function bindShortcuts() {
+    document.addEventListener("keydown", function (event) {
+      if (event.ctrlKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openPalette();
+      }
+      if (event.key === "Escape") {
+        closePalette();
+      }
+    });
+  }
+
+  window.UI = { toast: toast, modal: modal, openPalette: openPalette, closePalette: closePalette };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindShortcuts);
+  } else {
+    bindShortcuts();
+  }
+})();

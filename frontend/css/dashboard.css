@@ -1,0 +1,269 @@
+/* =============================================================
+ * OpenBB 中文投研工作台 · 仪表板与全局浮层（阶段 6）
+ * 内容：48 列仪表板网格、组件卡（拖拽/宽度/移除）、组件库抽屉、
+ *       命令面板（Ctrl+K）、模态框。
+ * 约束：颜色全部取 theme.css 变量，不新增配色。
+ * ============================================================= */
+
+/* ---------- 仪表板网格 ---------- */
+.dash-grid {
+  align-items: start;
+  padding-top: 12px;
+}
+
+.dash-widget {
+  min-height: 220px;
+  transition: outline-color 120ms ease;
+  outline: 1px dashed transparent;
+}
+
+.dash-widget[draggable="true"]:active {
+  outline-color: var(--accent-strong);
+}
+
+.dash-widget .pg-card-head {
+  cursor: grab;
+}
+
+.dash-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.dash-badges {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dash-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 32px;
+}
+
+/* ---------- 组件库抽屉 ---------- */
+.dash-library {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 92vw;
+  background: var(--bg-widget);
+  border-left: 1px solid var(--border);
+  padding: 16px;
+  overflow: auto;
+  z-index: 60;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+.dash-lib-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-body);
+}
+
+.dash-lib-id {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-size: 11px;
+  min-width: 42px;
+}
+
+.dash-lib-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+/* ---------- 通用浮层 / 模态框 ---------- */
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+}
+
+.ui-modal {
+  width: 420px;
+  max-width: 92vw;
+  background: var(--bg-widget);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ui-modal-title {
+  font-size: var(--fs-section);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ui-modal-message {
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.ui-modal-input {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: var(--fs-body);
+}
+
+.ui-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pg-btn.primary {
+  border-color: var(--accent-strong);
+  color: var(--accent);
+}
+
+/* ---------- 命令面板 ---------- */
+.ui-palette-overlay {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.ui-palette {
+  width: 620px;
+  max-width: 94vw;
+  background: var(--bg-widget);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-palette-input {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 14px;
+  outline: none;
+}
+
+.ui-palette-list {
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.ui-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
+
+.ui-palette-item:hover,
+.ui-palette-item.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.ui-palette-group {
+  font-size: 11px;
+  color: var(--accent);
+  min-width: 64px;
+}
+
+.ui-palette-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-palette-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-aux);
+}
+
+.ui-palette-hint {
+  border-top: 1px solid var(--border);
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---------- 窄屏适配 ---------- */
+@media (max-width: 1200px) {
+  .dash-widget {
+    grid-column: span 48 !important; /* 1024 断点下组件单列，避免挤压 */
+  }
+
+  .ui-palette {
+    width: 100%;
+  }
+
+  .dash-library {
+    width: 320px;
+  }
+}
+
+/* ---------- 高缩放/窄宽场景（125% / 150%） ---------- */
+/* 150% 缩放下 CSS 视口约 911px，顶栏动作区会溢出：允许换行并压缩留白 */
+@media (max-width: 1000px) {
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    flex: 0 0 auto;
+    min-height: var(--menu-w);
+    padding: 6px 8px;
+    row-gap: 6px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .global-search {
+    min-width: 160px;
+    flex: 1 1 160px;
+  }
+
+  /* 抽屉收起时移出可视区会造成横向滚动，窄屏改为 display 控制 */
+  .copilot {
+    display: none;
+  }
+
+  .copilot.open {
+    display: flex;
+    right: 0;
+  }
+
+  body {
+    overflow-x: hidden; /* 兜底：表格内部自行滚动，页面不出现横向滚动条 */
+  }
+
+  .pg-table-wrap {
+    max-width: 100%;
+  }
+}

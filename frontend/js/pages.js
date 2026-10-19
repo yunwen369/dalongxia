@@ -30,7 +30,8 @@
     news: "page-news",
     fund: "page-fund",
     portfolio: "page-portfolio",
-    connectors: "page-connectors"
+    connectors: "page-connectors",
+    dashboard: "page-dashboard"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -388,7 +389,8 @@
       news: "新闻资讯",
       fund: "场外基金",
       portfolio: "持仓管理",
-      connectors: "数据连接器"
+      connectors: "数据连接器",
+      dashboard: window.I18N ? window.I18N.t("page.dashboard") : "仪表板"
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -419,6 +421,10 @@
       renderPortfolio();
     } else if (name === "connectors") {
       renderConnectors();
+    } else if (name === "dashboard") {
+      if (window.renderDashboard) {
+        window.renderDashboard();
+      }
     }
   }
 

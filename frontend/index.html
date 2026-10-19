@@ -4,12 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenBB 中文投研工作台</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
   <!-- 主题变量与布局样式：尺寸与色板来自规范 v7.0 §7.4 -->
   <link rel="stylesheet" href="css/theme.css">
   <link rel="stylesheet" href="css/app.css">
   <!-- 阶段 5.1 三视图样式：48 列栅格、四态、双徽章、1024 断点 -->
   <link rel="stylesheet" href="css/pages.css">
+  <!-- 阶段 6：仪表板与全局浮层样式 -->
+  <link rel="stylesheet" href="css/dashboard.css">
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
+  <!-- 阶段 6：国际化与本地化（最先加载，供后续脚本取词） -->
+  <script src="js/i18n.js" defer></script>
   <script src="vendor/echarts.min.js" defer></script>
   <script src="js/market.js" defer></script>
   <script src="js/app.js" defer></script>
@@ -17,6 +22,9 @@
   <script src="js/pages.js" defer></script>
   <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
   <script src="js/copilot.js" defer></script>
+  <!-- 阶段 6：全局交互（命令面板/模态框）与组件化仪表板 -->
+  <script src="js/ui.js" defer></script>
+  <script src="js/dashboard.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -28,17 +36,18 @@
       </div>
 
       <nav class="nav" id="main-nav" aria-label="主菜单">
-        <button class="nav-item active" type="button" data-view="home">首页</button>
-        <button class="nav-item" type="button" data-view="charting">图表</button>
-        <button class="nav-item" type="button" data-view="news">新闻</button>
-        <button class="nav-item" type="button" data-view="sectors">板块</button>
-        <button class="nav-item" type="button" data-view="stock">个股</button>
-        <button class="nav-item" type="button" data-view="sector-val">估值</button>
-        <button class="nav-item" type="button" data-view="fund">场外基金</button>
-        <button class="nav-item" type="button" data-view="portfolio">持仓</button>
-        <button class="nav-item" type="button" data-view="yjb">养基宝</button>
-        <button class="nav-item" type="button" data-view="connectors">连接器</button>
-        <button class="nav-item" type="button" data-view="settings">设置</button>
+        <button class="nav-item active" type="button" data-view="home" data-i18n="nav.home">首页</button>
+        <button class="nav-item" type="button" data-view="dashboard" data-i18n="nav.dashboard">仪表板</button>
+        <button class="nav-item" type="button" data-view="charting" data-i18n="nav.charting">图表</button>
+        <button class="nav-item" type="button" data-view="news" data-i18n="nav.news">新闻</button>
+        <button class="nav-item" type="button" data-view="sectors" data-i18n="nav.sectors">板块</button>
+        <button class="nav-item" type="button" data-view="stock" data-i18n="nav.stock">个股</button>
+        <button class="nav-item" type="button" data-view="sector-val" data-i18n="nav.sectorVal">估值</button>
+        <button class="nav-item" type="button" data-view="fund" data-i18n="nav.fund">场外基金</button>
+        <button class="nav-item" type="button" data-view="portfolio" data-i18n="nav.portfolio">持仓</button>
+        <button class="nav-item" type="button" data-view="yjb" data-i18n="nav.yjb">养基宝</button>
+        <button class="nav-item" type="button" data-view="connectors" data-i18n="nav.connectors">连接器</button>
+        <button class="nav-item" type="button" data-view="settings" data-i18n="nav.settings">设置</button>
       </nav>
 
       <div class="topbar-actions">
@@ -62,18 +71,18 @@
         <div class="sidebar-heading">市场总览</div>
         <ul class="sidebar-list">
           <li class="sidebar-item active">市场总览（当前）</li>
-          <li class="sidebar-item">我的自选（待接入）</li>
-          <li class="sidebar-item">新建仪表板（待接入）</li>
-          <li class="sidebar-item">组件库（待接入）</li>
+          <li class="sidebar-item">我的自选</li>
+          <li class="sidebar-item">新建仪表板</li>
+          <li class="sidebar-item">组件库</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading">系统</div>
         <ul class="sidebar-list">
-          <li class="sidebar-item">数据连接器（待接入）</li>
-          <li class="sidebar-item">设置（待接入）</li>
+          <li class="sidebar-item">数据连接器</li>
+          <li class="sidebar-item">设置</li>
         </ul>
         <div class="sidebar-divider"></div>
-        <div class="notice">阶段 4：A股行情 7 接口真实数据验证；数据源/口径徽章显示实际命中通道。</div>
+        <div class="notice">真实数据 · 红涨绿跌 · 数据源与口径双徽章 · Ctrl+K 命令面板 · Ctrl+M 切换主题</div>
       </aside>
 
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
@@ -202,6 +211,8 @@
 
         <!-- ===== 阶段 5.1 三视图容器：由 pages.js 按 hash 路由填充 ===== -->
         <!-- #/sectors 板块分析（S-01~S-07） -->
+        <!-- #/dashboard 组件化仪表板（阶段 6） -->
+        <section class="page-view" id="page-dashboard" hidden aria-label="仪表板"></section>
         <section class="page-view" id="page-sectors" hidden aria-label="板块分析"></section>
         <!-- #/stock 个股详情 FinScope（ST-01~ST-10） -->
         <section class="page-view" id="page-stock" hidden aria-label="个股详情"></section>
