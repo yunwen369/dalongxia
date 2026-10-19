@@ -130,6 +130,10 @@
     });
     var url = path + (query.toString() ? "?" + query.toString() : "");
     return fetch(url, { cache: "no-store" })
+      // 网络层失败（断网/请求被拦截）统一转中文，避免把 "Failed to fetch" 暴露到界面
+      .catch(function () {
+        throw new Error("网络连接失败，请检查网络后重试。");
+      })
       .then(function (response) {
         return response.json().catch(function () {
           throw new Error("数据格式异常，请稍后重试。");
@@ -402,7 +406,7 @@
     } else if (name === "sector-val") {
       renderSectorVal(parsed.params);
     } else if (name === "news") {
-      renderNewsPlaceholder(parsed.params);
+      renderNews(parsed.params);
     }
   }
 
@@ -1961,22 +1965,448 @@
   }
 
   // =============================================================
-  // 八、#/news 占位（5.2 落地，本批仅承接跳转参数）
+  // 八、#/news 新闻与利好利空（批次 5.2）
+  // 结构：N-01 三级板块树 / N-02 资讯流 / N-03 情绪温度 / N-04 AI 复核（内嵌于卡片）
   // =============================================================
-  /** 新闻页占位：显示跳转带来的 symbol 参数，不报错、不白屏。 */
-  function renderNewsPlaceholder(params) {
-    var container = document.getElementById(VIEW_IDS.news);
+  var newsState = {
+    mode: "feed", // feed=多源资讯流，stock=个股新闻
+    symbol: "",
+    board: "科技成长",
+    sort: "relevance",
+    region: "global",
+    tree: null,
+    expanded: {}
+  };
+
+  /** POST 请求：用于 AI 复核（返回 data，失败抛中文错误）。 */
+  function apiPost(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (payload) {
+        if (payload && payload.error) {
+          var error = new Error(payload.error);
+          error.code = payload.error_code;
+          error.data = payload.data;
+          throw error;
+        }
+        return payload.data || {};
+      });
+  }
+
+  /** 构建新闻页骨架。 */
+  function buildNewsShell(container) {
     container.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+
+    // 模式切换：资讯流 / 个股新闻（个股模式需带 symbol）
+    var modeTabs = el("div", "pg-tabs");
+    modeTabs.id = "N-mode";
+    [["feed", "多源资讯流"], ["stock", "个股新闻"]].forEach(function (item) {
+      var button = el("button", "pg-tab", item[1]);
+      button.type = "button";
+      button.setAttribute("data-mode", item[0]);
+      modeTabs.appendChild(button);
+    });
+    toolbar.appendChild(modeTabs);
+
+    // 排序切换
+    var sortTabs = el("div", "pg-tabs");
+    sortTabs.id = "N-sort";
+    [["relevance", "相关度"], ["time", "时间"], ["impact", "影响度"]].forEach(function (item) {
+      var button = el("button", "pg-tab", item[1]);
+      button.type = "button";
+      button.setAttribute("data-sort", item[0]);
+      sortTabs.appendChild(button);
+    });
+    toolbar.appendChild(sortTabs);
+
+    // 区域切换（仅资讯流模式生效）
+    var regionTabs = el("div", "pg-tabs");
+    regionTabs.id = "N-region";
+    [["global", "全球"], ["cn", "国内"]].forEach(function (item) {
+      var button = el("button", "pg-tab", item[1]);
+      button.type = "button";
+      button.setAttribute("data-region", item[0]);
+      regionTabs.appendChild(button);
+    });
+    toolbar.appendChild(regionTabs);
+    toolbar.appendChild(el("span", "pg-spacer"));
+
+    var refresh = el("button", "pg-btn", "刷新本页");
+    refresh.type = "button";
+    refresh.id = "news-refresh";
+    toolbar.appendChild(refresh);
+    container.appendChild(toolbar);
+
     var grid = el("div", "pg-grid");
-    var card = buildCard("N-01", "新闻资讯", "g-12", "5.2 阶段落地");
-    var box = el("div", "pg-state");
-    box.appendChild(el("div", "pg-state-title", "新闻页将在批次 5.2 上线"));
-    box.appendChild(
-      el("div", "pg-state-hint", "已接收参数：" + (params.symbol ? "symbol=" + params.symbol : "无") + "；当前不发起任何新闻请求")
-    );
-    card.body.appendChild(box);
-    grid.appendChild(card.card);
+    grid.id = "news-grid";
+
+    // 左栏：板块树 + 情绪温度
+    var left = el("div", "g-4");
+    left.style.display = "flex";
+    left.style.flexDirection = "column";
+    left.style.gap = "16px";
+    var treeCard = buildCard("N-01", "板块树", "", "三级：市场 / 方向 / 细分");
+    treeCard.body.id = "n01-body";
+    treeCard.body.classList.add("short");
+    left.appendChild(treeCard.card);
+    var sentiCard = buildCard("N-03", "情绪温度", "", "本地规则引擎");
+    sentiCard.body.id = "n03-body";
+    left.appendChild(sentiCard.card);
+    grid.appendChild(left);
+
+    // 右栏：资讯流
+    var feedCard = buildCard("N-02", "资讯流", "g-8", "本地确定性初评 · 非 AI 判读");
+    feedCard.body.id = "n02-body";
+    grid.appendChild(feedCard.card);
     container.appendChild(grid);
+
+    modeTabs.addEventListener("click", function (event) {
+      var button = event.target.closest(".pg-tab");
+      if (!button) {
+        return;
+      }
+      var mode = button.getAttribute("data-mode");
+      if (mode === "stock" && !newsState.symbol) {
+        toast("个股新闻需从个股详情页「相关新闻」进入，或先在地址栏带 symbol 参数");
+        return;
+      }
+      newsState.mode = mode;
+      syncNewsTabs();
+      loadNews();
+    });
+    sortTabs.addEventListener("click", function (event) {
+      var button = event.target.closest(".pg-tab");
+      if (!button) {
+        return;
+      }
+      newsState.sort = button.getAttribute("data-sort");
+      syncNewsTabs();
+      loadNews(true);
+    });
+    regionTabs.addEventListener("click", function (event) {
+      var button = event.target.closest(".pg-tab");
+      if (!button) {
+        return;
+      }
+      newsState.region = button.getAttribute("data-region");
+      syncNewsTabs();
+      loadNews(true);
+    });
+    refresh.addEventListener("click", function () {
+      newsState.tree = null;
+      loadNews(true);
+    });
+  }
+
+  /** 同步 Tab 选中态与可见性。 */
+  function syncNewsTabs() {
+    var modeBox = document.getElementById("N-mode");
+    var regionBox = document.getElementById("N-region");
+    if (modeBox) {
+      modeBox.querySelectorAll(".pg-tab").forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-mode") === newsState.mode);
+      });
+    }
+    document.querySelectorAll("#N-sort .pg-tab").forEach(function (button) {
+      button.classList.toggle("active", button.getAttribute("data-sort") === newsState.sort);
+    });
+    if (regionBox) {
+      regionBox.hidden = newsState.mode !== "feed";
+      regionBox.querySelectorAll(".pg-tab").forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-region") === newsState.region);
+      });
+    }
+  }
+
+  /** 渲染新闻页。 */
+  function renderNews(params) {
+    var container = document.getElementById(VIEW_IDS.news);
+    if (params.symbol) {
+      newsState.symbol = params.symbol;
+      newsState.mode = "stock";
+    }
+    if (!container.querySelector("#news-grid")) {
+      buildNewsShell(container);
+    }
+    syncNewsTabs();
+    loadNews();
+  }
+
+  /** 拉取并渲染：板块树 + 资讯流 + 情绪温度。 */
+  function loadNews(force) {
+    var body = document.getElementById("n02-body");
+    var sentiBody = document.getElementById("n03-body");
+    var treeBody = document.getElementById("n01-body");
+    if (!body) {
+      return;
+    }
+    if (force) {
+      newsState.tree = null;
+    }
+    setLoading(body);
+    setLoading(sentiBody);
+    if (!newsState.tree) {
+      setLoading(treeBody);
+    }
+
+    var treeTask = newsState.tree
+      ? Promise.resolve(newsState.tree)
+      : api("/api/news/board-tree", {});
+    var feedTask =
+      newsState.mode === "stock"
+        ? api("/api/news/stock", { symbol: newsState.symbol, limit: 30 })
+        : api("/api/news/ai-feed", {
+            boards: newsState.board,
+            sort: newsState.sort,
+            limit: 40,
+            region: newsState.region
+          });
+    var sentiTask =
+      newsState.mode === "stock"
+        ? api("/api/sentiment/stock", { symbol: newsState.symbol })
+        : api("/api/sentiment/board", { board: newsState.board }).catch(function (error) {
+            return { error: error.message };
+          });
+
+    Promise.all([treeTask, feedTask, sentiTask])
+      .then(function (result) {
+        newsState.tree = result[0];
+        paintBoardTree(treeBody, result[0]);
+        paintNewsFeed(body, result[1]);
+        paintNewsSentiment(sentiBody, result[2]);
+      })
+      .catch(function (error) {
+        setError(body, error.message, function () {
+          loadNews(true);
+        });
+        setError(sentiBody, error.message, function () {
+          loadNews(true);
+        });
+      });
+  }
+
+  /** 渲染三级板块树（一级/二级可折叠，末级可选中）。 */
+  function paintBoardTree(body, tree) {
+    if (!body) {
+      return;
+    }
+    var levels = (tree && tree.tree) || [];
+    if (!levels.length) {
+      setEmpty(body, "板块树暂无数据", function () {
+        loadNews(true);
+      });
+      return;
+    }
+    body.innerHTML = "";
+    var meta = el("div", "pg-card-sub",
+      "版本 " + tree.version + " · 一级 " + tree.counts.level1 + " / 二级 " + tree.counts.level2 + " / 末级 " + tree.counts.leaf);
+    body.appendChild(meta);
+
+    levels.forEach(function (level1) {
+      var open1 = newsState.expanded[level1.id] !== false;
+      var row1 = el("div", "pg-tree-row level1" + (level1.name === newsState.board ? " active" : ""));
+      row1.appendChild(el("span", "pg-tree-toggle", open1 ? "▾" : "▸"));
+      row1.appendChild(el("span", "pg-tree-name", level1.name));
+      row1.addEventListener("click", function () {
+        // 一级节点同样可作过滤条件（展开为其全部末级子孙）
+        newsState.expanded[level1.id] = !open1;
+        if (newsState.board !== level1.name) {
+          newsState.board = level1.name;
+          newsState.mode = "feed";
+          syncNewsTabs();
+          loadNews();
+        } else {
+          paintBoardTree(body, tree);
+        }
+      });
+      body.appendChild(row1);
+      if (!open1) {
+        return;
+      }
+      level1.children.forEach(function (level2) {
+        var open2 = newsState.expanded[level2.id] === true;
+        var row2 = el("div", "pg-tree-row level2" + (level2.name === newsState.board ? " active" : ""));
+        row2.appendChild(el("span", "pg-tree-toggle", open2 ? "▾" : "▸"));
+        row2.appendChild(el("span", "pg-tree-name", level2.name));
+        row2.addEventListener("click", function () {
+          // 二级节点同时承担「展开」和「作为过滤板块」两个职责
+          newsState.expanded[level2.id] = !open2;
+          if (newsState.board !== level2.name) {
+            newsState.board = level2.name;
+            newsState.mode = "feed";
+            syncNewsTabs();
+            loadNews();
+          } else {
+            paintBoardTree(body, tree);
+          }
+        });
+        body.appendChild(row2);
+        if (!open2) {
+          return;
+        }
+        level2.children.forEach(function (leaf) {
+          var row3 = el("div", "pg-tree-row level3" + (leaf.name === newsState.board ? " active" : ""));
+          row3.appendChild(el("span", "pg-tree-dot", "·"));
+          row3.appendChild(el("span", "pg-tree-name", leaf.name));
+          row3.addEventListener("click", function () {
+            newsState.board = leaf.name;
+            newsState.mode = "feed";
+            syncNewsTabs();
+            loadNews();
+          });
+          body.appendChild(row3);
+        });
+      });
+    });
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 渲染资讯流：每条含情绪标签、事件、板块、AI 复核按钮。 */
+  function paintNewsFeed(body, payload) {
+    var card = document.getElementById("N-02");
+    if (!body) {
+      return;
+    }
+    setBadges(card, payload.source, payload.caliber, false);
+    var items = payload.items || [];
+    if (!items.length) {
+      setEmpty(body, "当前板块暂无相关资讯，可换一个板块或稍后刷新", function () {
+        loadNews(true);
+      });
+      return;
+    }
+    body.innerHTML = "";
+    var list = el("div", "pg-feed-list");
+    items.forEach(function (item) {
+      var sentiment = item.sentiment || {};
+      var box = el("article", "pg-feed-item");
+
+      var head = el("div", "pg-feed-head");
+      var chipClass = sentiment.label === "利好" ? "chip up" : sentiment.label === "利空" ? "chip down" : "chip";
+      head.appendChild(el("span", chipClass, sentiment.label || "中性"));
+      head.appendChild(el("span", "pg-feed-score", "情绪分 " + fmt(sentiment.score, 4) + " · " + (sentiment.strength || "弱")));
+      head.appendChild(el("span", "pg-spacer"));
+      head.appendChild(el("span", "pg-news-time", relativeTime(item.time)));
+      box.appendChild(head);
+
+      var title = el("div", "pg-feed-title", item.title || "无标题");
+      if (item.url) {
+        title.style.cursor = "pointer";
+        title.addEventListener("click", function () {
+          window.open(item.url, "_blank", "noopener");
+        });
+      }
+      box.appendChild(title);
+
+      if (item.text) {
+        box.appendChild(el("div", "pg-feed-text", item.text.slice(0, 180) + (item.text.length > 180 ? "…" : "")));
+      }
+
+      var foot = el("div", "pg-feed-foot");
+      foot.appendChild(el("span", "pg-card-sub", item.source || "来源未知"));
+      (item.channels || []).forEach(function (channel) {
+        foot.appendChild(el("span", "pg-news-tag", channel));
+      });
+      (item.boards || []).forEach(function (board) {
+        foot.appendChild(el("span", "pg-news-tag board", board));
+      });
+      if ((sentiment.events || []).length) {
+        foot.appendChild(el("span", "pg-news-tag",
+          "事件：" + sentiment.events.map(function (event) { return event.name; }).join("、")));
+      }
+      var reviewButton = el("button", "pg-btn", "AI 复核");
+      reviewButton.type = "button";
+      var reviewBox = el("div", "pg-review-box");
+      reviewButton.addEventListener("click", function () {
+        reviewButton.disabled = true;
+        reviewButton.textContent = "复核中…";
+        apiPost("/api/news/ai-review", {
+          title: item.title,
+          content: item.text,
+          board: (item.boards || [])[0] || newsState.board,
+          path: newsState.mode === "stock" ? "stock" : "feed",
+          sentiment: sentiment.label,
+          strength: sentiment.strength
+        })
+          .then(function (data) {
+            reviewButton.textContent = "AI 复核";
+            reviewButton.disabled = false;
+            reviewBox.textContent = "AI（" + (data.model || "已配置模型") + "）：" + (data.review && data.review.raw ? data.review.raw.slice(0, 200) : "已返回");
+            reviewBox.className = "pg-review-box ok";
+          })
+          .catch(function (error) {
+            reviewButton.textContent = "AI 复核";
+            reviewButton.disabled = false;
+            // AI 未配置属预期契约：给出明确引导，不报错、不冒充结果
+            reviewBox.textContent =
+              error.code === "NOT_CONFIGURED"
+                ? "AI 复核不可用：未配置模型接口，请到「设置 → AI 设置」填写 base_url / api_key / model"
+                : "AI 复核失败：" + error.message;
+            reviewBox.className = "pg-review-box warn";
+          });
+      });
+      foot.appendChild(reviewButton);
+      box.appendChild(foot);
+      box.appendChild(reviewBox);
+      list.appendChild(box);
+    });
+    body.appendChild(list);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 渲染情绪温度卡（N-03）。 */
+  function paintNewsSentiment(body, payload) {
+    if (!body) {
+      return;
+    }
+    if (!payload || payload.error || payload.temperature === undefined) {
+      setEmpty(body, (payload && payload.error) || "情绪数据暂无", function () {
+        loadNews(true);
+      });
+      return;
+    }
+    body.innerHTML = "";
+    var grid = el("div", "pg-metric-grid");
+    [
+      ["温度", payload.temperature, payload.temperature >= 65 ? "up" : payload.temperature <= 35 ? "down" : "flat"],
+      ["档位", payload.level, "flat"],
+      ["利好", payload.positive, "up"],
+      ["利空", payload.negative, "down"],
+      ["样本", payload.total, "flat"]
+    ].forEach(function (item) {
+      var cell = el("div", "pg-metric-cell");
+      cell.appendChild(el("div", "pg-metric-label", item[0]));
+      cell.appendChild(el("div", "pg-metric-value " + item[2], item[1]));
+      grid.appendChild(cell);
+    });
+    body.appendChild(grid);
+
+    if ((payload.top_events || []).length) {
+      var events = payload.top_events.map(function (event) {
+        return event.name + "×" + event.count;
+      }).join("、");
+      body.appendChild(el("div", "pg-card-sub", "驱动事件：" + events));
+    }
+    if ((payload.samples || []).length) {
+      var list = el("ul", "pg-news-list");
+      payload.samples.slice(0, 3).forEach(function (sample) {
+        var li = el("li", "pg-news-item");
+        li.appendChild(el("span", "pg-news-title", sample.title || ""));
+        li.appendChild(el("span", "chip", fmt(sample.score, 4)));
+        list.appendChild(li);
+      });
+      body.appendChild(list);
+    }
+    body.appendChild(el("div", "pg-card-sub",
+      "口径：" + (payload.caliber || "本地规则引擎") + "；温度 = 50 + 均分×500，裁剪 0–100"));
+    body.setAttribute("data-state", "default");
   }
 
   // =============================================================

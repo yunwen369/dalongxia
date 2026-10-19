@@ -438,6 +438,153 @@
   margin-bottom: 8px;
 }
 
+/* ---------- 新闻页：板块树 / 资讯流 / AI 复核（批次 5.2） ---------- */
+#n01-body {
+  max-height: 340px;
+  overflow: auto; /* 树过高时内部滚动，保证情绪温度卡在首屏可见 */
+}
+.pg-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-tree-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* 三级缩进：一级 0 / 二级 12px / 末级 24px */
+.pg-tree-row.level1 {
+  color: var(--text);
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.pg-tree-row.level2 {
+  padding-left: 14px;
+}
+
+.pg-tree-row.level3 {
+  padding-left: 28px;
+}
+
+.pg-tree-row.level1.active,
+.pg-tree-row.level2.active,
+.pg-tree-row.level3.active {
+  background: var(--accent-deep);
+  color: #fff;
+}
+
+.pg-tree-toggle {
+  width: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pg-tree-dot {
+  color: var(--text-muted);
+}
+
+.pg-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 资讯流列表 */
+.pg-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.pg-feed-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--bg-widget-2, #1a1a1e);
+}
+
+.pg-feed-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.pg-feed-score {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.pg-feed-title {
+  font-size: var(--fs-body);
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.pg-feed-text {
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.pg-feed-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pg-news-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 6px;
+}
+
+.pg-news-tag.board {
+  color: var(--accent);
+  border-color: var(--accent-strong);
+}
+
+.pg-review-box {
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+  margin-top: 6px;
+  display: none;
+  line-height: 1.6;
+}
+
+.pg-review-box.ok,
+.pg-review-box.warn {
+  display: block;
+}
+
+.pg-review-box.ok {
+  color: #3ecf8e;
+}
+
+.pg-review-box.warn {
+  color: #b77f3d;
+}
+
 /* ---------- 1024 断点适配（P0-05 / A-17） ---------- */
 @media (max-width: 1200px) {
   .pg-grid {
