@@ -609,17 +609,26 @@ def test_news_sector_search_real() -> None:
 
 
 def test_news_ai_feed_real() -> None:
-    """多源池：四通道全部命中、去重前后计数一致、逐条带本地初评。"""
-    data = _success("/api/news/ai-feed", {"boards": "存储芯片,光模块", "limit": 30})
-    items = data["items"]
-    assert len(items) >= 1
-    assert data["after_dedup"] >= 0 and data["before_dedup"] >= data["after_dedup"]
-    channels = {ch["name"]: ch for ch in data["channels"]}
+    """多源池：池非空、四通道登记、去重有效，且按「池内实际命中板块」过滤必命中。
+
+    说明：新闻是滚动数据，写死板块会在无相关资讯时误报；这里先取全量池，
+    再用池内真实出现的板块回查，保证断言确定、不依赖当天新闻内容。
+    """
+    pool = _success("/api/news/ai-feed", {"limit": 40})
+    assert pool["before_dedup"] >= 10, "多源池为空，通道可能全部失败"
+    assert pool["after_dedup"] >= 1
+    channels = {ch["name"]: ch for ch in pool["channels"]}
     assert {"财联社快讯", "东财全球", "新浪全球", "同花顺全球"} <= set(channels)
     assert sum(1 for ch in channels.values() if ch["ok"]) >= 3, "可用源少于 3 个"
-    for item in items:
-        assert item["boards"], "命中项必须带板块"
+    for item in pool["items"]:
         assert -0.1 <= item["sentiment"]["score"] <= 0.1
+
+    candidates = [board for item in pool["items"] for board in (item.get("boards") or [])]
+    assert candidates, "池内没有任何板块命中，关键词表可能失效"
+    board = candidates[0]
+    filtered = _success("/api/news/ai-feed", {"boards": board, "limit": 20})
+    assert filtered["items"], f"按池内命中板块 {board} 过滤后为空"
+    assert all(board in item["boards"] for item in filtered["items"])
 
 
 def test_news_ai_review_not_configured(monkeypatch: _pytest.MonkeyPatch) -> None:
