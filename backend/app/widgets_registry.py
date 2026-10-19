@@ -117,6 +117,30 @@ WIDGETS: List[Dict[str, Any]] = [
             desc="温度=50+均分×500，裁剪 0–100；含驱动事件与证据样本"),
     _widget("N-04", "#/news", "AI 复核", ".g-8", ["/api/news/ai-review"],
             desc="用户点击后调用自备 OpenAI 兼容接口；未配置时给出设置引导"),
+
+    # ---------- #/fund（6 个，批次 5.3） ----------
+    _widget("F-01", "#/fund", "基金概览", ".g-12", ["/api/fund/info", "/api/fund/realtime"],
+            desc="名称/净值/日涨幅/经理/规模 + 双徽章（T+1 公布净值）"),
+    _widget("F-02", "#/fund", "净值与回撤", ".g-7", ["/api/fund/nav", "/api/fund/drawdown"],
+            desc="净值走势 + 回撤序列，回撤由净值自算"),
+    _widget("F-03", "#/fund", "阶段业绩", ".g-7", ["/api/fund/performance"],
+            desc="区间涨幅与同类排名（蛋卷 derived）"),
+    _widget("F-04", "#/fund", "重仓股", ".g-12", ["/api/fund/holding"],
+            jump="#/stock?symbol={代码}&market=a", desc="东财季报前十大重仓，行可点进个股"),
+    _widget("F-05", "#/fund", "档案与分红", ".g-5", ["/api/fund/info", "/api/fund/dividend"],
+            desc="蛋卷档案 + 东财分红（每10份派现）"),
+    _widget("F-06", "#/fund", "持仓分布", ".g-5", ["/api/fund/position"],
+            desc="蛋卷持仓分布需登录（rc=300001），依规范禁用并说明"),
+
+    # ---------- #/portfolio（4 个，批次 5.3） ----------
+    _widget("P-01", "#/portfolio", "持仓汇总", ".g-12", ["/api/portfolio/analysis"],
+            desc="人民币市值/成本/盈亏/汇率；缺汇率时不给折算值"),
+    _widget("P-02", "#/portfolio", "新增持仓表单", ".g-12", ["/api/portfolio"],
+            desc="市场/代码/名称/份额/成本；写本机 data/portfolio.json"),
+    _widget("P-03", "#/portfolio", "持仓明细", ".g-12", ["/api/portfolio", "/api/portfolio/analysis"],
+            jump="#/stock?symbol={代码}&market={市场}", desc="本币与人民币双口径盈亏，支持删除"),
+    _widget("P-04", "#/portfolio", "市场分布", ".g-5", ["/api/portfolio/analysis"],
+            desc="按人民币市值占比的四市场分布"),
 ]
 
 

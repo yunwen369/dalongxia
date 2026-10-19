@@ -483,15 +483,17 @@ def test_stock_financial_report_statements() -> None:
 
 
 def test_widget_registry() -> None:
-    """组件注册表：25 个区块（5.1 的 21 + 5.2 的 4）、编号与页面一一对应、48 列映射正确。"""
+    """组件注册表：35 个区块（5.1 的 21 + 5.2 的 4 + 5.3 的 10）、编号唯一、48 列映射正确。"""
     body = _body("/api/widgets", {})
     assert body["error"] is None
     data = body["data"]
-    assert data["total"] == 25
+    assert data["total"] == 35
     ids = [item["id"] for item in data["items"]]
     assert ids[:1] == ["S-01"] and "ST-01" in ids and "V-03" in ids
     assert {"N-01", "N-02", "N-03", "N-04"} <= set(ids)
-    assert len(set(ids)) == 25
+    assert {"F-01", "F-02", "F-04", "P-01", "P-03"} <= set(ids)
+    assert {"F-01", "F-02", "F-04", "P-01", "P-03"} <= set(ids)
+    assert len(set(ids)) == 35
     assert data["grid"][".g-7"] == 28 and data["grid"][".g-5"] == 20
     sectors = [item for item in data["items"] if item["page"] == "#/sectors"]
     assert len(sectors) == 7
@@ -500,6 +502,14 @@ def test_widget_registry() -> None:
     assert "#/sector-val" in jump_targets and "#/stock" in jump_targets and "#/news" in jump_targets
     news_api = {api for item in data["items"] if item["page"] == "#/news" for api in item["api"]}
     assert "/api/news/ai-feed" in news_api and "/api/news/ai-review" in news_api
+    fund_api = {api for item in data["items"] if item["page"] == "#/fund" for api in item["api"]}
+    assert "/api/fund/performance" in fund_api and "/api/fund/position" in fund_api
+    pf_api = {api for item in data["items"] if item["page"] == "#/portfolio" for api in item["api"]}
+    assert "/api/portfolio/analysis" in pf_api
+    fund_api = {api for item in data["items"] if item["page"] == "#/fund" for api in item["api"]}
+    assert "/api/fund/performance" in fund_api and "/api/fund/position" in fund_api
+    pf_api = {api for item in data["items"] if item["page"] == "#/portfolio" for api in item["api"]}
+    assert "/api/portfolio/analysis" in pf_api
 
 
 def test_stock_error_contract() -> None:
@@ -685,3 +695,159 @@ def test_news_sentiment_error_contract() -> None:
     assert _body("/api/news/sector-search", {"sector": "  "})["error_code"] == "INVALID_PARAM"
     assert _body("/api/sentiment/market", {"region": "mars"})["error_code"] == "INVALID_PARAM"
     assert _body("/api/sentiment/board", {"board": "不存在的板块"})["error_code"] == "NOT_FOUND"
+
+
+# =============================================================
+# 批次 5.3：fund 9 接口 + portfolio 5 接口
+# 说明：portfolio 用例会写入真实 data/portfolio.json，用 fixture 保证用例结束即清理。
+# =============================================================
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture()
+def temp_position():
+    """新增一条临时持仓，用例结束后删除，避免污染用户真实持仓。"""
+    created = client.post("/api/portfolio", json={
+        "market": "fund", "symbol": "017811", "name": "东方人工智能主题混合C",
+        "shares": 100, "cost": 3.0, "note": "pytest 临时用例",
+    }).json()
+    assert created["error"] is None, created
+    item_id = created["data"]["item"]["id"]
+    try:
+        yield item_id
+    finally:
+        client.delete(f"/api/portfolio/{item_id}")
+
+
+def test_fund_search_real() -> None:
+    """搜索：代码精确命中，字段齐全。"""
+    data = _success("/api/fund/search", {"q": "017811"})
+    assert data["count"] >= 1
+    first = data["items"][0]
+    assert first["code"] == "017811"
+    assert "人工智能" in first["name"]
+    assert first["type"]
+
+
+def test_fund_realtime_t_plus_1() -> None:
+    """最新净值：T+1 口径、非实时、降级链如实记录。"""
+    data = _success("/api/fund/realtime", {"code": "017811"})
+    assert data["nav"] and data["nav"] > 0
+    assert data["nav_date"] and len(data["nav_date"]) == 10
+    assert data["is_realtime"] is False
+    assert "T+1" in data["caliber"]
+    channels = [item["channel"] for item in data["attempts"]]
+    assert "蛋卷 nav_grtd" in channels and "蛋卷 derived" in channels
+    disabled = next(item for item in data["attempts"] if item["channel"] == "蛋卷 nav_grtd")
+    assert disabled["ok"] is False and "禁用" in disabled["reason"]
+
+
+def test_fund_nav_real() -> None:
+    """净值历史：与实时接口同日净值一致、日期倒序。"""
+    nav = _success("/api/fund/nav", {"code": "017811", "page": 1, "size": 5})
+    assert len(nav["items"]) == 5
+    assert nav["total"] and nav["total"] > 500
+    dates = [item["date"] for item in nav["items"]]
+    assert dates == sorted(dates, reverse=True)
+
+    realtime = _success("/api/fund/realtime", {"code": "017811"})
+    same_day = [item for item in nav["items"] if item["date"] == realtime["nav_date"]]
+    if same_day:
+        assert abs(same_day[0]["nav"] - realtime["nav"]) < 1e-6
+
+
+def test_fund_holding_real() -> None:
+    """重仓股：10 条、比例合计合理、季度字段存在。"""
+    data = _success("/api/fund/holding", {"code": "017811"})
+    items = data["items"]
+    assert len(items) >= 5
+    assert items[0]["name"] and items[0]["code"]
+    ratios = [item["ratio"] for item in items if item["ratio"] is not None]
+    assert ratios and 0 < sum(ratios) <= 100
+    assert data["quarter"]
+
+
+def test_fund_info_real() -> None:
+    """档案：名称/管理人/成立日/托管人齐全。"""
+    data = _success("/api/fund/info", {"code": "017811"})
+    assert data["name"] == "东方人工智能主题混合C"
+    assert data["manager"]
+    assert data["found_date"] == "2023-02-22"
+    assert data["keeper"]
+    assert data["xq"]["基金公司"]
+
+
+def test_fund_performance_real() -> None:
+    """业绩：阶段涨幅含近1年、排名可解析、分年度列表非空。"""
+    data = _success("/api/fund/performance", {"code": "017811"})
+    periods = {item["period"]: item for item in data["periods"]}
+    assert "近1年" in periods and "成立以来" in periods
+    assert periods["近1年"]["growth"] is not None
+    assert periods["近1年"]["rank"]
+    assert data["annual"]
+    assert data["name"]
+
+
+def test_fund_drawdown_real() -> None:
+    """回撤：最大回撤为负、峰谷日期有序、当前回撤<=0。"""
+    data = _success("/api/fund/drawdown", {"code": "017811"})
+    assert data["max_drawdown"] < 0
+    assert data["peak_date"] <= data["trough_date"]
+    assert data["current_drawdown"] <= 0
+    assert data["series"]
+    assert all("drawdown" in point for point in data["series"][:3])
+
+
+def test_fund_dividend_real() -> None:
+    """分红：有分红基金返回明细，无分红基金返回空列表而非报错。"""
+    with_div = _success("/api/fund/dividend", {"code": "000011"})
+    assert len(with_div["items"]) >= 5
+    first = with_div["items"][0]
+    assert first["record_date"] and first["per_10"] is not None
+    no_div = _success("/api/fund/dividend", {"code": "017811"})
+    assert no_div["items"] == []
+
+
+def test_fund_position_disabled() -> None:
+    """持仓分布：需登录通道必须明确禁用说明，不编造数据。"""
+    body = _body("/api/fund/position", {"code": "017811"})
+    assert body["error_code"] == "EMPTY_DATA"
+    assert body["data"]["disabled"] is True
+    assert body["data"]["items"] == []
+    assert "登录" in body["data"]["reason"]
+
+
+def test_portfolio_crud_and_analysis(temp_position: str) -> None:
+    """持仓 CRUD + 分析：写入后可读、分析有市值、删除后不可见。"""
+    listing = _success("/api/portfolio", {})
+    assert any(item["id"] == temp_position for item in listing["items"])
+
+    analysis = _success("/api/portfolio/analysis", {})
+    row = next(item for item in analysis["items"] if item["id"] == temp_position)
+    assert row["market"] == "fund" and row["currency"] == "CNY"
+    assert row["market_value"] and row["market_value"] > 0
+    assert row["pnl"] is not None
+    assert analysis["totals"]["cny_market_value"] > 0
+    ratio_sum = sum(item["ratio"] or 0 for item in analysis["distribution"])
+    assert 99 <= ratio_sum <= 101, f"市场分布占比合计异常：{ratio_sum}"
+
+    updated = client.put(f"/api/portfolio/{temp_position}",
+                         json={"shares": 200}).json()
+    assert updated["error"] is None and updated["data"]["item"]["shares"] == 200
+
+    deleted = client.delete(f"/api/portfolio/{temp_position}").json()
+    assert deleted["error"] is None
+    after = _success("/api/portfolio", {})
+    assert all(item["id"] != temp_position for item in after["items"])
+
+
+def test_portfolio_error_contract() -> None:
+    """持仓参数校验：非法市场/负份额/未知 id 均返回明确错误。"""
+    bad_market = client.post("/api/portfolio", json={"market": "jp", "symbol": "1", "shares": 1, "cost": 1}).json()
+    assert bad_market["error_code"] == "INVALID_PARAM"
+    bad_shares = client.post("/api/portfolio", json={"market": "a", "symbol": "600519", "shares": -1, "cost": 1}).json()
+    assert bad_shares["error_code"] == "INVALID_PARAM"
+    missing = client.delete("/api/portfolio/not-exist-id").json()
+    assert missing["error_code"] == "NOT_FOUND"
+    empty_q = _body("/api/fund/search", {"q": "  "})
+    assert empty_q["error_code"] == "INVALID_PARAM"
