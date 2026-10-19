@@ -29,8 +29,19 @@ ALLOWED_SOURCES = {"腾讯", "新浪", "东财", "东财F10", "东财F10/腾讯"
 
 @pytest.fixture(scope="session", autouse=True)
 def _clear_cache_once() -> None:
-    """整套真实拉取测试开始前清空缓存，避免旧数据掩盖源站变化。"""
+    """整套真实拉取测试开始前清空缓存，并清理历史遗留的测试持仓。
+
+    历史遗留：若上一次会话在 teardown 前中断，`data/portfolio.json` 可能残留
+    带「临时用例」备注的条目。这里只删除**带测试标记**的条目，不触碰用户真实持仓。
+    """
     cache.clear_cache()
+    try:
+        listing = client.get("/api/portfolio").json().get("data", {}).get("items", [])
+        for item in listing:
+            if "临时用例" in (item.get("note") or ""):
+                client.delete(f"/api/portfolio/{item['id']}")
+    except Exception:  # noqa: BLE001 - 清理失败不影响测试
+        pass
 
 
 def _body(path: str, params: dict) -> dict:
