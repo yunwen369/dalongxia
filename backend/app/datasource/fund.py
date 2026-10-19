@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -246,6 +247,123 @@ def get_nav(code: str, page: int = 1, size: int = 30) -> Dict[str, Any]:
     }
 
 
+def _t1_latest(code: str) -> Dict[str, Any]:
+    """T+1 基准净值（蛋卷 derived → 东财 lsjz），供拟合估算取基准，不进入估值链。"""
+    try:
+        derived = get_derived(code)
+        if derived.get("unit_nav") is not None:
+            return {
+                "nav": derived.get("unit_nav"),
+                "nav_date": derived.get("end_date"),
+                "day_growth": derived.get("day_growth"),
+                "source": "蛋卷",
+            }
+    except Exception:  # noqa: BLE001 - 继续东财兜底
+        pass
+    payload = utils.http_get_json(
+        EM_LSJZ_URL,
+        params={"fundCode": code, "pageIndex": 1, "pageSize": 1},
+        referer=f"https://fundf10.eastmoney.com/jjjz_{code}.html",
+        timeout=config.DATASOURCE_TIMEOUT,
+    )
+    rows = (payload.get("Data") or {}).get("LSJZList") or []
+    if not rows:
+        raise ValueError(f"无 T+1 基准净值：{code}")
+    return {
+        "nav": _num(rows[0].get("DWJZ")),
+        "nav_date": rows[0].get("FSRQ"),
+        "day_growth": _num(rows[0].get("JZZZL")),
+        "source": "东财",
+    }
+
+
+def _batch_pct(codes: list) -> Dict[str, float]:
+    """批量取 A 股涨跌幅（腾讯 q= 多代码，字段 32 为涨跌幅%）。
+
+    单次请求替代 N 次串行请求，显著降低耗时与限频风险；解析失败返回空字典。
+    """
+    if not codes:
+        return {}
+    symbols = []
+    for code in codes:
+        if code.startswith(("6", "9")):
+            symbols.append("sh" + code)
+        elif code.startswith(("0", "2", "3")):
+            symbols.append("sz" + code)
+        else:
+            symbols.append("bj" + code)
+    text = utils.http_get_text(
+        "https://qt.gtimg.cn/q=" + ",".join(symbols),
+        referer="https://gu.qq.com/",
+        encoding="gbk",
+        timeout=config.DATASOURCE_TIMEOUT,
+    )
+    result: Dict[str, float] = {}
+    for line in text.splitlines():
+        if '="' not in line:
+            continue
+        parts = line.split('="', 1)[1].strip('";').split("~")
+        if len(parts) < 33:
+            continue
+        code = str(parts[2])
+        pct = utils.to_float(parts[32])
+        if pct is not None:
+            result[code] = pct
+    return result
+
+
+def get_fitted_estimate(code: str) -> Dict[str, Any]:
+    """重仓股加权拟合盘中估算（规范 §12.5 第 2 级）。
+
+    公式：est_pct = Σ(占净值比_i × 个股涨跌幅_i) / Σ(占净值比_i)
+    - 只取前 10 大重仓（东财季报口径），权重按「占净值比例」；
+    - 个股涨跌幅取腾讯实时快照（收盘后为最后成交快照）；
+    - 覆盖度 = Σ权重（%），覆盖度越低越不可靠，需在界面标注。
+
+    Returns:
+        dict: {pct, nav, nav_date, source, caliber, coverage, is_estimate}
+    """
+    holding = get_holding(code)
+    # 注意：这里必须取「T+1 基准净值」，不能调用 get_realtime——后者在增强通道开启时会
+    # 再次进入本函数，形成递归（实测导致 180 秒级耗时）。
+    t1 = _t1_latest(code)
+    # 批量取价：腾讯 qt.gtimg.cn 支持逗号分隔多只，避免 10 次串行请求（实测串行易超时）
+    codes = [str(item.get("code") or "") for item in (holding.get("items") or [])[:10]]
+    pct_map = _batch_pct([item for item in codes if item])
+    weighted = 0.0
+    weight_sum = 0.0
+    used = 0
+    for item in holding.get("items") or []:
+        ratio = _num(item.get("ratio")) or 0.0
+        stock_code = str(item.get("code") or "")
+        if not stock_code or ratio <= 0:
+            continue
+        pct = pct_map.get(stock_code)
+        if pct is None:
+            continue
+        weighted += ratio * pct
+        weight_sum += ratio
+        used += 1
+    if weight_sum <= 0 or used == 0:
+        raise ValueError(f"拟合估算不可用（无有效重仓行情）：{code}")
+    est_pct = weighted / weight_sum
+    base_nav = _num(t1.get("nav"))
+    est_nav = round(base_nav * (1 + est_pct / 100), 4) if base_nav else None
+    return {
+        "code": code,
+        "nav": est_nav,
+        "nav_date": t1.get("nav_date"),
+        "day_growth": round(est_pct, 4),
+        "source": "蛋卷拟合",
+        "caliber": "拟合估算：前十大重仓按占净值比加权（非官方净值，仅供参考）",
+        "coverage": round(weight_sum, 2),
+        "used_holdings": used,
+        "is_estimate": True,
+        "base_nav": base_nav,
+        "quarter": holding.get("quarter"),
+    }
+
+
 def get_realtime(code: str) -> Dict[str, Any]:
     """基金最新净值与日涨幅（T+1 口径）。
 
@@ -266,6 +384,42 @@ def get_realtime(code: str) -> Dict[str, Any]:
 
     # ② 蛋卷 nav_grtd：需登录，规范明确禁用，仅登记不重试
     attempts.append({"channel": "蛋卷 nav_grtd", "ok": False, "reason": "需登录（300001），依规范禁用"})
+
+    # ② 盘中估值链（仅当用户已确认告知书并开启增强通道时执行）
+    try:
+        from backend.app.datasource import yangjibao
+
+        state = yangjibao.status()
+        if state.get("enabled") and (state.get("consent") or {}).get("accepted"):
+            try:
+                fund_id = yangjibao.search_fund_id(code)
+                estimate = yangjibao.fetch_increase_rate(fund_id)
+                attempts.append({"channel": "养基宝 increase-rate", "ok": True})
+                return {
+                    "code": code,
+                    "nav": None,
+                    "nav_date": time.strftime("%Y-%m-%d"),
+                    "day_growth": estimate["pct"],
+                    "source": "养基宝",
+                    "caliber": "非官方·拟合估算·仅供参考·不构成投资建议",
+                    "is_estimate": True,
+                    "attempts": attempts,
+                }
+            except Exception as exc:  # noqa: BLE001 - 逐级降级
+                attempts.append({"channel": "养基宝 increase-rate", "ok": False,
+                                 "reason": type(exc).__name__})
+            try:
+                fitted = get_fitted_estimate(code)
+                attempts.append({"channel": "蛋卷拟合", "ok": True})
+                fitted["attempts"] = attempts
+                return fitted
+            except Exception as exc:  # noqa: BLE001
+                attempts.append({"channel": "蛋卷拟合", "ok": False, "reason": type(exc).__name__})
+        else:
+            attempts.append({"channel": "盘中估值链", "ok": False,
+                             "reason": "未开启增强通道或未确认合规告知书"})
+    except Exception as exc:  # noqa: BLE001 - 状态读取失败不阻断 T+1
+        attempts.append({"channel": "盘中估值链", "ok": False, "reason": type(exc).__name__})
 
     # ③ 蛋卷 derived
     try:

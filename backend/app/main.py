@@ -56,6 +56,7 @@ from backend.app.routers import (  # noqa: E402
     stock,
     system,
     widgets,
+    yjb,
 )
 
 logger = logging.getLogger("openbb_cn")
@@ -221,6 +222,8 @@ def create_app() -> FastAPI:
     # 阶段 5.4：连接器能力矩阵；阶段 5.5：AI 配置与对话
     application.include_router(connectors.router)
     application.include_router(ai.router)
+    # 阶段 7：养基宝连接器（合规告知书 / 扫码绑定 / 估值链 / 一键关闭）
+    application.include_router(yjb.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

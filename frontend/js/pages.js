@@ -31,7 +31,8 @@
     fund: "page-fund",
     portfolio: "page-portfolio",
     connectors: "page-connectors",
-    dashboard: "page-dashboard"
+    dashboard: "page-dashboard",
+    yjb: "page-yjb"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -390,7 +391,8 @@
       fund: "场外基金",
       portfolio: "持仓管理",
       connectors: "数据连接器",
-      dashboard: window.I18N ? window.I18N.t("page.dashboard") : "仪表板"
+      dashboard: window.I18N ? window.I18N.t("page.dashboard") : "仪表板",
+      yjb: "养基宝绑定"
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -425,6 +427,8 @@
       if (window.renderDashboard) {
         window.renderDashboard();
       }
+    } else if (name === "yjb") {
+      renderYjb();
     }
   }
 
@@ -3090,7 +3094,210 @@
   }
 
   // =============================================================
-  // 十二、初始化
+  // 十二、#/yjb 养基宝绑定（阶段 7）
+  // 合规告知书 → 扫码绑定（2s 轮询）→ 增强开关 → 解绑；token 前端不可见
+  // =============================================================
+  var yjbTimer = null;
+
+  /** 渲染养基宝页。 */
+  function renderYjb() {
+    var container = document.getElementById(VIEW_IDS.yjb);
+    container.innerHTML = "";
+    var grid = el("div", "pg-grid");
+    var g1 = buildCard("Y-01", "合规告知书", "g-4", "首次启用前必须确认");
+    g1.body.id = "y01-body";
+    var g2 = buildCard("Y-02", "连接状态", "g-4", "token 仅后端加密存储");
+    g2.body.id = "y02-body";
+    var g3 = buildCard("Y-03", "扫码绑定", "g-4", "二维码 2 秒轮询");
+    g3.body.id = "y03-body";
+    var g4 = buildCard("Y-04", "盘中估值", "g-12", "非官方·拟合估算·仅供参考·不构成投资建议");
+    g4.body.id = "y04-body";
+    [g1, g2, g3, g4].forEach(function (item) { grid.appendChild(item.card); });
+    container.appendChild(grid);
+    var body = document.getElementById("y04-body");
+    body.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+    toolbar.appendChild(el("span", "pg-card-sub", "基金代码"));
+    var input = document.createElement("input");
+    input.id = "yjb-code";
+    input.value = "017811";
+    input.style.cssText = "width:110px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px;font-family:var(--font-mono)";
+    toolbar.appendChild(input);
+    var query = el("button", "pg-btn", "查询估值");
+    query.type = "button";
+    query.addEventListener("click", loadYjbEstimate);
+    toolbar.appendChild(query);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    toolbar.appendChild(el("span", "badge-src state-degraded", "非官方通道"));
+    body.appendChild(toolbar);
+    body.appendChild(el("div", "pg-card-sub", "本区域为拟合估算，不构成投资建议；可随时在左侧关闭增强通道回退 T+1 净值。"));
+    var result = el("div", "");
+    result.id = "yjb-result";
+    body.appendChild(result);
+    loadYjbStatus();
+  }
+
+  /** 加载连接器状态与告知书。 */
+  function loadYjbStatus() {
+    api("/api/fund/yjb/status", {})
+      .then(function (data) {
+        paintYjbConsent(data);
+        paintYjbStatus(data);
+        paintYjbBind(data);
+      })
+      .catch(function (error) {
+        setError(document.getElementById("y02-body"), error.message, renderYjb);
+      });
+  }
+
+  /** 告知书 + 确认按钮。 */
+  function paintYjbConsent(data) {
+    var body = document.getElementById("y01-body");
+    body.innerHTML = "";
+    var accepted = (data.consent || {}).accepted === true;
+    var text = el("div", "pg-card-sub", data.consent_text || "");
+    text.style.whiteSpace = "pre-wrap";
+    text.style.maxHeight = "220px";
+    text.style.overflow = "auto";
+    body.appendChild(text);
+    var row = el("div", "page-toolbar");
+    var tip = el("span", "chip " + (accepted ? "" : "down"), accepted ? "已确认" : "未确认");
+    row.appendChild(tip);
+    if (!accepted) {
+      var agree = el("button", "pg-btn primary", "我已阅读并同意");
+      agree.type = "button";
+      agree.addEventListener("click", function () {
+        apiSend("POST", "/api/fund/yjb/consent", { accepted: true }).then(function () {
+          toast("已记录确认");
+          loadYjbStatus();
+        });
+      });
+      row.appendChild(agree);
+    }
+    body.appendChild(row);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 状态 + 增强开关 + 解绑。 */
+  function paintYjbStatus(data) {
+    var body = document.getElementById("y02-body");
+    body.innerHTML = "";
+    var grid = el("div", "pg-metric-grid");
+    [["绑定", data.bound ? "已绑定" : "未绑定"], ["增强通道", data.enabled ? "已开启" : "已关闭"],
+     ["签名密钥", data.secret_configured ? "已配置" : "未配置"],
+     ["安全存储", data.secure_storage ? "DPAPI" : "不可用"]].forEach(function (pair) {
+      var cell = el("div", "pg-metric-cell");
+      cell.appendChild(el("div", "pg-metric-label", pair[0]));
+      cell.appendChild(el("div", "pg-metric-value", pair[1]));
+      grid.appendChild(cell);
+    });
+    body.appendChild(grid);
+    var row = el("div", "page-toolbar");
+    var toggle = el("button", "pg-btn", data.enabled ? "一键关闭增强通道" : "开启增强通道");
+    toggle.type = "button";
+    toggle.addEventListener("click", function () {
+      apiSend("POST", "/api/fund/yjb/toggle", { enabled: !data.enabled })
+        .then(function () { toast(data.enabled ? "已关闭，回退 T+1 净值" : "已开启"); loadYjbStatus(); })
+        .catch(function (error) { toast(error.message); });
+    });
+    row.appendChild(toggle);
+    if (data.bound) {
+      var unbind = el("button", "pg-btn", "解绑");
+      unbind.type = "button";
+      unbind.addEventListener("click", function () {
+        apiSend("POST", "/api/fund/yjb/unbind", {}).then(function () {
+          toast("已解绑"); loadYjbStatus();
+        });
+      });
+      row.appendChild(unbind);
+    }
+    body.appendChild(row);
+    body.appendChild(el("div", "pg-card-sub", data.notice || ""));
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 二维码与轮询。 */
+  function paintYjbBind(data) {
+    var body = document.getElementById("y03-body");
+    body.innerHTML = "";
+    if (!data.secret_configured) {
+      var hint = el("div", "pg-state");
+      hint.appendChild(el("div", "pg-state-title", "扫码绑定不可用"));
+      hint.appendChild(el("div", "pg-state-hint",
+        "未配置养基宝签名密钥（YJB_SECRET_NEW/OLD），按规范不内置签名盐；可继续使用拟合估算与 T+1 净值。"));
+      body.appendChild(hint);
+      body.setAttribute("data-state", "empty");
+      return;
+    }
+    var button = el("button", "pg-btn", "获取二维码");
+    button.type = "button";
+    var box = el("div", "");
+    button.addEventListener("click", function () {
+      api("/api/fund/yjb/qrcode", {}).then(function (session) {
+        box.innerHTML = "";
+        if (session.image_base64) {
+          var img = document.createElement("img");
+          img.src = "data:image/png;base64," + session.image_base64;
+          img.style.cssText = "width:200px;height:200px;background:#fff;border-radius:8px";
+          box.appendChild(img);
+        }
+        var state = el("div", "pg-card-sub", "等待扫码…");
+        state.id = "yjb-poll-state";
+        box.appendChild(state);
+        var attempts = 0;
+        window.clearInterval(yjbTimer);
+        yjbTimer = window.setInterval(function () {
+          attempts += 1;
+          api("/api/fund/yjb/poll", { session_id: session.session_id }).then(function (status) {
+            state.textContent = status.message || status.state;
+            if (status.state === "success") {
+              window.clearInterval(yjbTimer);
+              apiSend("POST", "/api/fund/yjb/bind", { session_id: session.session_id })
+                .then(function () { toast("绑定成功"); loadYjbStatus(); })
+                .catch(function (error) { state.textContent = "绑定失败：" + error.message; });
+            } else if (status.state === "expired" || status.state === "timeout") {
+              window.clearInterval(yjbTimer);
+            }
+          });
+          if (attempts > 60) {
+            window.clearInterval(yjbTimer);
+          }
+        }, 2000);
+      }).catch(function (error) {
+        box.textContent = error.message;
+      });
+    });
+    body.appendChild(button);
+    body.appendChild(box);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 查询估值（显示命中源与口径）。 */
+  function loadYjbEstimate() {
+    var code = (document.getElementById("yjb-code").value || "").trim();
+    var box = document.getElementById("yjb-result");
+    setLoading(box);
+    api("/api/fund/yjb/realtime", { code: code })
+      .then(function (data) {
+        box.innerHTML = "";
+        var grid = el("div", "pg-metric-grid");
+        [["最新估值", fmt(data.nav, 4)], ["日涨幅", fmtPct(data.day_growth)],
+         ["数据源", data.source || t("value.none")], ["覆盖度", data.coverage ? fmt(data.coverage, 2) + "%" : "无数据"]]
+          .forEach(function (pair) {
+            var cell = el("div", "pg-metric-cell");
+            cell.appendChild(el("div", "pg-metric-label", pair[0]));
+            cell.appendChild(el("div", "pg-metric-value", pair[1]));
+            grid.appendChild(cell);
+          });
+        box.appendChild(grid);
+        box.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+        box.setAttribute("data-state", "default");
+      })
+      .catch(function (error) { setError(box, error.message, loadYjbEstimate); });
+  }
+
+  // =============================================================
+  // 十三、初始化
   // =============================================================
   var resizeTimer = null;
 
