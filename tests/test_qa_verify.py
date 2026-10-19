@@ -622,8 +622,10 @@ def test_news_ai_feed_real() -> None:
         assert -0.1 <= item["sentiment"]["score"] <= 0.1
 
 
-def test_news_ai_review_not_configured() -> None:
-    """AI 复核未配置时必须返回 NOT_CONFIGURED 与引导文案，不静默降级。"""
+def test_news_ai_review_not_configured(monkeypatch: _pytest.MonkeyPatch) -> None:
+    """AI 复核未配置时必须返回 NOT_CONFIGURED 与引导文案，不静默降级（强制空配置）。"""
+    monkeypatch.setattr(config, "load_ai_config",
+                        lambda: config.AIConfig(base_url="", api_key="", model="", source="none"))
     response = client.post(
         "/api/news/ai-review",
         json={"title": "测试", "content": "测试内容", "board": "半导体设备"},
@@ -862,3 +864,121 @@ def test_portfolio_error_contract() -> None:
     assert missing["error_code"] == "NOT_FOUND"
     empty_q = _body("/api/fund/search", {"q": "  "})
     assert empty_q["error_code"] == "INVALID_PARAM"
+
+
+# =============================================================
+# 批次 5.4：港美股 quote/kline/minute/index + 连接器能力矩阵
+# 批次 5.5：AI 配置（掩码/落盘）与对话（未配置引导）
+# =============================================================
+def test_us_quote_real() -> None:
+    """美股报价：苹果价格/昨收/币种，源为腾讯（东财 push2 本机不可用）。"""
+    data = _success("/api/market/quote", {"symbol": "AAPL", "market": "us"})
+    quote = data["quote"]
+    assert quote["name"]
+    assert quote["price"] > 0 and quote["prev_close"] > 0
+    assert quote["currency"] == "USD"
+    assert data["source"] == "腾讯"
+    assert quote["market_status"] in {"盘中", "盘前", "盘后", "收盘快照", "时间未知", "休市"}
+
+
+def test_us_kline_real() -> None:
+    """美股 K 线：320 根、日期升序（回归：无交易所后缀只返回 2 条的缺陷）。"""
+    data = _success("/api/market/kline",
+                    {"symbol": "AAPL", "market": "us", "period": "日k", "adjust": "qfq"})
+    items = data["items"]
+    assert len(items) >= 200, f"美股K线不足：{len(items)}"
+    dates = [item["date"] for item in items]
+    assert dates == sorted(dates)
+    assert dates[-1] >= "2026-09-01", f"最新日期异常：{dates[-1]}"
+    assert items[-1]["high"] >= items[-1]["low"] > 0
+    assert data["source"] == "腾讯"
+
+
+def test_hk_kline_and_quote_real() -> None:
+    """港股 K 线与报价：腾讯 00700，币种 HKD。"""
+    kline = _success("/api/market/kline",
+                     {"symbol": "00700", "market": "hk", "period": "日k", "adjust": "qfq"})
+    assert len(kline["items"]) >= 200
+    assert kline["source"] == "腾讯"
+    quote = _success("/api/market/quote", {"symbol": "00700", "market": "hk"})["quote"]
+    assert quote["currency"] == "HKD"
+    assert quote["price"] > 0
+
+
+def test_us_minute_unavailable() -> None:
+    """美股分时：免费通道不可用时返回空 + 说明，不得用单点伪造分时。"""
+    data = _success("/api/market/minute", {"symbol": "AAPL", "market": "us"})
+    assert data["items"] == []
+    assert data["available"] is False
+    assert "不可用" in data["caliber"] and "腾讯" in data["caliber"]
+
+
+def test_hk_minute_real() -> None:
+    """港股分时：腾讯 1 分钟，≥100 点且时间格式正确。"""
+    data = _success("/api/market/minute", {"symbol": "00700", "market": "hk"})
+    items = data["items"]
+    assert len(items) >= 100, f"港股分时不足：{len(items)}"
+    assert all(len(item["time"]) == 5 and item["time"][2] == ":" for item in items[:5])
+
+
+def test_overseas_index_real() -> None:
+    """美股指数：三大指数齐全、点位量级正确。"""
+    data = _success("/api/market/index", {"market": "us"})
+    items = data["items"]
+    assert len(items) == 3
+    by_code = {item["code"]: item for item in items}
+    assert by_code["DJI"]["price"] > 20000
+    assert by_code["IXIC"]["price"] > 5000
+    assert by_code["INX"]["price"] > 3000
+
+
+def test_connectors_status_matrix() -> None:
+    """连接器能力矩阵：三市场能力齐全，港美新闻/板块如实标不可用（D3）。"""
+    data = _success("/api/connectors/status", {})
+    assert set(data["markets"]) == {"a", "hk", "us"}
+    assert data["markets"]["a"]["stock_news"]["available"] is True
+    assert data["markets"]["us"]["kline"]["available"] is True
+    assert data["markets"]["hk"]["minute"]["available"] is True
+    gaps = {(item["market"], item["feature"]) for item in data["gaps"]}
+    assert {("us", "stock_news"), ("us", "sector"),
+            ("hk", "stock_news"), ("hk", "sector")} <= gaps
+    reasons = " ".join(item["reason"] for item in data["gaps"])
+    assert "暂无免费" in reasons or "无免费" in reasons or "无稳定" in reasons
+    assert data["datasources"], "数据源开关列表为空"
+
+
+def test_ai_config_masked() -> None:
+    """AI 配置读取：默认未配置，响应不含明文密钥字段。"""
+    body = _body("/api/ai/config", {})
+    assert body["error"] is None
+    data = body["data"]
+    assert "configured" in data
+    # get_public_ai_config 的 api_key 字段本身就是掩码，不能是明文
+    assert "****" in str(data.get("api_key")) or data.get("api_key") in ("", None, "未配置")
+
+
+def test_ai_config_save_and_mask(monkeypatch: _pytest.MonkeyPatch, tmp_path) -> None:
+    """AI 配置保存：写入临时目录（不触碰真实 data/ai_config.json），校验掩码与非法地址。"""
+    monkeypatch.setattr(config, "AI_CONFIG_FILE", tmp_path / "ai_config.json")
+    bad = client.post("/api/ai/config", json={"base_url": "ftp://x", "api_key": "sk-test"}).json()
+    assert bad["error_code"] == "INVALID_PARAM"
+    saved = client.post("/api/ai/config",
+                        json={"base_url": "http://127.0.0.1:9/v1", "api_key": "sk-test-123456",
+                              "model": "test-model"}).json()
+    assert saved["error"] is None
+    assert saved["data"]["configured"] is True
+    assert saved["data"]["model"] == "test-model"
+    masked = str(saved["data"]["api_key"])
+    assert "sk-test-123456" not in masked and "****" in masked
+
+
+def test_ai_chat_not_configured(monkeypatch: _pytest.MonkeyPatch) -> None:
+    """未配置时对话必须返回 NOT_CONFIGURED 与设置引导，不返回假回答。"""
+    monkeypatch.setattr(config, "load_ai_config",
+                        lambda: config.AIConfig(base_url="", api_key="", model="", source="none"))
+    body = client.post("/api/ai/chat", json={"message": "你好"}).json()
+    assert body["error_code"] == "NOT_CONFIGURED"
+    assert "设置" in body["error"]
+    assert body["data"]["configured"] is False
+    empty = client.post("/api/ai/chat", json={"message": "   "}).json()
+    assert empty["error_code"] == "INVALID_PARAM"

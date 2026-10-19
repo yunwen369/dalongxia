@@ -44,7 +44,19 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 from backend.app.core.errors import ErrorCode, api_error  # noqa: E402
-from backend.app.routers import fund, market, news, portfolio, sector, sentiment, stock, system, widgets  # noqa: E402
+from backend.app.routers import (  # noqa: E402
+    ai,
+    connectors,
+    fund,
+    market,
+    news,
+    portfolio,
+    sector,
+    sentiment,
+    stock,
+    system,
+    widgets,
+)
 
 logger = logging.getLogger("openbb_cn")
 
@@ -206,6 +218,9 @@ def create_app() -> FastAPI:
     # 阶段 5.3：基金 9 接口 + 持仓 5 接口
     application.include_router(fund.router)
     application.include_router(portfolio.router)
+    # 阶段 5.4：连接器能力矩阵；阶段 5.5：AI 配置与对话
+    application.include_router(connectors.router)
+    application.include_router(ai.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

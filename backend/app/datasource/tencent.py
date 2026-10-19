@@ -253,18 +253,41 @@ def get_kline(
     code, normalized_market, tencent_code = utils.normalize_symbol(symbol, market)
     period_key = utils.period_to_tencent(period)
     adjust_value = utils.normalize_adjust(adjust)
-    param = f"{tencent_code},{period_key},,,{max(1, min(limit, 640))},{adjust_value}"
-    url = f"{config.TENCENT_KLINE_BASE}/appstock/app/fqkline/get"
-    payload = utils.http_get_json(
-        url,
-        params={"param": param},
-        referer=config.TENCENT_REFERER,
-    )
-    data = payload.get("data", {}).get(tencent_code, {})
+    limit_value = max(1, min(limit, 640))
+
+    # 端点按市场区分：美股 usfqkline / 港股 hkfqkline / A股 fqkline（2026-10-20 实测）
+    endpoint = {"us": "usfqkline", "hk": "hkfqkline"}.get(normalized_market, "fqkline")
+    url = f"{config.TENCENT_KLINE_BASE}/appstock/app/{endpoint}/get"
     key = _kline_key(period_key, adjust_value)
-    rows = data.get(key) or data.get(period_key) or []
-    items = _parse_kline_rows(rows)
-    logger.info("腾讯K线命中：%s %s %s %s，%d 条", normalized_market, code, period_key, adjust_value, len(items))
+
+    def fetch(param_code: str) -> List[Dict[str, Any]]:
+        """按给定腾讯代码请求并解析；返回空列表表示该代码无有效数据。"""
+        param = f"{param_code},{period_key},,,{limit_value},{adjust_value}"
+        payload = utils.http_get_json(url, params={"param": param}, referer=config.TENCENT_REFERER)
+        data = payload.get("data", {}).get(param_code, {})
+        rows = data.get(key) or data.get(period_key) or []
+        return _parse_kline_rows(rows) if rows else []
+
+    items: List[Dict[str, Any]] = []
+    if normalized_market == "us" and "." not in tencent_code:
+        # 美股必须带交易所后缀（.OQ=纳斯达克 / .N=纽交所），否则只返回上市首日与最新各 1 条。
+        # 实测 usAAPL: 2 条 → usAAPL.OQ: 60 条；无后缀时按 OQ→N 依次尝试。
+        for suffix in (".OQ", ".N"):
+            try:
+                items = fetch(tencent_code + suffix)
+            except Exception as exc:  # noqa: BLE001 - 单个后缀失败继续下一个
+                logger.info("腾讯美股K线后缀尝试失败：%s（%s）", suffix, type(exc).__name__)
+                continue
+            if len(items) >= 5:
+                tencent_code = tencent_code + suffix
+                break
+    else:
+        items = fetch(tencent_code)
+
+    if not items:
+        # 保留原有异常语义：空数据交给上层降级链处理
+        raise ValueError("腾讯 K 线返回空数据")
+    logger.info("腾讯K线命中：%s %s %s %s，%d 条", normalized_market, tencent_code, period_key, adjust_value, len(items))
     return items
 
 
@@ -312,13 +335,26 @@ def get_minute(symbol: str, market: str = "a", period: str = "1min") -> List[Dic
         raise NonRetryableError("腾讯分时仅支持 1 分钟粒度")
     code, normalized_market, tencent_code = utils.normalize_symbol(symbol, market)
     url = f"{config.TENCENT_KLINE_BASE}/appstock/app/minute/query"
-    payload = utils.http_get_json(
-        url,
-        params={"code": tencent_code},
-        referer=config.TENCENT_REFERER,
-    )
-    node = payload.get("data", {}).get(tencent_code, {})
-    container = node.get("data", {})
+
+    def fetch(param_code: str) -> Dict[str, Any]:
+        """按给定腾讯代码取分时容器；返回 {date, data}。"""
+        payload = utils.http_get_json(
+            url,
+            params={"code": param_code},
+            referer=config.TENCENT_REFERER,
+        )
+        node = payload.get("data", {}).get(param_code, {})
+        return node.get("data", {}) or {}
+
+    container = fetch(tencent_code)
+    if normalized_market == "us" and "." not in tencent_code and len(container.get("data") or []) < 5:
+        # 美股分时同样需要交易所后缀（实测无后缀仅 1 条）
+        for suffix in (".OQ", ".N"):
+            candidate = fetch(tencent_code + suffix)
+            if len(candidate.get("data") or []) >= 5:
+                tencent_code = tencent_code + suffix
+                container = candidate
+                break
     date_text = str(container.get("date", ""))
     raw_rows = container.get("data", []) or []
     items: List[Dict[str, Any]] = []

@@ -25,7 +25,7 @@ from backend.app import config
 from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
-from backend.app.datasource import ashare, tencent, utils
+from backend.app.datasource import ashare, overseas, tencent, utils
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,10 @@ def market_quote(
         ]
         if normalized_market == "a":
             candidates.append(("新浪", "新浪/实时快照（收盘后为最后成交快照）", lambda: ashare.get_quote_sina(code)))
+        else:
+            # 港美股：东财快照（生产候选，本机 push2 被重置）→ 腾讯
+            candidates.insert(0, ("东财", "东财/港美股快照（收盘后为最后成交快照）",
+                                  lambda: overseas.get_quote_em(code, normalized_market)))
         return with_fallback(candidates, need_rows=False, empty_value={}, validator=lambda q: bool(q.get("price")))
 
     result = _cached(cache_key, config.TTL["realtime_quote"], loader)
@@ -235,9 +239,12 @@ def market_kline(
                  lambda: tencent.get_kline(code, normalized_market, period, adjust_value)),
             ]
         else:
+            # 港美股：东财 push2his（生产候选，本机被重置）→ 腾讯 usfqkline/hkfqkline
             candidates = [
+                ("东财", f"东财/{period}{'不复权' if not adjust_value else '前复权' if adjust_value == 'qfq' else '后复权'}",
+                 lambda: overseas.get_kline_em(code, normalized_market, period, adjust_value)),
                 ("腾讯", f"腾讯/{period}{'不复权' if not adjust_value else '前复权' if adjust_value == 'qfq' else '后复权'}",
-                 lambda: tencent.get_kline(code, normalized_market, period, adjust_value))
+                 lambda: tencent.get_kline(code, normalized_market, period, adjust_value)),
             ]
         return with_fallback(candidates, empty_value=[])
 
@@ -289,8 +296,10 @@ def market_minute(
                 ("腾讯", "腾讯/1分钟", lambda: tencent.get_minute(code, normalized_market, period_value)),
             ]
         else:
+            # 港美股分时：东财无稳定免费通道，实际走腾讯 1 分钟
             candidates = [
-                ("腾讯", "腾讯/1分钟", lambda: tencent.get_minute(code, normalized_market, period_value))
+                ("腾讯", "腾讯/1分钟（港美股唯一可用免费通道）",
+                 lambda: overseas.get_minute(code, normalized_market))
             ]
         return with_fallback(candidates, empty_value=[])
 
@@ -298,6 +307,17 @@ def market_minute(
     if result.get("error"):
         return _failure(result, {"items": [], "symbol": code, "market": normalized_market})
     items = result["data"]
+    # 美股分时：腾讯免费接口仅返回最新一笔，东财通道本机被重置 → 如实标注不可用，
+    # 不用单点数据画假分时图（§7 空态与错误态严格区分）。
+    if normalized_market == "us" and len(items) < 5:
+        return _pack(
+            {"items": [], "symbol": code, "market": "us", "available": False},
+            "腾讯",
+            "美股分时免费接口不可用：腾讯仅返回最新一笔，东财通道本机被重置（D3 缺口）",
+            items[0].get("time") if items else None,
+            "不可用",
+            False,
+        )
     last = items[-1] if items else {}
     last_date = str(last.get("date", ""))
     last_time = str(last.get("time", "15:00"))
