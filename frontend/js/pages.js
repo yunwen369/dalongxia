@@ -29,7 +29,8 @@
     "sector-val": "page-sector-val",
     news: "page-news",
     fund: "page-fund",
-    portfolio: "page-portfolio"
+    portfolio: "page-portfolio",
+    connectors: "page-connectors"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -386,7 +387,8 @@
       "sector-val": "单板块估值",
       news: "新闻资讯",
       fund: "场外基金",
-      portfolio: "持仓管理"
+      portfolio: "持仓管理",
+      connectors: "数据连接器"
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -415,6 +417,8 @@
       renderFund(parsed.params);
     } else if (name === "portfolio") {
       renderPortfolio();
+    } else if (name === "connectors") {
+      renderConnectors();
     }
   }
 
@@ -3003,7 +3007,84 @@
   }
 
   // =============================================================
-  // 十一、初始化
+  // 十一、#/connectors 数据连接器（批次 5.4）
+  // 展示：数据源开关 + 三市场能力矩阵 + D3 缺口（如实标注不可用）
+  // =============================================================
+  /** 渲染连接器页。 */
+  function renderConnectors() {
+    var container = document.getElementById(VIEW_IDS.connectors);
+    container.innerHTML = "";
+    var grid = el("div", "pg-grid");
+    var card = buildCard("C-01", "数据源与能力矩阵", "g-12", "按实测能力矩阵，不可用项如实标注");
+    card.body.id = "c01-body";
+    grid.appendChild(card.card);
+    container.appendChild(grid);
+    var body = document.getElementById("c01-body");
+    setLoading(body);
+
+    api("/api/connectors/status", {})
+      .then(function (data) {
+        setBadges(card.card, data.source, data.caliber, false);
+        body.innerHTML = "";
+
+        var sourceTitle = el("div", "pg-card-sub", "数据源开关");
+        body.appendChild(sourceTitle);
+        var sourceGrid = el("div", "pg-metric-grid");
+        (data.datasources || []).forEach(function (item) {
+          var cell = el("div", "pg-metric-cell");
+          cell.appendChild(el("div", "pg-metric-label", item.label));
+          var state = item.enabled ? (item.active ? "启用" : (item.stage === "installed" ? "已装待接" : "待接入")) : "未启用";
+          cell.appendChild(el("div", "pg-metric-value " + (item.enabled ? "flat" : "down"), state));
+          sourceGrid.appendChild(cell);
+        });
+        body.appendChild(sourceGrid);
+
+        var tableTitle = el("div", "pg-card-sub", "三市场能力矩阵（✓ 可用 / — 不可用）");
+        body.appendChild(tableTitle);
+        var wrap = el("div", "");
+        body.appendChild(wrap);
+        var features = [
+          ["quote", "报价"], ["kline", "K 线"], ["minute", "分时"],
+          ["index", "指数"], ["stock_news", "个股新闻"], ["sector", "板块专项"]
+        ];
+        var rows = features.map(function (pair) {
+          var row = { feature: pair[1] };
+          ["a", "hk", "us"].forEach(function (market) {
+            var cell = ((data.markets || {})[market] || {})[pair[0]] || {};
+            row[market] = cell.available ? "✓ " + (cell.source || "") : "— 暂不可用";
+          });
+          return row;
+        });
+        renderTable(wrap, [
+          { title: "能力", key: "feature", cls: "name" },
+          { title: "A股", key: "a" },
+          { title: "港股", key: "hk" },
+          { title: "美股", key: "us" }
+        ], rows, null, null);
+
+        if ((data.gaps || []).length) {
+          body.appendChild(el("div", "pg-card-sub", "已确认缺口（D3 决策：不编造数据）"));
+          var list = el("ul", "pg-news-list");
+          data.gaps.forEach(function (gap) {
+            var li = el("li", "pg-news-item");
+            li.appendChild(el("span", "pg-news-title", gap.market_label + " · " + gap.feature_label));
+            li.appendChild(el("span", "chip down", "暂不可用"));
+            li.appendChild(el("span", "pg-news-time", gap.reason));
+            list.appendChild(li);
+          });
+          body.appendChild(list);
+        }
+        body.setAttribute("data-state", "default");
+      })
+      .catch(function (error) {
+        setError(body, error.message, function () {
+          renderConnectors();
+        });
+      });
+  }
+
+  // =============================================================
+  // 十二、初始化
   // =============================================================
   var resizeTimer = null;
 

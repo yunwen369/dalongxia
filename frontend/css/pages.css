@@ -622,3 +622,115 @@
     padding: 1px 6px;
   }
 }
+
+/* ---------- Copilot 抽屉对话（批次 5.5） ---------- */
+.copilot-body-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+
+.copilot-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.copilot-status.ok {
+  color: #3ecf8e;
+  border-color: #3ecf8e;
+}
+
+.copilot-status.warn {
+  color: #b77f3d;
+  border-color: #b77f3d;
+}
+
+.copilot-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.copilot-empty-title {
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.copilot-suggest {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 4px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-widget-2, #1a1a1e);
+  color: var(--text-dim);
+  font-size: var(--fs-aux);
+  cursor: pointer;
+}
+
+.copilot-suggest:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.copilot-msg-role {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.copilot-msg-body {
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--bg-widget-2, #1a1a1e);
+}
+
+.copilot-msg.user .copilot-msg-body {
+  border-color: var(--accent-strong);
+  background: transparent;
+}
+
+.copilot-msg.pending .copilot-msg-body {
+  color: var(--text-muted);
+}
+
+.copilot-msg.warn .copilot-msg-body {
+  color: #b77f3d;
+  border-color: #b77f3d;
+}
+
+.copilot-composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.copilot-input {
+  flex: 1 1 auto;
+  resize: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: var(--fs-body);
+  font-family: var(--font);
+}
