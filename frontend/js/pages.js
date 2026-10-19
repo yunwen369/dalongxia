@@ -27,7 +27,9 @@
     sectors: "page-sectors",
     stock: "page-stock",
     "sector-val": "page-sector-val",
-    news: "page-news"
+    news: "page-news",
+    fund: "page-fund",
+    portfolio: "page-portfolio"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -382,7 +384,9 @@
       sectors: "板块分析",
       stock: "个股详情 · FinScope",
       "sector-val": "单板块估值",
-      news: "新闻资讯"
+      news: "新闻资讯",
+      fund: "场外基金",
+      portfolio: "持仓管理"
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -407,6 +411,10 @@
       renderSectorVal(parsed.params);
     } else if (name === "news") {
       renderNews(parsed.params);
+    } else if (name === "fund") {
+      renderFund(parsed.params);
+    } else if (name === "portfolio") {
+      renderPortfolio();
     }
   }
 
@@ -2410,7 +2418,592 @@
   }
 
   // =============================================================
-  // 九、初始化
+  // 九、#/fund 场外基金详情（批次 5.3）
+  // 结构：F-01 基金大卡 / F-02 净值走势 / F-03 阶段业绩 / F-04 重仓股
+  //       F-05 档案与分红 / F-06 持仓分布（需登录，禁用说明）
+  // =============================================================
+  var fundState = { code: "017811" };
+
+  /** 通用写请求：method = PUT/DELETE/POST，统一中文异常。 */
+  function apiSend(method, path, body) {
+    var options = { method: method, headers: { "Content-Type": "application/json" } };
+    if (body !== undefined) {
+      options.body = JSON.stringify(body);
+    }
+    return fetch(path, options)
+      .catch(function () {
+        throw new Error("网络连接失败，请检查网络后重试。");
+      })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (payload) {
+        if (payload && payload.error) {
+          var error = new Error(payload.error);
+          error.code = payload.error_code;
+          error.data = payload.data;
+          throw error;
+        }
+        return payload.data || {};
+      });
+  }
+
+  /** 构建基金页骨架。 */
+  function buildFundShell(container) {
+    container.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+    toolbar.appendChild(el("span", "pg-card-sub", "基金代码"));
+    var input = document.createElement("input");
+    input.id = "fund-code";
+    input.value = fundState.code;
+    input.setAttribute("aria-label", "基金代码");
+    input.style.cssText =
+      "width:120px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);" +
+      "border-radius:5px;padding:4px 8px;font-family:var(--font-mono)";
+    toolbar.appendChild(input);
+    var go = el("button", "pg-btn", "查看");
+    go.type = "button";
+    go.id = "fund-go";
+    toolbar.appendChild(go);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    var refresh = el("button", "pg-btn", "刷新本页");
+    refresh.type = "button";
+    refresh.id = "fund-refresh";
+    toolbar.appendChild(refresh);
+    container.appendChild(toolbar);
+
+    var grid = el("div", "pg-grid");
+    grid.id = "fund-grid";
+
+    var head = buildCard("F-01", "基金概览", "g-12", "场外基金 · T+1 公布净值");
+    head.body.id = "f01-body";
+    grid.appendChild(head.card);
+
+    var left = el("div", "g-7");
+    left.style.display = "flex";
+    left.style.flexDirection = "column";
+    left.style.gap = "16px";
+    var navCard = buildCard("F-02", "净值与回撤", "", "净值走势 + 回撤序列（净值自算）");
+    navCard.body.id = "f02-body";
+    left.appendChild(navCard.card);
+    var perfCard = buildCard("F-03", "阶段业绩", "", "涨幅与同类排名（蛋卷）");
+    perfCard.body.id = "f03-body";
+    left.appendChild(perfCard.card);
+    grid.appendChild(left);
+
+    var right = el("div", "g-5");
+    right.style.display = "flex";
+    right.style.flexDirection = "column";
+    right.style.gap = "16px";
+    var infoCard = buildCard("F-05", "档案与分红", "", "蛋卷档案 + 东财分红");
+    infoCard.body.id = "f05-body";
+    right.appendChild(infoCard.card);
+    var posCard = buildCard("F-06", "持仓分布", "", "需登录通道已禁用");
+    posCard.body.id = "f06-body";
+    right.appendChild(posCard.card);
+    grid.appendChild(right);
+
+    var holdCard = buildCard("F-04", "重仓股", "g-12", "东财基金季报（占比/市值）");
+    holdCard.body.id = "f04-body";
+    grid.appendChild(holdCard.card);
+
+    container.appendChild(grid);
+
+    go.addEventListener("click", applyFundInput);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        applyFundInput();
+      }
+    });
+    refresh.addEventListener("click", function () {
+      loadFund();
+    });
+  }
+
+  /** 读取输入并跳转（保持 URL 参数与状态一致）。 */
+  function applyFundInput() {
+    var input = document.getElementById("fund-code");
+    var code = (input && input.value ? input.value : "").trim();
+    if (!code) {
+      toast("请输入基金代码");
+      return;
+    }
+    window.location.hash = "#/fund?code=" + encodeURIComponent(code);
+  }
+
+  /** 渲染基金页。 */
+  function renderFund(params) {
+    var container = document.getElementById(VIEW_IDS.fund);
+    fundState.code = params.code || fundState.code;
+    if (!container.querySelector("#fund-grid")) {
+      buildFundShell(container);
+    }
+    var input = document.getElementById("fund-code");
+    if (input) {
+      input.value = fundState.code;
+    }
+    loadFund();
+  }
+
+  /** 并发拉取基金六块数据，单块失败只影响本块。 */
+  function loadFund() {
+    var code = fundState.code;
+    var bodies = ["f01-body", "f02-body", "f03-body", "f04-body", "f05-body", "f06-body"]
+      .map(function (id) { return document.getElementById(id); });
+    bodies.forEach(function (body) {
+      if (body) {
+        setLoading(body);
+      }
+    });
+    var params = { code: code };
+    Promise.all([
+      api("/api/fund/info", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/realtime", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/nav", { code: code, page: 1, size: 200 }).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/performance", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/drawdown", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/holding", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/dividend", params).catch(function (e) { return { error: e.message }; }),
+      api("/api/fund/position", params).catch(function (e) { return { error: e.message, disabled: true }; })
+    ]).then(function (result) {
+      paintFund({
+        info: result[0], realtime: result[1], nav: result[2], performance: result[3],
+        drawdown: result[4], holding: result[5], dividend: result[6], position: result[7]
+      });
+    });
+  }
+
+  /** 渲染基金页各区块。 */
+  function paintFund(payload) {
+    var info = payload.info;
+    var realtime = payload.realtime;
+
+    // ---- F-01 概览大卡 ----
+    var head = document.getElementById("f01-body");
+    var headCard = document.getElementById("F-01");
+    if (head) {
+      if (info && info.error) {
+        setError(head, info.error, function () { loadFund(); });
+      } else {
+        setBadges(headCard, (realtime && realtime.source) || "蛋卷",
+          (realtime && realtime.caliber) || "T+1 公布净值", false);
+        head.innerHTML = "";
+        var main = el("div", "pg-quote-main");
+        main.appendChild(el("span", "pg-quote-name", info.name || "无数据"));
+        main.appendChild(el("span", "pg-card-sub", info.code || ""));
+        main.appendChild(el("span", "pg-quote-price " + pctClass(realtime.day_growth), fmt(realtime.nav, 4)));
+        main.appendChild(el("span", pctClass(realtime.day_growth), fmtPct(realtime.day_growth)));
+        main.appendChild(el("span", "pg-card-sub", (realtime.nav_date || "") + " 净值"));
+        head.appendChild(main);
+        var meta = el("div", "pg-quote-meta");
+        [
+          ["基金全称", info.full_name],
+          ["基金经理", info.manager],
+          ["成立日期", info.found_date],
+          ["最新规模", info.scale],
+          ["风险等级", info.risk_level ? "R" + info.risk_level : "无数据"],
+          ["申购状态", info.subscribe_status === "0" ? "开放申购" : "限制/暂停"],
+          ["赎回状态", info.withdraw_status === "1" ? "开放赎回" : "暂停赎回"]
+        ].forEach(function (item) {
+          var cell = el("span", "", item[0] + "：");
+          cell.appendChild(el("b", "", item[1] || "无数据"));
+          meta.appendChild(cell);
+        });
+        head.appendChild(meta);
+        head.setAttribute("data-state", "default");
+      }
+    }
+
+    // ---- F-02 净值与回撤 ----
+    var navBody = document.getElementById("f02-body");
+    if (navBody) {
+      var navItems = (payload.nav && payload.nav.items) || [];
+      var ddSeries = (payload.drawdown && payload.drawdown.series) || [];
+      if (!navItems.length) {
+        setEmpty(navBody, (payload.nav && payload.nav.error) || "净值数据暂无", function () { loadFund(); });
+      } else {
+        setBadges(document.getElementById("F-02"), (payload.nav && payload.nav.source) || "蛋卷",
+          (payload.nav && payload.nav.caliber) || "净值历史", false);
+        var ordered = navItems.slice().reverse();
+        var box = el("div", "pg-chart");
+        navBody.innerHTML = "";
+        navBody.appendChild(box);
+        var chart = mountChart(box);
+        var theme = chartTheme();
+        if (chart) {
+          chart.setOption({
+            backgroundColor: "transparent",
+            tooltip: { trigger: "axis" },
+            legend: { textStyle: { color: theme.text }, top: 0 },
+            grid: [
+              { left: 56, right: 16, top: 28, height: "48%" },
+              { left: 56, right: 16, top: "64%", height: "22%" }
+            ],
+            xAxis: [
+              { type: "category", data: ordered.map(function (i) { return i.date; }),
+                axisLabel: { color: theme.text, interval: Math.floor(ordered.length / 6) },
+                axisLine: { lineStyle: { color: theme.border } } },
+              { type: "category", gridIndex: 1, data: ddSeries.map(function (i) { return i.date; }),
+                axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } }
+            ],
+            yAxis: [
+              { scale: true, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
+              { gridIndex: 1, axisLabel: { color: theme.text, formatter: "{value}%" }, splitLine: { show: false } }
+            ],
+            series: [
+              { name: "单位净值", type: "line", data: ordered.map(function (i) { return i.nav; }),
+                showSymbol: false, color: "#b47da0", lineStyle: { width: 1.6 } },
+              { name: "回撤%", type: "line", xAxisIndex: 1, yAxisIndex: 1,
+                data: ddSeries.map(function (i) { return i.drawdown; }),
+                showSymbol: false, areaStyle: { opacity: 0.25 }, color: COLOR_DOWN }
+            ]
+          });
+        }
+        var dd = payload.drawdown || {};
+        navBody.appendChild(el("div", "pg-card-sub",
+          "最大回撤 " + fmt(dd.max_drawdown, 2) + "%（" + (dd.peak_date || "—") + " → " + (dd.trough_date || "—") +
+          "），当前回撤 " + fmt(dd.current_drawdown, 2) + "%"));
+        navBody.setAttribute("data-state", "default");
+      }
+    }
+
+    // ---- F-03 阶段业绩 ----
+    var perfBody = document.getElementById("f03-body");
+    if (perfBody) {
+      var perf = payload.performance || {};
+      if (perf.error || !(perf.periods || []).length) {
+        setEmpty(perfBody, perf.error || "阶段业绩暂无", function () { loadFund(); });
+      } else {
+        setBadges(document.getElementById("F-03"), perf.source || "蛋卷", perf.caliber || "阶段涨幅", false);
+        renderTable(
+          perfBody,
+          [
+            { title: "区间", key: "period", cls: "name" },
+            { title: "涨幅%", cls: "num", render: function (row) { return pctNode(row.growth); } },
+            { title: "同类排名", key: "rank" }
+          ],
+          perf.periods,
+          null,
+          "short"
+        );
+      }
+    }
+
+    // ---- F-04 重仓股 ----
+    var holdBody = document.getElementById("f04-body");
+    if (holdBody) {
+      var holding = payload.holding || {};
+      if (holding.error || !(holding.items || []).length) {
+        setEmpty(holdBody, holding.error || "重仓数据暂无", function () { loadFund(); });
+      } else {
+        setBadges(document.getElementById("F-04"), holding.source || "东财季报",
+          (holding.caliber || "") + "；报告期 " + (holding.quarter || "—"), false);
+        renderTable(
+          holdBody,
+          [
+            { title: "代码", key: "code", cls: "num" },
+            { title: "名称", key: "name", cls: "name" },
+            { title: "占净值%", cls: "num", render: function (row) { return fmt(row.ratio, 2); } },
+            { title: "持股数(万股)", cls: "num", render: function (row) { return fmt(row.shares, 2); } },
+            { title: "持仓市值(万元)", cls: "num", render: function (row) { return fmt(row.value, 2); } }
+          ],
+          holding.items,
+          function (row) {
+            window.location.hash = "#/stock?symbol=" + encodeURIComponent(row.code) + "&market=a";
+          },
+          "short"
+        );
+      }
+    }
+
+    // ---- F-05 档案与分红 ----
+    var infoBody = document.getElementById("f05-body");
+    if (infoBody) {
+      var div = payload.dividend || {};
+      infoBody.innerHTML = "";
+      var group = el("div", "pg-quote-meta");
+      [
+        ["托管银行", info.trustee],
+        ["基金公司", info.keeper],
+        ["雪球规模", info.xq && info.xq["最新规模"]]
+      ].forEach(function (item) {
+        var cell = el("span", "", item[0] + "：");
+        cell.appendChild(el("b", "", item[1] || "无数据"));
+        group.appendChild(cell);
+      });
+      infoBody.appendChild(group);
+      infoBody.appendChild(el("div", "pg-card-sub", "分红记录：" + (div.caliber || "")));
+      if ((div.items || []).length) {
+        var list = el("div", "pg-news-list");
+        div.items.slice(0, 6).forEach(function (row) {
+          var line = el("div", "pg-news-item");
+          line.appendChild(el("span", "pg-news-title", (row.record_date || "") + " 每10份派 " + (row.per_10 || "—") + " 元"));
+          line.appendChild(el("span", "pg-news-time", row.pay_date || ""));
+          list.appendChild(line);
+        });
+        infoBody.appendChild(list);
+      } else {
+        infoBody.appendChild(el("div", "pg-card-sub", "该基金暂无分红记录"));
+      }
+      infoBody.setAttribute("data-state", "default");
+    }
+
+    // ---- F-06 持仓分布（禁用说明） ----
+    var posBody = document.getElementById("f06-body");
+    if (posBody) {
+      posBody.innerHTML = "";
+      var boxState = el("div", "pg-state");
+      boxState.appendChild(el("div", "pg-state-title", "持仓分布暂不可用"));
+      boxState.appendChild(el("div", "pg-state-hint",
+        "蛋卷持仓分布端点需登录（rc=300001），依规范已禁用；可用上方「重仓股」查看季报前十大持仓。"));
+      posBody.appendChild(boxState);
+      posBody.setAttribute("data-state", "empty");
+    }
+  }
+
+  // =============================================================
+  // 十、#/portfolio 持仓管理（批次 5.3）
+  // 结构：P-01 汇总 / P-02 新增表单 / P-03 持仓表 / P-04 市场分布
+  // =============================================================
+  /** 构建持仓页骨架。 */
+  function buildPortfolioShell(container) {
+    container.innerHTML = "";
+    var form = el("div", "page-toolbar");
+    form.appendChild(el("span", "pg-card-sub", "新增持仓"));
+    var market = document.createElement("select");
+    market.id = "pf-market";
+    market.style.cssText =
+      "background:var(--bg-panel);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px";
+    [["a", "A股"], ["hk", "港股"], ["us", "美股"], ["fund", "场外基金"]].forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item[0];
+      option.textContent = item[1];
+      market.appendChild(option);
+    });
+    form.appendChild(market);
+
+    function field(id, placeholder, width) {
+      var input = document.createElement("input");
+      input.id = id;
+      input.placeholder = placeholder;
+      input.style.cssText =
+        "width:" + (width || 110) + "px;background:var(--bg-panel);border:1px solid var(--border);" +
+        "color:var(--text);border-radius:5px;padding:4px 8px";
+      return input;
+    }
+
+    form.appendChild(field("pf-symbol", "代码", 100));
+    form.appendChild(field("pf-name", "名称（可选）", 140));
+    form.appendChild(field("pf-shares", "份额/股数", 100));
+    form.appendChild(field("pf-cost", "成本价", 90));
+    var add = el("button", "pg-btn", "添加");
+    add.type = "button";
+    add.id = "pf-add";
+    form.appendChild(add);
+    form.appendChild(el("span", "pg-spacer"));
+    var refresh = el("button", "pg-btn", "刷新");
+    refresh.type = "button";
+    form.appendChild(refresh);
+    container.appendChild(form);
+
+    var grid = el("div", "pg-grid");
+    grid.id = "portfolio-grid";
+    var summary = buildCard("P-01", "持仓汇总", "g-12", "人民币口径（港美按实时汇率折算）");
+    summary.body.id = "p01-body";
+    grid.appendChild(summary.card);
+    var dist = buildCard("P-04", "市场分布", "g-5", "按人民币市值占比");
+    dist.body.id = "p04-body";
+    grid.appendChild(dist.card);
+    var table = buildCard("P-03", "持仓明细", "g-12", "盈亏按本币与人民币双口径");
+    table.body.id = "p03-body";
+    grid.appendChild(table.card);
+    container.appendChild(grid);
+
+    add.addEventListener("click", function () {
+      var payload = {
+        market: market.value,
+        symbol: (document.getElementById("pf-symbol").value || "").trim(),
+        name: (document.getElementById("pf-name").value || "").trim(),
+        shares: document.getElementById("pf-shares").value,
+        cost: document.getElementById("pf-cost").value
+      };
+      if (!payload.symbol || !payload.shares) {
+        toast("请填写代码与份额/股数");
+        return;
+      }
+      apiSend("POST", "/api/portfolio", payload)
+        .then(function () {
+          toast("已添加持仓");
+          ["pf-symbol", "pf-name", "pf-shares", "pf-cost"].forEach(function (id) {
+            var node = document.getElementById(id);
+            if (node) {
+              node.value = "";
+            }
+          });
+          loadPortfolio();
+        })
+        .catch(function (error) {
+          toast(error.message);
+        });
+    });
+    refresh.addEventListener("click", function () {
+      loadPortfolio();
+    });
+  }
+
+  /** 渲染持仓页。 */
+  function renderPortfolio() {
+    var container = document.getElementById(VIEW_IDS.portfolio);
+    if (!container.querySelector("#portfolio-grid")) {
+      buildPortfolioShell(container);
+    }
+    loadPortfolio();
+  }
+
+  /** 拉取持仓与分析。 */
+  function loadPortfolio() {
+    var bodies = ["p01-body", "p03-body", "p04-body"].map(function (id) {
+      return document.getElementById(id);
+    });
+    bodies.forEach(function (body) {
+      if (body) {
+        setLoading(body);
+      }
+    });
+    Promise.all([
+      api("/api/portfolio", {}).catch(function (e) { return { error: e.message }; }),
+      api("/api/portfolio/analysis", {}).catch(function (e) { return { error: e.message }; })
+    ]).then(function (result) {
+      paintPortfolio({ listing: result[0], analysis: result[1] });
+    });
+  }
+
+  /** 渲染持仓汇总 / 明细 / 分布。 */
+  function paintPortfolio(payload) {
+    var listing = payload.listing || {};
+    var analysis = payload.analysis || {};
+
+    // ---- P-01 汇总 ----
+    var p01 = document.getElementById("p01-body");
+    if (p01) {
+      if (listing.error || analysis.error) {
+        setError(p01, listing.error || analysis.error, function () { loadPortfolio(); });
+      } else if (!(listing.items || []).length) {
+        setEmpty(p01, "暂无持仓，请在上方添加", function () { loadPortfolio(); });
+      } else {
+        setBadges(document.getElementById("P-01"), analysis.source || "本地持仓", analysis.caliber || "", false);
+        var totals = analysis.totals || {};
+        p01.innerHTML = "";
+        var grid = el("div", "pg-metric-grid");
+        [
+          ["市值(人民币)", fmt(totals.cny_market_value, 2), "flat"],
+          ["成本(人民币)", fmt(totals.cny_cost, 2), "flat"],
+          ["盈亏(人民币)", fmt(totals.cny_pnl, 2), pctClass(totals.cny_pnl)],
+          ["持仓条数", (analysis.count || 0) + " 条", "flat"],
+          ["汇率", analysis.fx && analysis.fx.USD ? ("USD " + fmt(analysis.fx.USD, 4) + " / HKD " + fmt(analysis.fx.HKD, 4)) : "无数据", "flat"]
+        ].forEach(function (item) {
+          var cell = el("div", "pg-metric-cell");
+          cell.appendChild(el("div", "pg-metric-label", item[0]));
+          cell.appendChild(el("div", "pg-metric-value " + item[2], item[1]));
+          grid.appendChild(cell);
+        });
+        p01.appendChild(grid);
+        if (analysis.fx_missing) {
+          p01.appendChild(el("div", "pg-card-sub", "部分外币持仓缺少汇率，折算值显示为无数据"));
+        }
+        p01.setAttribute("data-state", "default");
+      }
+    }
+
+    // ---- P-04 市场分布 ----
+    var p04 = document.getElementById("p04-body");
+    if (p04) {
+      var dist = (analysis.distribution || []).filter(function (item) { return item.value_cny; });
+      if (!dist.length) {
+        setEmpty(p04, "暂无分布数据", function () { loadPortfolio(); });
+      } else {
+        p04.innerHTML = "";
+        var box = el("div", "pg-chart small");
+        p04.appendChild(box);
+        var chart = mountChart(box);
+        if (chart) {
+          chart.setOption({
+            backgroundColor: "transparent",
+            tooltip: {
+              formatter: function (info) {
+                return info.name + "<br/>" + fmt(info.value, 2) + " 元（" + fmt(info.percent, 2) + "%）";
+              }
+            },
+            legend: { bottom: 0, textStyle: { color: chartTheme().text } },
+            series: [
+              {
+                type: "pie",
+                radius: ["45%", "68%"],
+                center: ["50%", "45%"],
+                label: { color: chartTheme().text, fontSize: 11, formatter: "{b}\n{d}%" },
+                data: dist.map(function (item) {
+                  return { name: item.label, value: item.value_cny };
+                })
+              }
+            ]
+          });
+        }
+        p04.setAttribute("data-state", "default");
+      }
+    }
+
+    // ---- P-03 持仓明细 ----
+    var p03 = document.getElementById("p03-body");
+    if (p03) {
+      var rows = (analysis.items || []).filter(function (item) { return item.id; });
+      if (!rows.length) {
+        setEmpty(p03, "暂无持仓明细", function () { loadPortfolio(); });
+      } else {
+        var wrap = el("div", "");
+        p03.innerHTML = "";
+        p03.appendChild(wrap);
+        renderTable(
+          wrap,
+          [
+            { title: "市场", key: "market_label" },
+            { title: "代码", key: "symbol", cls: "num" },
+            { title: "名称", key: "name", cls: "name" },
+            { title: "份额/股数", cls: "num", render: function (row) { return fmt(row.shares, 2); } },
+            { title: "成本", cls: "num", render: function (row) { return fmt(row.cost, 4); } },
+            { title: "现价", cls: "num", render: function (row) { return fmt(row.price, 4); } },
+            { title: "市值(本币)", cls: "num", render: function (row) { return fmt(row.market_value, 2); } },
+            { title: "盈亏(本币)", cls: "num", render: function (row) { return pctNode(row.pnl); } },
+            { title: "盈亏%", cls: "num", render: function (row) { return pctNode(row.pnl_pct); } },
+            {
+              title: "操作",
+              render: function (row) {
+                var button = el("button", "pg-btn", "删除");
+                button.type = "button";
+                button.addEventListener("click", function (event) {
+                  event.stopPropagation();
+                  apiSend("DELETE", "/api/portfolio/" + encodeURIComponent(row.id))
+                    .then(function () {
+                      toast("已删除");
+                      loadPortfolio();
+                    })
+                    .catch(function (error) {
+                      toast(error.message);
+                    });
+                });
+                return button;
+              }
+            }
+          ],
+          rows,
+          null,
+          null
+        );
+      }
+    }
+  }
+
+  // =============================================================
+  // 十一、初始化
   // =============================================================
   var resizeTimer = null;
 
