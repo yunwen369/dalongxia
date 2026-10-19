@@ -106,6 +106,17 @@ WIDGETS: List[Dict[str, Any]] = [
             jump="#/stock?symbol={代码}&market=a", desc="整行可点，未命中显示空态"),
     _widget("V-04", "#/sector-val", "板块精准资讯", ".g-5", [],
             desc="AI 初评 5.2 阶段落地，本批占位+参数预留"),
+
+    # ---------- #/news（4 个，批次 5.2） ----------
+    _widget("N-01", "#/news", "三级板块树", ".g-4", ["/api/news/board-tree"],
+            desc="一级 6 / 二级 15 / 末级 28，末级可选中过滤资讯"),
+    _widget("N-02", "#/news", "资讯流", ".g-8",
+            ["/api/news/ai-feed", "/api/news/sector-search", "/api/news/stock"],
+            desc="多源合并去重 + 板块命中 + 本地确定性初评；标题可点开原文"),
+    _widget("N-03", "#/news", "情绪温度", ".g-4", ["/api/sentiment/board", "/api/sentiment/stock"],
+            desc="温度=50+均分×500，裁剪 0–100；含驱动事件与证据样本"),
+    _widget("N-04", "#/news", "AI 复核", ".g-8", ["/api/news/ai-review"],
+            desc="用户点击后调用自备 OpenAI 兼容接口；未配置时给出设置引导"),
 ]
 
 

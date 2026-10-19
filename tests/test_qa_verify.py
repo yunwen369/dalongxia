@@ -483,19 +483,23 @@ def test_stock_financial_report_statements() -> None:
 
 
 def test_widget_registry() -> None:
-    """组件注册表：21 个区块、编号与页面一一对应、48 列映射正确。"""
+    """组件注册表：25 个区块（5.1 的 21 + 5.2 的 4）、编号与页面一一对应、48 列映射正确。"""
     body = _body("/api/widgets", {})
     assert body["error"] is None
     data = body["data"]
-    assert data["total"] == 21
+    assert data["total"] == 25
     ids = [item["id"] for item in data["items"]]
     assert ids[:1] == ["S-01"] and "ST-01" in ids and "V-03" in ids
-    assert len(set(ids)) == 21
+    assert {"N-01", "N-02", "N-03", "N-04"} <= set(ids)
+    assert len(set(ids)) == 25
     assert data["grid"][".g-7"] == 28 and data["grid"][".g-5"] == 20
     sectors = [item for item in data["items"] if item["page"] == "#/sectors"]
     assert len(sectors) == 7
-    jump_targets = {item["jump"].split("?")[0] for item in data["items"] if item["jump"]}
+    jumps = [item for item in data["items"] if item["jump"]]
+    jump_targets = {item["jump"].split("?")[0] for item in jumps}
     assert "#/sector-val" in jump_targets and "#/stock" in jump_targets and "#/news" in jump_targets
+    news_api = {api for item in data["items"] if item["page"] == "#/news" for api in item["api"]}
+    assert "/api/news/ai-feed" in news_api and "/api/news/ai-review" in news_api
 
 
 def test_stock_error_contract() -> None:
@@ -506,3 +510,178 @@ def test_stock_error_contract() -> None:
     assert bad_market["error_code"] == "INVALID_PARAM"
     bad_concept = _body("/api/sector/heatmap", {"market": "cn", "kind": "abc"})
     assert bad_concept["error_code"] == "INVALID_PARAM"
+
+
+# =============================================================
+# 批次 5.2：news 7 接口 + sentiment 3 接口 + 规则引擎单测
+# 说明：初评由确定性规则产出，故可对分类结果做强断言；AI 复核未配置属预期契约。
+# =============================================================
+def test_news_flash_real() -> None:
+    """财联社快讯：条数、时间、情绪分值与三档标签全部合规。"""
+    data = _success("/api/news/flash", {"limit": 30})
+    items = data["items"]
+    assert len(items) >= 10
+    assert data["source"] == "财联社"
+    assert data["caliber"]
+    labels = set()
+    for item in items:
+        assert item["title"] and item["time"]
+        sentiment = item["sentiment"]
+        assert -0.1 <= sentiment["score"] <= 0.1
+        assert sentiment["label"] in {"利好", "利空", "中性"}
+        assert sentiment["strength"] in {"强", "中", "弱"}
+        labels.add(sentiment["label"])
+    assert len(labels) >= 2, "全部中性说明词典未生效"
+
+
+def test_news_stock_real() -> None:
+    """个股新闻：中微公司 ≥5 条，含来源/时间/链接与命中板块。"""
+    data = _success("/api/news/stock", {"symbol": "688012", "limit": 10})
+    items = data["items"]
+    assert len(items) >= 5
+    assert data["symbol"] == "688012"
+    for item in items:
+        assert item["title"] and item["time"]
+        assert item["source"]
+        assert isinstance(item["boards"], list)
+    assert any("半导体" in board for item in items for board in item["boards"])
+
+
+def test_news_global_real() -> None:
+    """全球快讯：三源合并后去重生效，标题无重复。"""
+    data = _success("/api/news/global", {"limit": 60})
+    items = data["items"]
+    assert len(items) >= 20
+    assert data["before_dedup"] >= len(items)
+    keys = []
+    for item in items:
+        assert item["source"] in {"东方财富", "新浪财经", "同花顺"}
+        keys.append(item["title"].strip())
+    assert len(keys) == len(set(keys)), "去重未生效"
+
+
+def test_news_board_tree() -> None:
+    """板块树：一级 6 / 二级 15 / 末级 28，含关键词与三市场。"""
+    data = _success("/api/news/board-tree", {})
+    assert data["counts"] == {"level1": 6, "level2": 15, "leaf": 28}
+    assert data["version"] == "20261020"
+    assert data["markets"] == ["A", "HK", "US"]
+    leaves = [leaf for level1 in data["tree"] for level2 in level1["children"] for leaf in level2["children"]]
+    assert len(leaves) == 28
+    assert all(leaf["keywords"] for leaf in leaves)
+    assert {"半导体设备", "存储芯片", "光模块", "CPO"} <= {leaf["name"] for leaf in leaves}
+
+
+def test_news_sector_search_real() -> None:
+    """板块检索：命中项必须确实含板块关键词，未知板块返回 NOT_FOUND。"""
+    data = _success("/api/news/sector-search", {"sector": "存储芯片", "limit": 20})
+    items = data["items"]
+    assert len(items) >= 1
+    assert data["sector"] == "存储芯片" and data["level"] == 3
+    for item in items:
+        assert "存储芯片" in item["boards"]
+        body = item["title"] + item.get("text", "")
+        assert "存储芯片" in body or "DRAM" in body or "NAND" in body or "HBM" in body
+
+    bad = _body("/api/news/sector-search", {"sector": "不存在的板块"})
+    assert bad["error_code"] == "NOT_FOUND"
+
+
+def test_news_ai_feed_real() -> None:
+    """多源池：四通道全部命中、去重前后计数一致、逐条带本地初评。"""
+    data = _success("/api/news/ai-feed", {"boards": "存储芯片,光模块", "limit": 30})
+    items = data["items"]
+    assert len(items) >= 1
+    assert data["after_dedup"] >= 0 and data["before_dedup"] >= data["after_dedup"]
+    channels = {ch["name"]: ch for ch in data["channels"]}
+    assert {"财联社快讯", "东财全球", "新浪全球", "同花顺全球"} <= set(channels)
+    assert sum(1 for ch in channels.values() if ch["ok"]) >= 3, "可用源少于 3 个"
+    for item in items:
+        assert item["boards"], "命中项必须带板块"
+        assert -0.1 <= item["sentiment"]["score"] <= 0.1
+
+
+def test_news_ai_review_not_configured() -> None:
+    """AI 复核未配置时必须返回 NOT_CONFIGURED 与引导文案，不静默降级。"""
+    response = client.post(
+        "/api/news/ai-review",
+        json={"title": "测试", "content": "测试内容", "board": "半导体设备"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["error_code"] == "NOT_CONFIGURED"
+    assert body["data"]["reviewed"] is False
+    assert "设置" in body["data"]["guidance"]
+    empty = client.post("/api/news/ai-review", json={"title": "", "content": ""}).json()
+    assert empty["error_code"] == "INVALID_PARAM"
+
+
+def test_sentiment_rules_deterministic() -> None:
+    """规则引擎：确定性 + 否定反转 + 条件矩阵 + ±0.1 边界。"""
+    from backend.app.datasource import sentiment as engine
+
+    cases = [
+        ("贵州茅台上调出厂价 白酒提价落地", "财联社", "利好"),
+        ("某公司被证监会立案调查 涉嫌违规", "证券时报网", "利空"),
+        ("半导体设备中标大单 金额超预期", "同花顺", "利好"),
+        ("公司终止回购方案", "新浪财经", "利空"),
+        ("并购重组终止 交易失败", "财联社", "利空"),
+        ("股东承诺不减持公司股份", "新浪财经", "利好"),
+        ("公司发布日常经营公告", "东方财富", "中性"),
+    ]
+    for text, source, expected in cases:
+        first = engine.analyze(text, source=source)
+        second = engine.analyze(text, source=source)
+        assert first["score"] == second["score"], "同一文本必须得到同一分值"
+        assert -0.1 <= first["score"] <= 0.1
+        assert first["label"] == expected, f"{text} 期望 {expected}，实得 {first['label']}"
+    # 权重口径冻结校验
+    assert (engine.W_DIRECTION, engine.W_STRENGTH, engine.W_CREDIBILITY) == (0.45, 0.35, 0.20)
+    assert len(engine.EVENT_RULES) == 18
+    aggregate = engine.aggregate(
+        [
+            {"sentiment": {"score": 0.1, "label": "利好", "events": [{"name": "业绩预增"}]}},
+            {"sentiment": {"score": -0.1, "label": "利空", "events": []}},
+        ],
+        scope="unit",
+    )
+    assert aggregate["temperature"] == 50.0 and aggregate["positive"] == 1 and aggregate["negative"] == 1
+
+
+def test_sentiment_stock_real() -> None:
+    """个股情绪：分档计数自洽、温度在 0–100。"""
+    data = _success("/api/sentiment/stock", {"symbol": "688012", "name": "中微公司"})
+    assert data["total"] >= 5
+    assert data["positive"] + data["negative"] + data["neutral"] == data["total"]
+    assert 0 <= data["temperature"] <= 100
+    assert data["samples"], "缺少证据样本"
+    assert data["level"] in {"偏热", "中性", "偏冷"}
+
+
+def test_sentiment_market_real() -> None:
+    """市场情绪：国内快讯聚合，含温度与 Top 事件。"""
+    data = _success("/api/sentiment/market", {"region": "cn"})
+    assert data["total"] >= 10
+    assert 0 <= data["temperature"] <= 100
+    assert data["region"] == "cn"
+    assert isinstance(data["top_events"], list)
+
+
+def test_sentiment_board_real() -> None:
+    """板块情绪：命中关键词回显、样本与分档齐全。"""
+    data = _success("/api/sentiment/board", {"board": "存储芯片"})
+    assert data["total"] >= 1
+    assert data["board"] == "存储芯片"
+    assert data["level"] == 3
+    assert data["keywords"] and "存储芯片" in data["keywords"]
+    assert 0 <= data["temperature"] <= 100
+
+
+def test_news_sentiment_error_contract() -> None:
+    """参数校验：非法排序/区域/市场与空参数均返回 INVALID_PARAM。"""
+    assert _body("/api/news/flash", {"sort": "abc"})["error_code"] == "INVALID_PARAM"
+    assert _body("/api/news/ai-feed", {"region": "mars"})["error_code"] == "INVALID_PARAM"
+    assert _body("/api/news/ai-feed", {"market": "jp"})["error_code"] == "INVALID_PARAM"
+    assert _body("/api/news/sector-search", {"sector": "  "})["error_code"] == "INVALID_PARAM"
+    assert _body("/api/sentiment/market", {"region": "mars"})["error_code"] == "INVALID_PARAM"
+    assert _body("/api/sentiment/board", {"board": "不存在的板块"})["error_code"] == "NOT_FOUND"
