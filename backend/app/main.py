@@ -44,7 +44,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 from backend.app.core.errors import ErrorCode, api_error  # noqa: E402
-from backend.app.routers import market, system  # noqa: E402
+from backend.app.routers import market, sector, stock, system, widgets  # noqa: E402
 
 logger = logging.getLogger("openbb_cn")
 
@@ -196,6 +196,10 @@ def create_app() -> FastAPI:
     # API 必须先于根路径静态挂载注册，保证 /api/* 不被 StaticFiles 截获
     application.include_router(system.router)
     application.include_router(market.router)
+    # 阶段 5.1：板块 8 接口 + 个股 7 接口 + 组件元数据下发
+    application.include_router(sector.router)
+    application.include_router(stock.router)
+    application.include_router(widgets.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

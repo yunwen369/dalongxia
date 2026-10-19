@@ -213,3 +213,296 @@ def test_market_status_boundaries() -> None:
     unknown = datetime(2026, 10, 17, 10, 0, 0)
     status, realtime = utils.classify_market_status(unknown, "a", now=unknown + timedelta(days=1))
     assert status == "收盘快照" and realtime is False
+
+
+# =============================================================
+# 阶段 5.1：sector 8 接口 + stock 7 接口 + 组件注册表真实断言
+# 全部走真实网络拉取，禁止 mock/写死；断言含口径、量级与跨接口交叉核对。
+# =============================================================
+SECTOR_SOURCES = {"同花顺", "新浪", "申万", "东财", "腾讯", "新浪证监会"}
+STOCK_SOURCES = {"东财", "新浪", "腾讯", "同花顺", "东财/腾讯"}
+
+
+def test_sector_industry_real() -> None:
+    """行业行情：90 个同花顺行业、涨跌幅与成交额量级合理、领涨股非空。"""
+    data = _success("/api/sector/industry", {"market": "cn"})
+    items = data["items"]
+    assert len(items) >= 50, f"行业数量异常：{len(items)}"
+    assert data["source"] in SECTOR_SOURCES
+    assert "亿元" in data["caliber"]
+    assert data["as_of"] and data["market_status"]
+    for item in items[:10]:
+        assert item["name"]
+        assert item["pct"] is not None and -20 <= item["pct"] <= 20
+        assert item["amount"] is not None and item["amount"] > 0
+        assert item["lead_stock"]
+    # 涨跌幅必须真实分布（不能全是 0，否则等价于假数据）
+    assert len({round(item["pct"], 2) for item in items if item["pct"] is not None}) > 20
+
+
+def test_sector_concept_real() -> None:
+    """概念行情：175 个新浪概念、含 label 供成分股反查。"""
+    data = _success("/api/sector/concept", {"market": "cn"})
+    items = data["items"]
+    assert len(items) >= 100
+    assert data["source"] == "新浪"
+    assert items[0]["label"], "概念板块缺少 label，成分股反查会失败"
+    assert len({round(item["pct"], 2) for item in items if item["pct"] is not None}) > 20
+
+
+def test_sector_heatmap_negative_not_clamped() -> None:
+    """热力图：value=abs(pct)、负值板块面积不为 0（P1-10 修复真断言）。"""
+    data = _success("/api/sector/heatmap", {"market": "cn", "kind": "industry"})
+    nodes = data["nodes"]
+    assert len(nodes) >= 50
+    negatives = [node for node in nodes if node["pct"] is not None and node["pct"] < 0]
+    positives = [node for node in nodes if node["pct"] is not None and node["pct"] > 0]
+    assert negatives, "当期无下跌板块，无法验证负值面积，请换 kind=concept 重跑"
+    assert positives
+    for node in negatives:
+        assert node["value"] is not None and node["value"] > 0, f"负值被钳为 0：{node}"
+        assert abs(node["value"] - abs(node["pct"])) < 1e-6
+    # 等幅涨跌必须同面积（-2.5% 与 +2.5% 面积一致）
+    sample = round(abs(negatives[0]["pct"]), 2)
+    matched = [node for node in nodes if node["pct"] is not None and round(abs(node["pct"]), 2) == sample]
+    assert len({round(node["value"], 6) for node in matched}) == 1
+
+
+def test_sector_summary_real() -> None:
+    """摘要：领涨/领跌各 3 条且排序正确，集中度落在 0–100。"""
+    data = _success("/api/sector/summary", {"market": "cn"})
+    assert len(data["gainers"]) == 3 and len(data["losers"]) == 3
+    gainer_pcts = [item["pct"] for item in data["gainers"]]
+    loser_pcts = [item["pct"] for item in data["losers"]]
+    assert gainer_pcts == sorted(gainer_pcts, reverse=True)
+    assert loser_pcts == sorted(loser_pcts)
+    assert gainer_pcts[0] >= loser_pcts[0]
+    assert data["concentration"] is not None and 0 < data["concentration"] <= 100
+    assert data["board_count"] >= 50
+
+
+def test_sector_kline_real() -> None:
+    """板块 K 线：半导体日线 ≥60 根、OHLC 关系正确、日期升序。"""
+    data = _success("/api/sector/kline", {"board": "半导体", "period": "daily", "market": "cn"})
+    items = data["items"]
+    assert len(items) >= 60
+    assert data["source"] == "同花顺"
+    assert data["market_status"] == "日线收盘"
+    assert data["is_realtime"] is False
+    dates = [item["date"] for item in items]
+    assert dates == sorted(dates)
+    assert all(len(date) == 10 for date in dates)
+    for item in items[-20:]:
+        assert item["high"] >= item["low"]
+        assert item["close"] > 0 and item["volume"] > 0
+
+
+def test_sector_cons_real() -> None:
+    """成分股：概念板块走新浪、行业板块走申万，权重合计≈100%。"""
+    concept = _success("/api/sector/cons", {"board": "华为汽车", "market": "cn"})
+    assert len(concept["items"]) >= 50
+    assert concept["source"] in {"新浪", "申万", "东财"}
+    assert concept["items"][0]["code"].isdigit()
+
+    industry = _success("/api/sector/cons", {"board": "半导体", "market": "cn"})
+    assert len(industry["items"]) >= 100, "半导体行业成分缺失，V-03 跳转会空态"
+    weights = [item["weight"] for item in industry["items"] if item["weight"] is not None]
+    assert weights and 90 <= sum(weights) <= 110, f"权重合计异常：{sum(weights)}"
+    pcts = [item["pct"] for item in industry["items"] if item["pct"] is not None]
+    assert pcts == sorted(pcts, reverse=True)
+
+
+def test_sector_fundflow_real() -> None:
+    """资金流：净额=流入−流出（同源同口径），超大单/大单如实为空。"""
+    data = _success("/api/sector/fundflow", {"market": "cn"})
+    items = data["items"]
+    assert len(items) >= 50
+    assert data["source"] == "同花顺"
+    assert "无超大单/大单分项" in data["caliber"]
+    checked = 0
+    for item in items[:10]:
+        if item["net_inflow"] is None:
+            continue
+        assert item["inflow"] is not None and item["outflow"] is not None
+        assert abs((item["inflow"] - item["outflow"]) - item["net_inflow"]) <= 0.02
+        assert item["super_big"] is None and item["big"] is None
+        checked += 1
+    assert checked >= 5
+
+
+def test_sector_trend_real() -> None:
+    """趋势：多板块归一化，首点=100，点数与请求天数一致。"""
+    data = _success("/api/sector/trend", {"boards": "半导体,银行", "days": 20, "market": "cn"})
+    assert len(data["series"]) == 2
+    for item in data["series"]:
+        points = item["points"]
+        assert len(points) == 20
+        assert abs(points[0]["value"] - 100.0) < 1e-6
+        assert all(point["value"] > 0 for point in points)
+
+
+def test_sector_overseas_simplified_model() -> None:
+    """港美股境外简化建模：含恒生指数、口径如实标注、非真实板块。"""
+    data = _success("/api/sector/industry", {"market": "hk"})
+    items = data["items"]
+    assert len(items) >= 5
+    assert data["source"] == "腾讯"
+    assert "境外简化建模" in data["caliber"]
+    names = [item["name"] for item in items]
+    assert any("恒生" in name for name in names)
+    assert all(item["kind"] in {"指数", "代表个股"} for item in items)
+
+
+def test_stock_profile_real() -> None:
+    """个股概况：中微公司名称/行业/上市日/股本真实。"""
+    data = _success("/api/stock/profile", {"symbol": "688012", "market": "a"})
+    assert data["name"] == "中微公司"
+    assert data["full_name"] and "中微" in data["full_name"]
+    assert data["industry"]
+    assert data["listing_date"] == "2019-07-22"
+    assert data["total_share"] and data["total_share"] > 9e8
+    assert data["total_mv"] and data["total_mv"] > 1e11
+    assert data["main_business"]
+
+
+def test_stock_holders_real() -> None:
+    """十大股东：至少 3 名、比例为正、报告期存在。"""
+    data = _success("/api/stock/holders", {"symbol": "688012"})
+    assert data["top10"], "十大股东为空"
+    assert len(data["top10"]) >= 3
+    assert data["top10_period"]
+    first = data["top10"][0]
+    assert first["name"]
+    assert first["ratio"] and first["ratio"] > 0
+    assert first["rank"] == 1
+    assert data["free_top10"]
+
+
+def test_stock_realtime_panel_real() -> None:
+    """FinScope 聚合：六块均有真实数据，报价与 K 线最后收盘一致。"""
+    data = _success("/api/stock/realtime-panel", {"symbol": "688012", "market": "a"})
+    assert set(data["blocks"].values()) <= {"ok"}, f"存在失败区块：{data['blocks']}"
+
+    quote = data["quote"]
+    assert quote["name"] == "中微公司" and quote["price"] > 0
+    assert quote["market_status"] in {"盘中", "盘前", "盘后", "收盘快照", "时间未知"}
+
+    kline = data["kline"]
+    assert len(kline) >= 60
+    assert abs(quote["price"] - kline[-1]["close"]) / kline[-1]["close"] < 0.02
+
+    minute = data["minute"]
+    assert len(minute) >= 30
+    times = [item["time"] for item in minute]
+    assert all(len(value) == 5 and value[2] == ":" for value in times[:5])
+    # 分时须覆盖上下午两段，且午休区间不出现数据点（P0-06 午休断裂）
+    assert any(value < "11:31" for value in times)
+    assert any(value >= "13:00" for value in times)
+    assert not any("11:31" <= value < "13:00" for value in times)
+
+    fund = data["fund_dist"]
+    assert [tier["name"] for tier in fund["tiers"]] == ["超大单", "大单", "中单", "小单"]
+    assert fund["main_net"] is not None
+    ratios = [tier["ratio"] for tier in fund["tiers"] if tier["ratio"] is not None]
+    assert len(ratios) == 4 and -100 < sum(ratios) < 100
+
+    assert data["news"], "相关新闻为空"
+    assert data["news"][0]["title"] and data["news"][0]["time"]
+    assert data["news"][0]["sentiment"] in {"利好", "利空", "中性"}
+
+    forecast = data["forecast"]
+    assert forecast["org_count"] >= 1
+    assert set(forecast["ratings"]) == {"买入", "增持", "中性", "减持", "卖出"}
+    assert forecast["target_high"] and forecast["target_low"]
+    assert forecast["target_high"] >= forecast["target_low"]
+
+
+def test_stock_financial_summary_real() -> None:
+    """财务摘要：6 项常用指标 × 8 期，EPS 与已知中报值一致。"""
+    data = _success("/api/stock/financial-summary", {"symbol": "688012"})
+    periods = data["periods"]
+    metrics = {item["key"]: item["values"] for item in data["metrics"]}
+    assert len(periods) == 8
+    assert periods[0] == "20260630"
+    assert set(metrics) == {"基本每股收益", "毛利率", "净资产收益率(ROE)",
+                            "营业总收入", "归母净利润", "资产负债率"}
+    eps = metrics["基本每股收益"][0]
+    assert eps is not None and 4.0 < eps < 4.6, f"EPS 异常：{eps}"
+    assert 30 < metrics["毛利率"][0] < 50
+    assert 5 < metrics["净资产收益率(ROE)"][0] < 20
+
+
+def test_stock_financial_trend_real() -> None:
+    """财务趋势：四序列对齐年报，同比值可由营收反算校验。"""
+    data = _success("/api/stock/financial-trend", {"symbol": "688012", "years": 5})
+    assert len(data["periods"]) == 5
+    assert all(period.endswith("1231") for period in data["periods"])
+    series = {item["key"]: item["values"] for item in data["series"]}
+    revenue = series["revenue"]
+    yoy = series["revenue_yoy"]
+    assert revenue[-1] and revenue[-1] > revenue[-2]
+    assert yoy[0] is None, "首年无基数，必须为空而不是 0"
+    expected = round((revenue[-1] - revenue[-2]) / abs(revenue[-2]) * 100, 2)
+    assert abs(yoy[-1] - expected) < 0.05
+
+
+def test_stock_financial_indicator_real() -> None:
+    """财务指标：至少 8 项指标、期数与请求一致。"""
+    data = _success("/api/stock/financial-indicator", {"symbol": "688012", "limit": 8})
+    assert len(data["metrics"]) >= 8
+    assert len(data["periods"]) == 8
+    keys = [item["key"] for item in data["metrics"]]
+    assert "净资产收益率(%)" in keys and "资产负债率(%)" in keys
+    roe = next(item["values"] for item in data["metrics"] if item["key"] == "净资产收益率(%)")
+    assert any(value is not None and -50 < value < 50 for value in roe)
+
+
+def test_stock_financial_report_real() -> None:
+    """三大报表：利润表营收与财务趋势末年营收一致（跨接口交叉核对）。"""
+    data = _success("/api/stock/financial-report",
+                    {"symbol": "688012", "statement": "利润表", "limit": 8})
+    assert data["statement"] == "利润表"
+    assert len(data["metrics"]) >= 5
+    revenue_row = next(item for item in data["metrics"] if item["key"] == "营业总收入")
+    trend = _success("/api/stock/financial-trend", {"symbol": "688012", "years": 5})
+    annual_revenue = next(item["values"] for item in trend["series"] if item["key"] == "revenue")
+    # 报表首行是 2026 中报，年报末年（2025）应能在报表期内找到同值
+    assert any(
+        value is not None and abs(value - annual_revenue[-1]) < 1 for value in revenue_row["values"]
+    ), "利润表与财务趋势的年度营收不一致"
+
+
+def test_stock_financial_report_statements() -> None:
+    """资产负债表/现金流量表同样真实可用。"""
+    for statement in ("资产负债表", "现金流量表"):
+        data = _success("/api/stock/financial-report",
+                        {"symbol": "688012", "statement": statement, "limit": 4})
+        assert data["statement"] == statement
+        assert len(data["periods"]) == 4
+        assert len(data["metrics"]) >= 3
+
+
+def test_widget_registry() -> None:
+    """组件注册表：21 个区块、编号与页面一一对应、48 列映射正确。"""
+    body = _body("/api/widgets", {})
+    assert body["error"] is None
+    data = body["data"]
+    assert data["total"] == 21
+    ids = [item["id"] for item in data["items"]]
+    assert ids[:1] == ["S-01"] and "ST-01" in ids and "V-03" in ids
+    assert len(set(ids)) == 21
+    assert data["grid"][".g-7"] == 28 and data["grid"][".g-5"] == 20
+    sectors = [item for item in data["items"] if item["page"] == "#/sectors"]
+    assert len(sectors) == 7
+    jump_targets = {item["jump"].split("?")[0] for item in data["items"] if item["jump"]}
+    assert "#/sector-val" in jump_targets and "#/stock" in jump_targets and "#/news" in jump_targets
+
+
+def test_stock_error_contract() -> None:
+    """非法代码/非法市场返回中文错误与 INVALID_PARAM，不裸抛 500。"""
+    bad = _body("/api/stock/profile", {"symbol": "abc", "market": "a"})
+    assert bad["error_code"] == "INVALID_PARAM" and bad["error"]
+    bad_market = _body("/api/sector/industry", {"market": "jp"})
+    assert bad_market["error_code"] == "INVALID_PARAM"
+    bad_concept = _body("/api/sector/heatmap", {"market": "cn", "kind": "abc"})
+    assert bad_concept["error_code"] == "INVALID_PARAM"
