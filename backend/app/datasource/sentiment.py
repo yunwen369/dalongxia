@@ -64,10 +64,13 @@ EVENT_RULES: List[Dict[str, Any]] = [
 
 # 条件性属性矩阵：命中「事件 + 条件词」时对方向分量做二次修正（确定性查表）
 CONDITION_RULES: List[Dict[str, Any]] = [
-    {"event": 1, "condition": ["低于预期", "不及预期", "下修"], "delta": -0.55},
-    {"event": 2, "condition": ["好于预期", "超预期", "上修"], "delta": +0.45},
+    # 预期反转：幅度 >1，确保“预增但低于预期”由正转负、“下滑但好于预期”由负转正
+    {"event": 1, "condition": ["低于预期", "不及预期", "下修"], "delta": -1.5},
+    {"event": 2, "condition": ["好于预期", "超预期", "上修"], "delta": +1.5},
     {"event": 4, "condition": ["产能过剩", "过剩", "消化压力"], "delta": -0.5},
     {"event": 5, "condition": ["涨幅收窄", "已回落", "见顶"], "delta": -0.4},
+    # 降价/价格战对下游受益方是利好（如“油价下调+航空公司成本压力缓解”）
+    {"event": 6, "condition": ["成本压力缓解", "成本下降", "成本降低", "受益"], "delta": +1.5},
     {"event": 8, "condition": ["承诺不减持", "终止减持", "提前终止"], "delta": +1.5},
     {"event": 13, "condition": ["轻微", "已整改"], "delta": +0.2},
     {"event": 16, "condition": ["低于预期", "落空"], "delta": -0.4},
