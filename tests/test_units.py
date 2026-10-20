@@ -220,3 +220,41 @@ class TestMarketClock:
         status, realtime = utils.classify_market_status(day, "a", now=day)
         assert status == expected
         assert realtime is (expected == "盘中")
+
+
+# =============================================================
+# 六、缓存清理端点契约（TC-系统-缓存）
+# =============================================================
+class TestCacheClearContract:
+    """POST /api/cache/clear：真实 unlink + {data,error} 契约（§6.5 清缓存）。
+
+    沙箱隔离：config.CACHE_DIR 重定向到 tmp_path，只删本用例造的 2 个假缓存文件，
+    既走真实 unlink 代码路径，又不触碰真实磁盘缓存（红线一）。
+    """
+
+    def test_cache_clear_endpoint_contract(self, monkeypatch, tmp_path):
+        """清缓存端点：HTTP 200 + error=null + 假缓存文件真实消失。"""
+        from fastapi.testclient import TestClient
+
+        from backend.app import config
+        from backend.app.core import cache
+        from backend.app.main import app
+
+        # 造 2 个假磁盘缓存文件（内容含 error 键也不会被缓存，直接物理写入）
+        monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+        fake_keys = ["scan-fake-a", "scan-fake-b"]
+        for key in fake_keys:
+            path = cache._disk_path(key)
+            path.write_text('{"probe": true}', encoding="utf-8")
+        assert all(cache._disk_path(key).exists() for key in fake_keys)
+
+        client = TestClient(app)
+        response = client.post("/api/cache/clear")
+        body = response.json()
+
+        assert response.status_code == 200
+        assert "data" in body and "error" in body
+        assert body["error"] is None, f"清缓存应成功: {body['error']}"
+        assert body["data"].get("removed", 0) >= 2, "应报告删除数量"
+        # 真实 unlink 生效：假缓存文件已消失
+        assert not any(cache._disk_path(key).exists() for key in fake_keys)

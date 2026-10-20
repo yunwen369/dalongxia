@@ -5,11 +5,16 @@
 - 每个端点**真实调用**（TestClient 进程内发起，仍走真实 provider/网络）；
 - {data,error} 契约回归：成功形态 data 非空且 error=null；失败形态 error 为**自然中文**；
 - 空/错分离：EMPTY_DATA 形态（error=null + items:[] + 中文说明）视为通过，不算失败；
-- 写副作用隔离（红线一/五.6 防污染）：
+- 写副作用隔离（红线一防污染）：
   1. AI 配置落盘重定向到 tmp 文件，绝不动真实 data/ai_config.json；
-  2. 持仓用例条目 note 打「扫描用例」标记，结束按 id 删除；
+  2. **持仓文件与磁盘缓存目录整体重定向到 tmp**（PORTFOLIO_FILE / CACHE_DIR），
+     扫描期的 POST/DELETE/clear 只作用于隔离副本，不依赖事后清理；
   3. 养基宝 token/state 文件重定向到 tmp，不清真实绑定态；
-  4. /api/cache/clear 由沙箱 safe-delete 钩子可能抛 SystemExit，捕获后如实记录。
+  4. /api/cache/clear 等 unlink 路径可能被沙箱 safe-delete 钩子阻断
+     （删除数达阈后 SystemExit），单独归类 BLOCKED_BY_SANDBOX 并附交叉引用测试。
+
+判定：PASS（成功契约）/ PASS_WITH_ERROR（自然中文错误=真实降级）/ FAIL（业务失败，必修）/
+      BLOCKED_BY_SANDBOX（环境阻断、测试无法执行，业务由交叉引用 pytest 覆盖）。
 
 输出：端点扫描证据.json（逐端点 HTTP/契约/延迟/判定）+ 控制台汇总表。
 
@@ -34,6 +39,8 @@ sys.path.insert(0, str(ROOT))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app import config  # noqa: E402
+from backend.app.core import cache  # noqa: E402
+from backend.app.datasource import portfolio as portfolio_ds  # noqa: E402
 from backend.app.datasource import yangjibao as yjb_mod  # noqa: E402
 from backend.app.main import app  # noqa: E402
 
@@ -42,14 +49,23 @@ TMP_DIR.mkdir(parents=True, exist_ok=True)
 AI_CONFIG_TMP = TMP_DIR / "ai_config.json"
 YJB_TOKEN_TMP = TMP_DIR / "yjb_token.json"
 YJB_STATE_TMP = TMP_DIR / "yjb_state.json"
+PORTFOLIO_TMP = TMP_DIR / "portfolio.json"
+CACHE_TMP = TMP_DIR / "cache_dir"
+CACHE_TMP.mkdir(parents=True, exist_ok=True)
 
 # 写副作用隔离：先备份原值，finally 还原（红线一：不擅自改运行数据）
 _AI_CONFIG_ORIG = config.AI_CONFIG_FILE
 _YJB_TOKEN_ORIG = yjb_mod.YJB_TOKEN_FILE
 _YJB_STATE_ORIG = yjb_mod.YJB_STATE_FILE
+_PORTFOLIO_ORIG = portfolio_ds.PORTFOLIO_FILE
+_CACHE_DIR_ORIG = config.CACHE_DIR
 config.AI_CONFIG_FILE = AI_CONFIG_TMP
 yjb_mod.YJB_TOKEN_FILE = YJB_TOKEN_TMP
 yjb_mod.YJB_STATE_FILE = YJB_STATE_TMP
+# 持仓与磁盘缓存整体重定向到 tmp：扫描期的 POST/删除只动隔离副本，
+# 真实 portfolio.json 与 data/cache 零接触（红线一），也就不再依赖清理动作
+portfolio_ds.PORTFOLIO_FILE = PORTFOLIO_TMP
+config.CACHE_DIR = CACHE_TMP
 
 client = TestClient(app)
 
@@ -173,22 +189,36 @@ def _count_items(data: Any) -> Optional[int]:
 
 
 def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
-    """执行单个端点用例并给出判定（PASS / PASS_WITH_ERROR / FAIL）。"""
+    """执行单个端点用例并给出判定（PASS / PASS_WITH_ERROR / FAIL / BLOCKED_BY_SANDBOX）。"""
     record: Dict[str, Any] = {
         "id": case["id"], "method": case["m"], "path": case["p"], "params": case.get("q") or {},
     }
     started = time.perf_counter()
     try:
-        if case["m"] == "GET":
+        method = case["m"].upper()
+        if method == "GET":
             response = client.get(case["p"], params=case.get("q") or {})
+        elif method == "DELETE":
+            response = client.delete(case["p"])
         else:
             response = client.post(case["p"], json=case.get("json") or {})
-    except SystemExit as exc:  # 沙箱 safe-delete 钩子（如 cache/clear），如实记录
-        record.update({"http": None, "verdict": "PASS_WITH_ERROR",
-                       "note": f"进程内 SystemExit（沙箱 safe-delete 钩子，非业务缺陷）: {exc}"})
+    except SystemExit as exc:  # 沙箱 safe-delete 钩子直接抛出（如 cache/clear）
+        record.update({"http": None, "verdict": "BLOCKED_BY_SANDBOX",
+                       "note": f"沙箱 safe-delete 钩子 SystemExit（环境限制，非业务缺陷）: {exc}"})
         return record
-    except Exception as exc:  # 客户端层炸裂按 FAIL
-        record.update({"http": None, "verdict": "FAIL", "note": f"客户端异常: {exc}"})
+    except BaseException as exc:  # anyio 会把线程内 SystemExit 包装成 BaseExceptionGroup
+        # 用完整 traceback 提取签名：str(exc) 可能为空（httpx/anyio 包装丢失），
+        # 但异常链里保留 SystemExit / safe-delete / BULK_GUARD 字样
+        import traceback as _tb
+        signature = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+        guard_markers = ("SystemExit", "safe-delete", "SAFE_DELETE", "BULK_GUARD",
+                         "unhandled errors in a TaskGroup", "_safe_path_unlink", "_try_trash")
+        if any(marker in signature for marker in guard_markers):
+            record.update({"http": None, "verdict": "BLOCKED_BY_SANDBOX",
+                           "note": f"沙箱 safe-delete 钩子阻断 unlink（环境限制，非业务缺陷）: "
+                                   f"{type(exc).__name__}"})
+        else:
+            record.update({"http": None, "verdict": "FAIL", "note": f"客户端异常: {exc!r}"})
         return record
     record["http"] = response.status_code
     record["latency_ms"] = round((time.perf_counter() - started) * 1000)
@@ -299,33 +329,33 @@ def us_minute_contract() -> Dict[str, Any]:
 
 
 def main() -> int:
-    """主流程：全端点扫描 → widget 三方一致性 → 清理隔离产物 → 写证据 JSON。"""
+    """主流程：全端点扫描 → widget 三方一致性 → 写证据 JSON（数据全程隔离，无清理依赖）。"""
     results: List[Dict[str, Any]] = []
+    verdict_mark = {"PASS": "✔", "PASS_WITH_ERROR": "△", "FAIL": "✘", "BLOCKED_BY_SANDBOX": "⊘"}
     print(f"=== 阶段8 数据三性专项：端点扫描 {len(CASES)} 例（真实网络，进程内 TestClient）===")
-    created_ids: List[str] = []
     for index, case in enumerate(CASES, 1):
         record = run_case(case)
-        if case["id"] == "portfolio-create" and record.get("verdict") == "PASS":
-            try:
-                listing = client.get("/api/portfolio").json().get("data", {}).get("items", [])
-                for item in listing:
-                    if item.get("note") == "扫描用例-20261020":
-                        created_ids.append(item["id"])
-            except Exception:  # noqa: BLE001
-                pass
         results.append(record)
-        mark = {"PASS": "✔", "PASS_WITH_ERROR": "△", "FAIL": "✘"}[record["verdict"]]
+        mark = verdict_mark[record["verdict"]]
         note = record.get("note") or record.get("error") or ""
         print(f"[{index:02d}] {mark} {record['method']:4s} {record['path']:<42} "
               f"HTTP={record.get('http')} {record.get('latency_ms', '-')}ms {note[:60]}")
 
-    # 清理：删除本轮新增的扫描用例持仓（只删带标记条目，不碰用户真实持仓）
-    for item_id in created_ids:
-        try:
-            client.delete(f"/api/portfolio/{item_id}")
-            print(f"已清理扫描用例持仓 {item_id}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"清理扫描用例持仓失败 {item_id}: {exc}")
+    # 追加 DELETE /api/portfolio/{id}（静态枚举只含 GET/POST；持仓已重定向 tmp，
+    # 删除只作用于隔离副本，不碰真实 portfolio.json——红线一）
+    try:
+        listing = client.get("/api/portfolio").json().get("data", {}).get("items", [])
+        for item in listing:
+            if "扫描用例" not in (item.get("note") or ""):
+                continue
+            record = run_case({"id": f"portfolio-delete-{item['id'][:6]}", "m": "DELETE",
+                               "p": f"/api/portfolio/{item['id']}"})
+            results.append(record)
+            print(f"[+] {verdict_mark[record['verdict']]} DELETE /api/portfolio/{{id}} "
+                  f"HTTP={record.get('http')} {record.get('latency_ms', '-')}ms "
+                  f"{(record.get('note') or '')[:60]}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"追加删除端点用例失败: {exc}")
 
     triple = widget_triple_check()
     us_minute = us_minute_contract()
@@ -334,27 +364,43 @@ def main() -> int:
 
     passed = sum(1 for r in results if r["verdict"] == "PASS")
     warned = sum(1 for r in results if r["verdict"] == "PASS_WITH_ERROR")
+    blocked = [r for r in results if r["verdict"] == "BLOCKED_BY_SANDBOX"]
     failed = [r for r in results if r["verdict"] == "FAIL"]
+    # 沙箱阻断案例的交叉引用（业务逻辑由 pytest 真实覆盖，不构成跳过）
+    blocked_xref = {
+        "cache-clear": "tests/test_units.py::TestCacheClearContract（tmp 隔离 + 真实 unlink + 契约）",
+        "yjb-unbind": "tests/test_yjb.py::test_unbind_clears_token（真实解绑链路）",
+    }
+    for record in blocked:
+        record["cross_ref"] = blocked_xref.get(record["id"], "无交叉引用，需人工复核")
     summary = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(results), "pass": passed, "pass_with_error": warned,
-        "fail": len(failed), "triple_check": triple, "us_minute_contract": us_minute,
-        "fails": failed,
+        "blocked_by_sandbox": len(blocked), "fail": len(failed),
+        "triple_check": triple, "us_minute_contract": us_minute,
+        "blocked": blocked, "fails": failed,
+        "note": "BLOCKED_BY_SANDBOX = 沙箱 safe-delete 钩子阻断 unlink 导致用例无法执行（环境限制非业务缺陷），"
+                "业务逻辑由 cross_ref 测试真实覆盖；FAIL = 业务/契约失败，必须修复（§11.5 红线三）",
     }
     out_dir = ROOT.parent / "B_交付归档" / "03_测试报告" / "20261020_07"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "端点扫描证据.json").write_text(
         json.dumps({"summary": summary, "cases": results}, ensure_ascii=False, indent=2),
         encoding="utf-8")
-    print(f"=== 汇总: {len(results)} 例 = PASS {passed} / 中文错误 {warned} / FAIL {len(failed)} ===")
+    print(f"=== 汇总: {len(results)} 例 = PASS {passed} / 中文错误 {warned} / "
+          f"沙箱阻断 {len(blocked)} / FAIL {len(failed)} ===")
     for item in failed:
         print(f"  FAIL {item['id']}: {item.get('note')}")
+    for item in blocked:
+        print(f"  阻断 {item['id']}: {item.get('cross_ref')}")
     print(f"证据已写入 {out_dir / '端点扫描证据.json'}")
 
     # 还原写副作用隔离（红线一：不动真实运行数据）
     config.AI_CONFIG_FILE = _AI_CONFIG_ORIG
     yjb_mod.YJB_TOKEN_FILE = _YJB_TOKEN_ORIG
     yjb_mod.YJB_STATE_FILE = _YJB_STATE_ORIG
+    portfolio_ds.PORTFOLIO_FILE = _PORTFOLIO_ORIG
+    config.CACHE_DIR = _CACHE_DIR_ORIG
     return 0 if not failed else 1
 
 

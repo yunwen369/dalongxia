@@ -66,6 +66,14 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
     status, is_realtime = utils.classify_market_status(quote_time, market)
 
     def number(index: int) -> Optional[float]:
+        """按列序号取腾讯行情字段并转 float（越界返回 None）。
+
+        Args:
+            index: 腾讯行情串 `parts` 的列序号。
+
+        Returns:
+            Optional[float]: 数值或 None（列不存在/不可解析）。
+        """
         return utils.to_float(parts[index]) if index < len(parts) else None
 
     # 买卖五档：买一~买五在 9/11/13/15/17，卖一~卖五在 19/21/23/25/27
