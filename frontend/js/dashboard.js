@@ -240,6 +240,7 @@
     table.appendChild(thead);
     var tbody = el("tbody");
 
+    /** 生成一行 tr：按列顺序取值并交给 cellNode 做类型化渲染。 */
     function buildRow(row, columns) {
       var tr = el("tr");
       columns.forEach(function (field) {
@@ -572,6 +573,7 @@
           title: t("dashboard.new"),
           input: true,
           defaultValue: t("dashboard.defaultName"),
+          /** 新建仪表板确认：空名回落默认名，创建后切为当前并重绘。 */
           onConfirm: function (value) {
             var name = value || t("dashboard.defaultName");
             var dash = { id: "dash-" + Date.now(), name: name, widgets: [] };
@@ -723,7 +725,10 @@
   window.Dashboard = {
     render: render,
     addWidgetById: addWidgetById,
-    reload: function () { loadState(); render(); }
+    reload: function () {
+      /** 重新读本地存储并整体重绘（供外部在数据变更后调用）。 */
+      loadState(); render();
+    }
   };
 
   // 暴露初始化：pages.js 路由到 #/dashboard 时调用

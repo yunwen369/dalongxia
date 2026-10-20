@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """单元测试：核心计算与规则引擎（§11.2 功能/数据测试的用例层）。
 
-覆盖（规范 §11.9 复算验证 + 批次 5.2/5.3/7 业务规则）：
+覆盖（规范 §11.9 复算验证 + 批次 5.2/5.3/7 业务规则 + 阶段 8 七步之①）：
 - 回撤计算（独立复算：手工构造净值序列验证峰谷/最大/当前回撤）；
 - 持仓盈亏（份额×价、汇率折算、缺汇率 null）；
 - 新闻初评规则（确定性、条件矩阵、否定、跨板块相反标签）；
-- 板块摘要派生（Top3/集中度）、热力图负值不钳 0、去重前后缀。
+- 板块摘要派生（Top3/集中度）、热力图负值不钳 0、去重前后缀；
+- 路由契约矩阵（12 router 代表端点：成功/空数据/失败/参数非法四路径）；
+- 前端视图静态一致性（VIEW_IDS ↔ index.html 容器 ↔ 菜单 ↔ i18n 键）。
 
-约定：本文件为纯计算单测，不发真实网络请求（QA 三性另行真实拉取）。
+约定：本文件为纯计算/契约单测，provider 用猴子补丁做**单元内部模拟**
+（规范门禁允许：单测内部模拟除外）；真实拉取断言由 test_qa_verify.py 另行覆盖。
 """
 
 from __future__ import annotations
@@ -306,3 +309,340 @@ class TestHoldingCaliber:
         assert codes == ["688120", "688012", "002371"], f"混入旧季度或未按比例降序: {codes}"
         assert holding["quarter"] == "2026年2季度股票投资明细"
         assert holding["caliber"].startswith("东财基金季报重仓（最新季度前10")
+
+
+# =============================================================
+# 八、路由契约矩阵（TC-路由-契约；阶段 8 七步之① routers 接口用例）
+# =============================================================
+class TestRoutersContract:
+    """12 个 router 代表端点的 {data,error} 契约用例（TestClient + 猴子补丁）。
+
+    覆盖四条路径（§11.4 正常/边界/异常三类 + 空错分离铁律）：
+    - 成功：provider 补丁返回夹具 → error=null、data 字段齐全、source/caliber 非空；
+    - 空数据：provider 返回 [] → **成功 + items:[] + count:0**（EMPTY_DATA 不得进错误态）；
+    - 失败：provider 抛 NonRetryableError → error 中文文案 + error_code 正确 + data 空结构；
+    - 参数非法：market/base_url 等边界值 → INVALID_PARAM 中文提示。
+
+    环境隔离：config.CACHE_DIR / AI_CONFIG_FILE / PORTFOLIO_FILE 全部重定向
+    tmp_path，每例先清缓存，不发真实网络请求（QA 三性见 test_qa_verify.py）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_env(self, monkeypatch, tmp_path):
+        """隔离缓存目录与配置文件，避免触碰真实磁盘缓存与用户配置（红线一）。"""
+        from backend.app import config
+        from backend.app.core import cache
+
+        monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(config, "AI_CONFIG_FILE", tmp_path / "ai_config.json")
+        monkeypatch.setattr("backend.app.datasource.portfolio.PORTFOLIO_FILE",
+                            tmp_path / "portfolio.json")
+        cache.clear_cache()  # 内存 + 磁盘双层清空（CACHE_DIR 已重定向，安全）
+
+    @staticmethod
+    def _client():
+        """构造 TestClient（惰性 _IncludedRouter 在客户端首请求时展开真实路由）。"""
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        return TestClient(app)
+
+    # ---------- system / widgets / connectors：本地静态端点 ----------
+    def test_health_contract(self):
+        """GET /api/health：200 + data.app.name 非空 + error=null。"""
+        body = self._client().get("/api/health").json()
+        assert body["error"] is None
+        assert body["data"]["app"]["name"].strip() != ""
+
+    def test_widgets_registry_contract(self):
+        """GET /api/widgets：注册表非空且每项有 id/name（前端三方一致的数据源）。"""
+        body = self._client().get("/api/widgets").json()
+        assert body["error"] is None
+        items = body["data"] if isinstance(body["data"], list) else body["data"].get("items", [])
+        assert items, "组件注册表不应为空"
+        assert all(item.get("id") and item.get("title") for item in items)
+
+    def test_connectors_status_contract(self):
+        """GET /api/connectors/status：200 + 契约字段齐全。"""
+        body = self._client().get("/api/connectors/status").json()
+        assert body["error"] is None
+        assert "data" in body
+
+    # ---------- market：报价成功 / 参数非法 / 通道全失败 ----------
+    def test_market_quote_success(self, monkeypatch):
+        """A股报价：腾讯补丁命中 → data.quote.price 与夹具一致 + 双徽章字段。"""
+        from backend.app.datasource import tencent
+
+        fixture = {
+            "name": "测试股份", "price": 10.55, "change": 0.15, "pct": 1.44,
+            "high": 10.8, "low": 10.2, "open": 10.3, "prev_close": 10.4,
+            "volume": 123456, "amount": 130000000.0, "quote_time": "2026-10-20 15:00:03",
+        }
+        monkeypatch.setattr(tencent, "get_quote", lambda code, market: dict(fixture))
+        body = self._client().get("/api/market/quote", params={"symbol": "600999", "market": "a"}).json()
+        assert body["error"] is None
+        quote = body["data"]["quote"]
+        assert quote["price"] == 10.55 and quote["name"] == "测试股份"
+        assert body["data"]["source"] and body["data"]["caliber"]
+
+    def test_market_quote_bad_market(self):
+        """market=xx → INVALID_PARAM + 中文文案（参数边界路径）。"""
+        body = self._client().get("/api/market/quote", params={"symbol": "600999", "market": "xx"}).json()
+        assert body["error_code"] == "INVALID_PARAM"
+        assert "market" in body["error"]
+
+    def test_market_quote_all_providers_down(self, monkeypatch):
+        """两源全失败 → UPSTREAM 错误码 + data 为空结构（不残留旧值）。"""
+        from backend.app.core.resilient import NonRetryableError
+        from backend.app.datasource import ashare, tencent
+
+        def _boom(*args, **kwargs):
+            raise NonRetryableError("通道不可用")
+
+        monkeypatch.setattr(tencent, "get_quote", _boom)
+        monkeypatch.setattr(ashare, "get_quote_sina", _boom)
+        body = self._client().get("/api/market/quote", params={"symbol": "600998", "market": "a"}).json()
+        assert body["error_code"] in ("UPSTREAM_ERROR", "UPSTREAM_TIMEOUT")
+        assert body["data"] == {"quote": {}}
+
+    def test_market_kline_us_contract(self, monkeypatch):
+        """美股 K 线：东财补丁命中 → items 非空 + symbol/market 归一化。"""
+        from backend.app.datasource import overseas
+
+        rows = [
+            {"date": "2026-10-18", "open": 9.8, "close": 10.2, "low": 9.7, "high": 10.4, "volume": 1000},
+            {"date": "2026-10-19", "open": 10.2, "close": 10.9, "low": 10.1, "high": 11.0, "volume": 1200},
+        ]
+        monkeypatch.setattr(overseas, "get_kline_em", lambda code, market, period, adjust: [dict(r) for r in rows])
+        body = self._client().get("/api/market/kline",
+                                  params={"symbol": "TESTUS", "market": "us"}).json()
+        assert body["error"] is None
+        assert len(body["data"]["items"]) == 2
+        assert body["data"]["market"] == "us"
+
+    # ---------- sector：行业行情成功 ----------
+    def test_sector_industry_success(self, monkeypatch):
+        """行业行情：同花顺补丁命中 → items/count 一致 + 源名回传。"""
+        from backend.app.datasource import sector as sector_provider
+
+        rows = [
+            {"name": "半导体", "pct": 2.31, "amount": 812.4, "net_inflow": 15.6},
+            {"name": "酿酒行业", "pct": -1.02, "amount": 96.3, "net_inflow": -3.2},
+        ]
+        monkeypatch.setattr(sector_provider, "get_industry_ths", lambda: [dict(r) for r in rows])
+        body = self._client().get("/api/sector/industry", params={"market": "cn"}).json()
+        assert body["error"] is None
+        assert body["data"]["count"] == 2
+        assert body["data"]["source"] == "同花顺"
+
+    # ---------- stock：概况成功 ----------
+    def test_stock_profile_success(self, monkeypatch):
+        """公司概况：东财补丁命中 → name 校验通过 + 载荷透传。"""
+        from backend.app.datasource import stock as stock_provider
+
+        monkeypatch.setattr(stock_provider, "get_profile",
+                            lambda code, market: {"name": "测试设备公司", "industry": "半导体"})
+        body = self._client().get("/api/stock/profile", params={"symbol": "688999", "market": "a"}).json()
+        assert body["error"] is None
+        assert body["data"]["name"] == "测试设备公司"
+
+    # ---------- news：快讯成功 + 空数据铁律 ----------
+    def test_news_flash_success_scores_items(self, monkeypatch):
+        """快讯：财联社补丁命中 → 每条带 score/label，分值在 ±0.1 内。"""
+        from backend.app.datasource import news as news_provider
+
+        rows = [
+            {"title": "半导体设备公司中标大单", "text": "公司公告中标海外大单，金额超预期",
+             "time": "2026-10-20 14:30", "source": "财联社"},
+            {"title": "存储芯片价格回落", "text": "部分产品价格低于预期，渠道库存偏高",
+             "time": "2026-10-20 13:05", "source": "财联社"},
+        ]
+        monkeypatch.setattr(news_provider, "get_flash", lambda limit: [dict(r) for r in rows])
+        body = self._client().get("/api/news/flash").json()
+        assert body["error"] is None
+        items = body["data"]["items"]
+        assert body["data"]["count"] == 2
+        assert all(-0.1 <= item["sentiment"]["score"] <= 0.1 for item in items), "分值越界 ±0.1"
+        assert all(item["sentiment"]["label"] for item in items)
+
+    def test_news_flash_empty_is_success(self, monkeypatch):
+        """空数据铁律：provider 返回 [] → error=null + items:[] + count:0（不进错误态）。"""
+        from backend.app.datasource import news as news_provider
+
+        monkeypatch.setattr(news_provider, "get_flash", lambda limit: [])
+        body = self._client().get("/api/news/flash").json()
+        assert body["error"] is None
+        assert body["data"]["items"] == []
+        assert body["data"]["count"] == 0
+
+    def test_news_flash_channel_down(self, monkeypatch):
+        """通道异常：确定性失败 → 错误码 + 中文文案（与上面的空态严格区分）。"""
+        from backend.app.core.resilient import NonRetryableError
+        from backend.app.datasource import news as news_provider
+
+        def _boom(*args, **kwargs):
+            raise NonRetryableError("通道不可用")
+
+        monkeypatch.setattr(news_provider, "get_flash", _boom)
+        body = self._client().get("/api/news/flash").json()
+        assert body["error_code"] in ("UPSTREAM_ERROR", "UPSTREAM_TIMEOUT")
+        assert body["data"]["items"] == []
+
+    # ---------- sentiment：个股情绪 ----------
+    def test_sentiment_stock_success(self, monkeypatch):
+        """个股情绪：东财个股新闻补丁 → 聚合分 + samples + degraded=False。"""
+        from backend.app.datasource import news as news_provider
+
+        rows = [
+            {"title": "中微公司：订单饱满", "text": "刻蚀设备订单饱满，业绩预增",
+             "time": "2026-10-20 10:12", "source": "东财"},
+        ]
+        monkeypatch.setattr(news_provider, "get_stock_news", lambda code, limit: [dict(r) for r in rows])
+        body = self._client().get("/api/sentiment/stock", params={"symbol": "688012"}).json()
+        assert body["error"] is None
+        assert body["data"]["degraded"] is False
+        assert body["data"]["samples"], "samples 不应为空"
+        assert -0.1 <= body["data"]["mean_score"] <= 0.1, "均分越界 ±0.1"
+        assert 0 <= body["data"]["temperature"] <= 100
+
+    # ---------- fund：净值历史 ----------
+    def test_fund_nav_success(self, monkeypatch):
+        """基金净值：蛋卷补丁命中 → items 非空 + as_of 取首条日期。"""
+        from backend.app.datasource import fund as fund_provider
+
+        payload = {
+            "items": [{"date": "2026-10-20", "nav": 1.2345, "acc_nav": 1.2345}],
+            "total": 887, "page": 1, "size": 30,
+        }
+        monkeypatch.setattr(fund_provider, "get_nav", lambda symbol, page, size: dict(payload))
+        body = self._client().get("/api/fund/nav", params={"code": "017811"}).json()
+        assert body["error"] is None
+        assert body["data"]["items"][0]["nav"] == 1.2345
+        assert body["data"]["as_of"] == "2026-10-20"
+
+    # ---------- portfolio：持仓分析（本地文件夹具） ----------
+    def test_portfolio_analysis_success(self, monkeypatch, tmp_path):
+        """持仓分析：本地 JSON 夹具 + 腾讯补丁 → 市值=份额×价，盈亏符号正确。"""
+        import json as json_lib
+
+        from backend.app.datasource import portfolio as portfolio_ds
+        from backend.app.datasource import tencent
+
+        fixture = {
+            "items": [{
+                "id": "t-001", "market": "a", "symbol": "600999", "name": "测试股份",
+                "shares": 1000, "cost": 9.5, "created_at": "2026-09-01", "note": "单测夹具",
+            }],
+            "updated_at": "2026-10-20 20:00:00",
+        }
+        portfolio_ds.PORTFOLIO_FILE = tmp_path / "portfolio.json"
+        (tmp_path / "portfolio.json").write_text(json_lib.dumps(fixture), encoding="utf-8")
+        monkeypatch.setattr(tencent, "get_quote",
+                            lambda code, market: {"name": "测试股份", "price": 10.0})
+        body = self._client().get("/api/portfolio/analysis").json()
+        assert body["error"] is None
+        row = body["data"]["items"][0]
+        assert row["market_value"] == 1000 * 10.0
+        assert row["pnl"] == 1000 * (10.0 - 9.5)  # +500
+        assert row["pnl"] > 0
+
+    # ---------- ai：配置未配置 / 参数非法 / 保存后掩码回显 ----------
+    def test_ai_config_not_configured(self):
+        """未配置：configured=False + 无明文密钥字段。"""
+        body = self._client().get("/api/ai/config").json()
+        assert body["error"] is None
+        assert body["data"]["configured"] is False
+
+    def test_ai_config_save_and_mask_echo(self):
+        """保存后：api_key 只回掩码，base_url/model 明文；缺 base_url 拒绝。"""
+        client = self._client()
+        saved = client.post("/api/ai/config", json={
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-unit-test-123", "model": "deepseek-chat",
+        }).json()
+        assert saved["error"] is None
+        assert saved["data"]["saved"] is True
+        config_body = client.get("/api/ai/config").json()
+        key_echo = config_body["data"].get("api_key") or ""
+        assert "sk-unit-test-123" not in key_echo, "密钥不得明文回显"
+        assert "****" in key_echo or "*" in key_echo, "应回掩码"
+        assert config_body["data"]["base_url"] == "https://api.deepseek.com/v1"
+        bad = client.post("/api/ai/config", json={"api_key": "x"}).json()
+        assert bad["error_code"] == "INVALID_PARAM"
+        assert "base_url" in bad["error"]
+
+
+# =============================================================
+# 九、前端视图静态一致性（阶段 8：charting/settings 补齐后回归）
+# =============================================================
+class TestFrontendViews:
+    """VIEW_IDS ↔ index.html 容器 ↔ 菜单项 ↔ i18n 键四层静态一致性。
+
+    背景：阶段 8 门禁 B 核对发现 charting/settings 两菜单视图实为占位
+    （VIEW_IDS 未收、点击弹 toast），属核心功能缺陷（BUG-P8-02，已修）。
+    本用例以静态断言锁死修复成果，防回归。
+    """
+
+    @staticmethod
+    def _frontend_dir():
+        """前端目录（openbb-cn/frontend）。"""
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[1] / "frontend"
+
+    def _read(self, relative):
+        """读取前端文件文本。"""
+        return (self._frontend_dir() / relative).read_text(encoding="utf-8")
+
+    def test_view_ids_all_have_containers(self):
+        """VIEW_IDS 每一项都在 index.html 有对应 page-* 容器（含带连字符的引号键）。"""
+        import re
+
+        pages = self._read("js/pages.js")
+        index = self._read("index.html")
+        view_block = pages.split("VIEW_IDS")[1].split("};")[0]
+        pairs = re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"(page-[\w-]+)"', view_block)
+        assert len(pairs) >= 11, f"VIEW_IDS 应至少收录 11 个视图，实际 {len(pairs)}"
+        for name, container in pairs:
+            assert f'id="{container}"' in index, f"视图 {name} 缺容器 {container}"
+
+    def test_menu_covers_all_views(self):
+        """index.html 菜单 data-view 集合 = VIEW_IDS 键 + home（不缺不多）。"""
+        import re
+
+        pages = self._read("js/pages.js")
+        index = self._read("index.html")
+        view_block = pages.split("VIEW_IDS")[1].split("};")[0]
+        view_ids = set(re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"page-[\w-]+"', view_block))
+        menu_views = set(re.findall(r'data-view="([\w-]+)"', index))
+        assert menu_views == view_ids | {"home"}, f"菜单与视图集合不一致：{menu_views ^ (view_ids | {'home'})}"
+
+    def test_new_views_wired_in_router(self):
+        """route() 分发含 charting/settings，renderCharting/renderSettings 已实现。"""
+        pages = self._read("js/pages.js")
+        assert 'name === "charting"' in pages and "renderCharting(parsed.params)" in pages
+        assert 'name === "settings"' in pages and "renderSettings()" in pages
+        assert "function renderCharting(" in pages and "function renderCharting(params)" in pages
+        assert "function renderSettings(" in pages
+
+    def test_chart_settings_i18n_keys_defined(self):
+        """charting/settings 用到的全部 i18n 键都已在语言包定义（防 key 漂移）。"""
+        import re
+
+        pages = self._read("js/pages.js")
+        i18n = self._read("js/i18n.js")
+        used = set(re.findall(r't\("((?:chart|set)\.[\w.]+)"', pages))
+        assert len(used) >= 40, f"新视图 i18n 键用量异常：{len(used)}"
+        missing = {key for key in used if f'"{key}"' not in i18n}
+        assert not missing, f"语言包缺键：{sorted(missing)}"
+
+    def test_fmt_delegates_to_l10n(self):
+        """阶段 6 交接口径：fmt/fmtPct 统一走 L10N（保留无 L10N 时的兜底）。"""
+        pages = self._read("js/pages.js")
+        assert "window.L10N.num" in pages and "window.L10N.pct" in pages
+
+    def test_charting_css_present(self):
+        """图表容器 .pg-chart.tall 样式存在（含 1024 断点降高）。"""
+        css = self._read("css/pages.css")
+        assert ".pg-chart.tall" in css

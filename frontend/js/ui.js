@@ -72,10 +72,12 @@
       input.select();
     }
 
+    /** 关闭浮层：移除节点并解绑键盘监听（防内存泄漏）。 */
     function close() {
       overlay.remove();
       document.removeEventListener("keydown", onKey);
     }
+    /** Esc 关闭浮层（与全局快捷键互不干扰）。 */
     function onKey(event) {
       if (event.key === "Escape") {
         close();

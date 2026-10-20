@@ -22,6 +22,11 @@
   var COLOR_WARN = "#b77f3d";
   var COLOR_ERR = "#ff5a5a";
 
+  /** 取语言包文本（阶段 6 交接口径：页面文案统一走 I18N，缺 key 时返回 key 本身便于排查）。 */
+  function t(key, vars) {
+    return window.I18N ? window.I18N.t(key, vars) : key;
+  }
+
   // 各视图容器（由 index.html 提供）
   var VIEW_IDS = {
     sectors: "page-sectors",
@@ -29,10 +34,12 @@
     "sector-val": "page-sector-val",
     news: "page-news",
     fund: "page-fund",
+    charting: "page-charting",
     portfolio: "page-portfolio",
     connectors: "page-connectors",
     dashboard: "page-dashboard",
-    yjb: "page-yjb"
+    yjb: "page-yjb",
+    settings: "page-settings"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -42,7 +49,11 @@
   var state = {
     sectors: { market: "cn", kind: "industry" },
     stock: { symbol: "688012", market: "a", tab: "kline", finTab: "summary" },
-    sectorVal: { board: "", market: "cn" }
+    sectorVal: { board: "", market: "cn" },
+    // 图表分析页状态：标的选择 + 周期/复权/指标开关 + K线/分时 Tab + 画线开关
+    charting: { symbol: "688012", market: "a", period: "日k", adjust: "qfq", tab: "kline", draw: false },
+    // 设置页状态：AI 配置表单（api_key 留空表示保留原值，与后端契约一致）
+    settings: { saving: false }
   };
 
   // =============================================================
@@ -60,8 +71,11 @@
     return node;
   }
 
-  /** 数字格式化：空值返回「无数据」，其余保留指定小数并加千分位。 */
+  /** 数字格式化：空值返回「无数据」，其余保留指定小数并加千分位（统一走 L10N.num）。 */
   function fmt(value, digits) {
+    if (window.L10N) {
+      return window.L10N.num(value, digits);
+    }
     if (value === null || value === undefined || (typeof value === "number" && isNaN(value))) {
       return "无数据";
     }
@@ -75,8 +89,11 @@
     return parts.join(".");
   }
 
-  /** 百分比格式化：带正负号与 %，空值「无数据」。 */
+  /** 百分比格式化：带正负号与 %，空值「无数据」（统一走 L10N.pct）。 */
   function fmtPct(value) {
+    if (window.L10N) {
+      return window.L10N.pct(value);
+    }
     if (value === null || value === undefined) {
       return "无数据";
     }
@@ -389,10 +406,12 @@
       "sector-val": "单板块估值",
       news: "新闻资讯",
       fund: "场外基金",
+      charting: "图表分析",
       portfolio: "持仓管理",
       connectors: "数据连接器",
       dashboard: window.I18N ? window.I18N.t("page.dashboard") : "仪表板",
-      yjb: "养基宝绑定"
+      yjb: "养基宝绑定",
+      settings: "设置"
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -419,6 +438,8 @@
       renderNews(parsed.params);
     } else if (name === "fund") {
       renderFund(parsed.params);
+    } else if (name === "charting") {
+      renderCharting(parsed.params);
     } else if (name === "portfolio") {
       renderPortfolio();
     } else if (name === "connectors") {
@@ -429,10 +450,12 @@
       }
     } else if (name === "yjb") {
       renderYjb();
+    } else if (name === "settings") {
+      renderSettings();
     }
   }
 
-  /** 拦截主菜单点击：三视图走 hash 路由，其余视图保持 app.js 原行为。 */
+  /** 拦截主菜单点击：VIEW_IDS 内视图走 hash 路由，其余（home）保持 app.js 原行为。 */
   function bindNav() {
     document.addEventListener(
       "click",
@@ -3294,6 +3317,704 @@
         box.setAttribute("data-state", "default");
       })
       .catch(function (error) { setError(box, error.message, loadYjbEstimate); });
+  }
+
+  // =============================================================
+  // 十二之二、#/charting 图表分析（阶段 8 补齐，OB-V02/F006-F010）
+  // =============================================================
+  /** 计算 N 日简单移动平均（数据不足处补 null，前端本地计算不造假）。 */
+  function movingAverage(values, window) {
+    var out = [];
+    for (var i = 0; i < values.length; i += 1) {
+      if (i + 1 < window) {
+        out.push(null);
+        continue;
+      }
+      var sum = 0;
+      for (var j = i + 1 - window; j <= i; j += 1) {
+        sum += values[j];
+      }
+      out.push(Number((sum / window).toFixed(4)));
+    }
+    return out;
+  }
+
+  /** 计算指数移动平均序列（MACD 基础）。 */
+  function exponentialMovingAverage(values, window) {
+    var out = [];
+    var k = 2 / (window + 1);
+    var prev = values[0];
+    for (var i = 0; i < values.length; i += 1) {
+      if (i === 0) {
+        out.push(values[0]);
+        continue;
+      }
+      prev = values[i] * k + prev * (1 - k);
+      out.push(Number(prev.toFixed(4)));
+    }
+    return out;
+  }
+
+  /** 计算 MACD（12,26,9）：返回 {dif, dea, macd} 三组同长序列。 */
+  function computeMACD(closes) {
+    var ema12 = exponentialMovingAverage(closes, 12);
+    var ema26 = exponentialMovingAverage(closes, 26);
+    var dif = ema12.map(function (value, index) {
+      return Number((value - ema26[index]).toFixed(4));
+    });
+    var dea = exponentialMovingAverage(dif, 9);
+    var macd = dif.map(function (value, index) {
+      return Number(((value - dea[index]) * 2).toFixed(4));
+    });
+    return { dif: dif, dea: dea, macd: macd };
+  }
+
+  /** 计算 KDJ（9,3,3）：RSV→K→D→J，数据不足处补 null。 */
+  function computeKDJ(items) {
+    var k = [];
+    var d = [];
+    var j = [];
+    var prevK = 50;
+    var prevD = 50;
+    for (var i = 0; i < items.length; i += 1) {
+      var start = Math.max(0, i - 8);
+      var lows = [];
+      var highs = [];
+      for (var m = start; m <= i; m += 1) {
+        lows.push(items[m].low);
+        highs.push(items[m].high);
+      }
+      var llv = Math.min.apply(null, lows);
+      var hhv = Math.max.apply(null, highs);
+      var rsv = hhv > llv ? ((items[i].close - llv) / (hhv - llv)) * 100 : 50;
+      var kValue = (2 / 3) * prevK + (1 / 3) * rsv;
+      var dValue = (2 / 3) * prevD + (1 / 3) * kValue;
+      prevK = kValue;
+      prevD = dValue;
+      k.push(Number(kValue.toFixed(2)));
+      d.push(Number(dValue.toFixed(2)));
+      j.push(Number((3 * kValue - 2 * dValue).toFixed(2)));
+    }
+    return { k: k, d: d, j: j };
+  }
+
+  /** 构建图表分析页骨架（工具栏 + K线/分时 Tab + 四区块）。 */
+  function buildChartingShell(container) {
+    container.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+    // 市场切换：A股/港股/美股（与个股页一致的口径）
+    var market = document.createElement("select");
+    market.id = "ch-market";
+    [["a", t("chart.market.a")], ["hk", t("chart.market.hk")], ["us", t("chart.market.us")]].forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item[0];
+      option.textContent = item[1];
+      market.appendChild(option);
+    });
+    toolbar.appendChild(market);
+    toolbar.appendChild(el("span", "pg-toolbar-label", t("chart.label.code")));
+    var symbol = document.createElement("input");
+    symbol.id = "ch-symbol";
+    symbol.placeholder = t("chart.placeholder.symbol");
+    symbol.style.cssText = "width:150px;background:var(--bg-panel);border:1px solid var(--border);"
+      + "color:var(--text);border-radius:5px;padding:4px 8px";
+    toolbar.appendChild(symbol);
+    // 周期：日k/周k/月k（后端 Query 口径）
+    var period = document.createElement("select");
+    period.id = "ch-period";
+    [["日k", t("chart.period.day")], ["周k", t("chart.period.week")], ["月k", t("chart.period.month")]].forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item[0];
+      option.textContent = item[1];
+      period.appendChild(option);
+    });
+    toolbar.appendChild(period);
+    // 复权：前复权/后复权/不复权
+    var adjust = document.createElement("select");
+    adjust.id = "ch-adjust";
+    [["qfq", t("chart.adjust.qfq")], ["hfq", t("chart.adjust.hfq")], ["none", t("chart.adjust.none")]].forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item[0];
+      option.textContent = item[1];
+      adjust.appendChild(option);
+    });
+    toolbar.appendChild(adjust);
+    var query = el("button", "pg-btn primary", t("chart.action.query"));
+    query.type = "button";
+    query.id = "ch-query";
+    toolbar.appendChild(query);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    // 画线开关：点击后在主图添加水平参考线（本地标注，不写回数据）
+    var draw = el("button", "pg-btn", t("chart.draw.off"));
+    draw.type = "button";
+    draw.id = "ch-draw";
+    toolbar.appendChild(draw);
+    var clearDraw = el("button", "pg-btn", t("chart.action.clearDraw"));
+    clearDraw.type = "button";
+    clearDraw.id = "ch-draw-clear";
+    toolbar.appendChild(clearDraw);
+    container.appendChild(toolbar);
+
+    // K线/分时 Tab
+    var tabs = el("div", "pg-tabs");
+    tabs.id = "ch-tabs";
+    [["kline", t("chart.tab.kline")], ["minute", t("chart.tab.minute")]].forEach(function (item) {
+      var button = el("button", "pg-tab", item[1]);
+      button.type = "button";
+      button.setAttribute("data-tab", item[0]);
+      tabs.appendChild(button);
+    });
+    container.appendChild(tabs);
+
+    var grid = el("div", "pg-grid");
+    var quoteCard = buildCard("CH-01", t("chart.card.quote"), "g-12", t("chart.card.quoteSub"));
+    quoteCard.body.id = "ch01-body";
+    grid.appendChild(quoteCard.card);
+    var chartCard = buildCard("CH-02", t("chart.card.chart"), "g-12", t("chart.card.chartSub"));
+    chartCard.body.id = "ch02-body";
+    grid.appendChild(chartCard.card);
+    container.appendChild(grid);
+
+    bindChartingControls();
+  }
+
+  /** 绑定图表页控件事件（查询/Tab/画线）。 */
+  function bindChartingControls() {
+    var query = document.getElementById("ch-query");
+    if (query) {
+      query.addEventListener("click", function () {
+        state.charting.symbol = (document.getElementById("ch-symbol").value || "").trim();
+        state.charting.market = document.getElementById("ch-market").value;
+        state.charting.period = document.getElementById("ch-period").value;
+        state.charting.adjust = document.getElementById("ch-adjust").value;
+        loadCharting();
+      });
+    }
+    var symbol = document.getElementById("ch-symbol");
+    if (symbol) {
+      symbol.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          document.getElementById("ch-query").click();
+        }
+      });
+    }
+    document.querySelectorAll("#ch-tabs .pg-tab").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.charting.tab = button.getAttribute("data-tab");
+        syncChartingTabs();
+        paintChartingChart(chartingCache.kline, chartingCache.minute);
+      });
+    });
+    var draw = document.getElementById("ch-draw");
+    if (draw) {
+      draw.addEventListener("click", function () {
+        state.charting.draw = !state.charting.draw;
+        draw.textContent = t(state.charting.draw ? "chart.draw.on" : "chart.draw.off");
+        toast(t(state.charting.draw ? "chart.draw.opened" : "chart.draw.closed"));
+      });
+    }
+    var clear = document.getElementById("ch-draw-clear");
+    if (clear) {
+      clear.addEventListener("click", function () {
+        chartingCache.lines = [];
+        paintChartingChart(chartingCache.kline, chartingCache.minute);
+        toast(t("chart.draw.cleared"));
+      });
+    }
+  }
+
+  /** 同步图表页 Tab 选中态。 */
+  function syncChartingTabs() {
+    document.querySelectorAll("#ch-tabs .pg-tab").forEach(function (button) {
+      button.classList.toggle("active", button.getAttribute("data-tab") === state.charting.tab);
+    });
+  }
+
+  var chartingCache = { kline: null, minute: null, quote: null, lines: [] };
+
+  /** 渲染图表分析页（入口：同步表单 → 拉数）。 */
+  function renderCharting(params) {
+    var container = document.getElementById(VIEW_IDS.charting);
+    if (params && params.symbol) {
+      state.charting.symbol = params.symbol;
+    }
+    if (params && params.market) {
+      state.charting.market = params.market;
+    }
+    if (!container.querySelector("#ch-tabs")) {
+      buildChartingShell(container);
+    }
+    document.getElementById("ch-symbol").value = state.charting.symbol;
+    document.getElementById("ch-market").value = state.charting.market;
+    document.getElementById("ch-period").value = state.charting.period;
+    document.getElementById("ch-adjust").value = state.charting.adjust;
+    syncChartingTabs();
+    loadCharting();
+  }
+
+  /** 拉取图表页数据（K线 + 分时 + 报价并行；任一失败进错误态）。 */
+  function loadCharting() {
+    var symbol = state.charting.symbol;
+    var market = state.charting.market;
+    var quoteBody = document.getElementById("ch01-body");
+    var chartBody = document.getElementById("ch02-body");
+    if (!quoteBody || !chartBody) {
+      return;
+    }
+    if (!symbol) {
+      setEmpty(quoteBody, t("chart.empty.input"));
+      setEmpty(chartBody, t("chart.empty.input"));
+      return;
+    }
+    setLoading(quoteBody);
+    setLoading(chartBody);
+    Promise.all([
+      api("/api/market/kline", { symbol: symbol, market: market, period: state.charting.period, adjust: state.charting.adjust }),
+      api("/api/market/minute", { symbol: symbol, market: market, period: "1min" }),
+      api("/api/market/quote", { symbol: symbol, market: market })
+    ])
+      .then(function (result) {
+        // /api/market/quote 的 data 为 {quote:{...}} 嵌套，先解包再入缓存
+        var quoteData = (result[2] && result[2].quote) || {};
+        chartingCache = { kline: result[0], minute: result[1], quote: quoteData, lines: [] };
+        paintChartingQuote(quoteData);
+        paintChartingChart(result[0], result[1]);
+      })
+      .catch(function (error) {
+        setError(quoteBody, error.message, loadCharting);
+        setError(chartBody, error.message, loadCharting);
+      });
+  }
+
+  /** 渲染报价概览卡（CH-01）：价格/涨跌/最高/最低/成交额 + 双徽章。 */
+  function paintChartingQuote(quote) {
+    var body = document.getElementById("ch01-body");
+    var card = document.getElementById("CH-01");
+    if (!body) {
+      return;
+    }
+    if (!quote) {
+      setEmpty(body, t("chart.empty.quote"), loadCharting);
+      return;
+    }
+    setBadges(card, quote.source, quote.caliber, false);
+    body.innerHTML = "";
+    var main = el("div", "pg-quote-main");
+    main.appendChild(el("span", "pg-quote-name", quote.name || state.charting.symbol));
+    main.appendChild(el("span", "pg-quote-price " + pctClass(quote.change), fmt(quote.price, 2)));
+    main.appendChild(el("span", pctClass(quote.change), fmt(quote.change, 2) + " / " + fmtPct(quote.pct)));
+    main.appendChild(el("span", "pg-card-sub", quote.quote_time || ""));
+    body.appendChild(main);
+    var meta = el("div", "pg-quote-meta");
+    [
+      [t("chart.meta.high"), fmt(quote.high, 2)], [t("chart.meta.low"), fmt(quote.low, 2)],
+      [t("chart.meta.open"), fmt(quote.open, 2)], [t("chart.meta.prevClose"), fmt(quote.prev_close, 2)],
+      [t("chart.meta.volume"), fmt(quote.volume, 0)], [t("chart.meta.amount"), fmt(quote.amount, 0)]
+    ].forEach(function (pair) {
+      var cell = el("div", "pg-quote-meta-cell");
+      cell.appendChild(el("span", "pg-metric-label", pair[0]));
+      cell.appendChild(el("span", "pg-metric-value", pair[1]));
+      meta.appendChild(cell);
+    });
+    body.appendChild(meta);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 渲染主图（CH-02）：K线四 pane（K+MA/VOL/MACD/KDJ）或分时（午休断裂）。 */
+  function paintChartingChart(kline, minute) {
+    var body = document.getElementById("ch02-body");
+    var card = document.getElementById("CH-02");
+    if (!body) {
+      return;
+    }
+    if (state.charting.tab === "minute") {
+      paintChartingMinute(body, card, minute);
+      return;
+    }
+    var items = (kline && kline.items) || [];
+    if (items.length === 0) {
+      setEmpty(body, t("chart.empty.kline"), loadCharting);
+      return;
+    }
+    setBadges(card, kline.source, kline.caliber, false);
+    // 重绘前释放本卡内的旧图表实例，避免路由内反复重取导致实例累积
+    charts.slice().forEach(function (instance) {
+      var dom = instance.getDom ? instance.getDom() : null;
+      if (dom && body.contains(dom)) {
+        instance.dispose();
+        charts.splice(charts.indexOf(instance), 1);
+      }
+    });
+    body.innerHTML = "";
+    var box = el("div", "pg-chart tall");
+    body.appendChild(box);
+    var chart = mountChart(box);
+    if (!chart) {
+      return;
+    }
+    var theme = chartTheme();
+    var dates = items.map(function (item) { return item.date; });
+    var closes = items.map(function (item) { return item.close; });
+    var ohlc = items.map(function (item) {
+      return [item.open, item.close, item.low, item.high];
+    });
+    // 指标前端计算：MA5/MA10/MA20、MACD(12,26,9)、KDJ(9,3,3)
+    var ma5 = movingAverage(closes, 5);
+    var ma10 = movingAverage(closes, 10);
+    var ma20 = movingAverage(closes, 20);
+    var macd = computeMACD(closes);
+    var kdj = computeKDJ(items);
+    var volumes = items.map(function (item, index) {
+      return { value: item.volume, itemStyle: { color: closes[index] >= items[index].open ? COLOR_UP : COLOR_DOWN } };
+    });
+    // 画线：用户点击主图后记录价格，转成主序列水平参考线
+    var markLines = chartingCache.lines.map(function (price) {
+      return { yAxis: price };
+    });
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      legend: { textStyle: { color: theme.text }, top: 0 },
+      grid: [
+        { left: 56, right: 16, top: 28, height: "42%" },
+        { left: 56, right: 16, top: "74%", height: "7%" },
+        { left: 56, right: 16, top: "83%", height: "8%" },
+        { left: 56, right: 16, top: "93%", height: "6%" }
+      ],
+      xAxis: [
+        { type: "category", data: dates, axisLabel: { color: theme.text }, axisLine: { lineStyle: { color: theme.border } } },
+        { type: "category", gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } },
+        { type: "category", gridIndex: 2, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } },
+        { type: "category", gridIndex: 3, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } }
+      ],
+      yAxis: [
+        { scale: true, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
+        { gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
+        { gridIndex: 2, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
+        { gridIndex: 3, scale: true, axisLabel: { show: false }, splitLine: { show: false } }
+      ],
+      series: [
+        {
+          name: t("chart.series.candle"), type: "candlestick", data: ohlc,
+          itemStyle: { color: COLOR_UP, color0: COLOR_DOWN, borderColor: COLOR_UP, borderColor0: COLOR_DOWN },
+          markLine: {
+            symbol: "none", silent: true,
+            data: markLines,
+            lineStyle: { color: "#e8a33d", type: "dashed" }
+          }
+        },
+        { name: "MA5", type: "line", data: ma5, showSymbol: false, smooth: true, lineStyle: { width: 1 }, color: "#e8a33d" },
+        { name: "MA10", type: "line", data: ma10, showSymbol: false, smooth: true, lineStyle: { width: 1 }, color: "#4c8df6" },
+        { name: "MA20", type: "line", data: ma20, showSymbol: false, smooth: true, lineStyle: { width: 1 }, color: "#b07cf0" },
+        { name: t("chart.series.volume"), type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes },
+        { name: "MACD", type: "bar", xAxisIndex: 2, yAxisIndex: 2, data: macd.macd.map(function (value) {
+            return { value: value, itemStyle: { color: value >= 0 ? COLOR_UP : COLOR_DOWN } };
+          }) },
+        { name: "DIF", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: macd.dif, showSymbol: false, lineStyle: { width: 1 }, color: "#e8a33d" },
+        { name: "DEA", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: macd.dea, showSymbol: false, lineStyle: { width: 1 }, color: "#4c8df6" },
+        { name: "K", type: "line", xAxisIndex: 3, yAxisIndex: 3, data: kdj.k, showSymbol: false, lineStyle: { width: 1 }, color: "#e8a33d" },
+        { name: "D", type: "line", xAxisIndex: 3, yAxisIndex: 3, data: kdj.d, showSymbol: false, lineStyle: { width: 1 }, color: "#4c8df6" },
+        { name: "J", type: "line", xAxisIndex: 3, yAxisIndex: 3, data: kdj.j, showSymbol: false, lineStyle: { width: 1 }, color: "#b07cf0" }
+      ]
+    });
+    // 画线交互：开启后点击主图，按像素坐标换算价格，添加水平参考线（本地标注不写回数据）
+    chart.off("click");
+    if (state.charting.draw) {
+      chart.on("click", function (params) {
+        var point = chart.convertFromPixel({ yAxisIndex: 0 }, [params.event.offsetX, params.event.offsetY]);
+        if (point && typeof point[1] === "number") {
+          chartingCache.lines.push(Number(point[1].toFixed(2)));
+          paintChartingChart(chartingCache.kline, chartingCache.minute);
+          toast(t("chart.draw.added", { price: Number(point[1].toFixed(2)) }));
+        }
+      });
+    }
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 渲染分时图（午休断裂 + 均价线 + 昨收参考线）。 */
+  function paintChartingMinute(body, card, minute) {
+    var items = (minute && minute.items) || [];
+    if (items.length === 0) {
+      setEmpty(body, t("chart.empty.minute"), loadCharting);
+      return;
+    }
+    setBadges(card, minute.source, minute.caliber, false);
+    // 重绘前释放本卡内的旧图表实例，避免 Tab 反复切换导致实例累积
+    charts.slice().forEach(function (instance) {
+      var dom = instance.getDom ? instance.getDom() : null;
+      if (dom && body.contains(dom)) {
+        instance.dispose();
+        charts.splice(charts.indexOf(instance), 1);
+      }
+    });
+    body.innerHTML = "";
+    var box = el("div", "pg-chart tall");
+    body.appendChild(box);
+    var chart = mountChart(box);
+    if (!chart) {
+      return;
+    }
+    var theme = chartTheme();
+    var quote = chartingCache.quote || {};
+    // 午休断裂：剔除 11:30–13:00 之间数据并插入可见断点
+    var categories = [];
+    var prices = [];
+    var avg = [];
+    var sumPrice = 0;
+    var sumVolume = 0;
+    items.forEach(function (item) {
+      if (item.time > "11:30" && item.time < "13:00") {
+        return;
+      }
+      categories.push(item.time);
+      prices.push(item.price);
+      sumPrice += item.price * (item.volume || 0);
+      sumVolume += item.volume || 0;
+      avg.push(sumVolume > 0 ? sumPrice / sumVolume : item.price);
+    });
+    var noonIndex = categories.findIndex(function (value) {
+      return value >= "13:00";
+    });
+    if (noonIndex > 0) {
+      categories.splice(noonIndex, 0, t("chart.series.noon"));
+      prices.splice(noonIndex, 0, null);
+      avg.splice(noonIndex, 0, null);
+    }
+    // 昨收参考线：分时涨跌的基准（红涨绿跌）
+    var prevClose = quote.prev_close;
+    var markLines = prevClose ? [{ yAxis: prevClose }] : [];
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis" },
+      legend: { textStyle: { color: theme.text }, top: 0 },
+      grid: { left: 48, right: 16, top: 32, bottom: 24 },
+      xAxis: {
+        type: "category", data: categories,
+        axisLabel: { color: theme.text, interval: Math.max(0, Math.floor(categories.length / 8)) },
+        axisLine: { lineStyle: { color: theme.border } }
+      },
+      yAxis: {
+        type: "value", scale: true,
+        axisLabel: { color: theme.text },
+        splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } }
+      },
+      series: [
+        {
+          name: t("chart.series.price"), type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4 },
+          color: COLOR_UP,
+          markLine: { symbol: "none", silent: true, data: markLines, lineStyle: { color: "#8a8a8a", type: "dashed" } }
+        },
+        { name: t("chart.series.avg"), type: "line", data: avg, showSymbol: false, lineStyle: { width: 1, type: "dashed" }, color: "#e8a33d" }
+      ]
+    });
+    body.setAttribute("data-state", "default");
+  }
+
+  // =============================================================
+  // 十二之三、#/settings 设置（阶段 8 补齐，OB-V11/F069-F072）
+  // =============================================================
+  /** 构建设置页骨架（AI 配置 / 主题与缓存 / 关于）。 */
+  function buildSettingsShell(container) {
+    container.innerHTML = "";
+    var grid = el("div", "pg-grid");
+
+    // —— AI 设置卡：base_url / api_key / model，保存走 POST /api/ai/config ——
+    var aiCard = buildCard("ST-AI", t("set.card.ai"), "g-12", t("set.card.aiSub"));
+    aiCard.body.id = "set-ai-body";
+    grid.appendChild(aiCard.card);
+
+    // —— 主题与缓存卡：主题切换开关 + 缓存清理入口（唯一定位在连接器页） ——
+    var themeCard = buildCard("ST-TH", t("set.card.theme"), "g-6", t("set.card.themeSub"));
+    themeCard.body.id = "set-theme-body";
+    grid.appendChild(themeCard.card);
+
+    // —— 关于卡：版本/构建标识/数据口径声明 ——
+    var aboutCard = buildCard("ST-AB", t("set.card.about"), "g-6", t("set.card.aboutSub"));
+    aboutCard.body.id = "set-about-body";
+    grid.appendChild(aboutCard.card);
+
+    container.appendChild(grid);
+  }
+
+  /** AI 配置表单字段构造（输入框样式与持仓页表单一致）。 */
+  function settingsField(id, placeholder, width, secret) {
+    var input = document.createElement("input");
+    input.id = id;
+    input.placeholder = placeholder;
+    if (secret) {
+      input.type = "password";
+    }
+    input.autocomplete = "off";
+    input.style.cssText = "width:" + (width || 220) + "px;background:var(--bg-panel);"
+      + "border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px";
+    return input;
+  }
+
+  /** 渲染 AI 设置卡：回显当前配置（掩码）+ 保存。 */
+  function paintSettingsAI() {
+    var body = document.getElementById("set-ai-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/ai/config", {})
+      .then(function (data) {
+        body.innerHTML = "";
+        var form = el("div", "page-toolbar");
+        form.appendChild(el("span", "pg-toolbar-label", t("set.label.baseUrl")));
+        form.appendChild(settingsField("set-base-url", t("set.placeholder.baseUrl"), 240));
+        form.appendChild(el("span", "pg-toolbar-label", t("set.label.apiKey")));
+        form.appendChild(settingsField("set-api-key", data.configured ? t("set.placeholder.apiKeySaved") : t("set.placeholder.apiKeyNew"), 240, true));
+        form.appendChild(el("span", "pg-toolbar-label", t("set.label.model")));
+        form.appendChild(settingsField("set-model", t("set.placeholder.model"), 180));
+        form.appendChild(el("span", "pg-spacer"));
+        var save = el("button", "pg-btn primary", t("set.action.save"));
+        save.type = "button";
+        save.id = "set-ai-save";
+        form.appendChild(save);
+        body.appendChild(form);
+        // 回显：base_url/model 明文（非敏感），api_key 只显示掩码状态
+        document.getElementById("set-base-url").value = data.base_url || "";
+        document.getElementById("set-model").value = data.model || "";
+        var status = el("div", "pg-card-sub");
+        status.id = "set-ai-status";
+        status.textContent = data.configured
+          ? t("set.ai.configured", { model: data.model || t("set.ai.modelEmpty"), key: data.api_key || t("set.ai.keyMasked") })
+          : t("set.ai.notConfigured");
+        body.appendChild(status);
+        body.setAttribute("data-state", "default");
+
+        save.addEventListener("click", function () {
+          if (state.settings.saving) {
+            return; // 防重复提交
+          }
+          state.settings.saving = true;
+          save.disabled = true;
+          save.textContent = t("set.action.saving");
+          apiPost("/api/ai/config", {
+            base_url: (document.getElementById("set-base-url").value || "").trim(),
+            api_key: (document.getElementById("set-api-key").value || "").trim(),
+            model: (document.getElementById("set-model").value || "").trim()
+          })
+            .then(function () {
+              toast(t("set.toast.aiSaved"));
+              state.settings.saving = false;
+              save.disabled = false;
+              save.textContent = t("set.action.save");
+              paintSettingsAI(); // 回显最新状态（密钥掩码）
+            })
+            .catch(function (error) {
+              toast(t("set.toast.aiFailed", { message: error.message }));
+              state.settings.saving = false;
+              save.disabled = false;
+              save.textContent = t("set.action.save");
+            });
+        });
+      })
+      .catch(function (error) {
+        setError(body, error.message, paintSettingsAI);
+      });
+  }
+
+  /** 渲染主题与缓存卡：主题切换 + 缓存清理引导（唯一定位在连接器页）。 */
+  function paintSettingsTheme() {
+    var body = document.getElementById("set-theme-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    var light = t("set.theme.light");
+    var dark = t("set.theme.dark");
+    var current = document.documentElement.getAttribute("data-theme") === "light" ? light : dark;
+    var row = el("div", "page-toolbar");
+    row.appendChild(el("span", "pg-toolbar-label", t("set.theme.current", { theme: current })));
+    var toggle = el("button", "pg-btn", t(current === light ? "set.theme.toDark" : "set.theme.toLight"));
+    toggle.type = "button";
+    toggle.id = "set-theme-toggle";
+    row.appendChild(toggle);
+    body.appendChild(row);
+    // 主题切换与 app.js 的 applyTheme 同口径：写 data-theme + localStorage["openbb-theme"]
+    toggle.addEventListener("click", function () {
+      var next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", next);
+      try {
+        window.localStorage.setItem("openbb-theme", next);
+      } catch (error) {
+        /* 隐私模式下忽略持久化，主题仍生效 */
+      }
+      paintSettingsTheme(); // 刷新按钮文案
+      charts.forEach(function (instance) {
+        try {
+          instance.resize();
+        } catch (error) {
+          /* 已释放则忽略 */
+        }
+      });
+      toast(t("set.theme.toggled"));
+    });
+
+    var cacheRow = el("div", "page-toolbar");
+    cacheRow.appendChild(el("span", "pg-toolbar-label", t("set.cache.label")));
+    var jump = el("button", "pg-btn", t("set.cache.jump"));
+    jump.type = "button";
+    jump.addEventListener("click", function () {
+      window.location.hash = "#/connectors";
+    });
+    cacheRow.appendChild(jump);
+    body.appendChild(cacheRow);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** 渲染关于卡：版本/构建标识（/api/health）+ 合规声明。 */
+  function paintSettingsAbout() {
+    var body = document.getElementById("set-about-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/health", {})
+      .then(function (data) {
+        body.innerHTML = "";
+        var app = data.app || {};
+        var rows = [
+          [t("set.about.software"), app.name || t("set.about.default")],
+          [t("set.about.version"), app.version || "—"],
+          [t("set.about.build"), data.build || "—"],
+          [t("set.about.python"), data.python || "—"],
+          [t("set.about.datasources"), t("set.about.datasourcesValue", { count: Object.keys(data.datasources || {}).length })],
+          [t("set.about.serverTime"), data.server_time || "—"]
+        ];
+        var table = el("table", "pg-table");
+        rows.forEach(function (pair) {
+          var tr = document.createElement("tr");
+          var th = document.createElement("th");
+          th.textContent = pair[0];
+          var td = document.createElement("td");
+          td.textContent = pair[1];
+          tr.appendChild(th);
+          tr.appendChild(td);
+          table.appendChild(tr);
+        });
+        body.appendChild(table);
+        body.appendChild(el("div", "pg-card-sub", t("set.about.disclaimer")));
+        body.setAttribute("data-state", "default");
+      })
+      .catch(function (error) {
+        setError(body, error.message, paintSettingsAbout);
+      });
+  }
+
+  /** 渲染置页入口：骨架 + 三卡数据。 */
+  function renderSettings() {
+    var container = document.getElementById(VIEW_IDS.settings);
+    if (!container.querySelector("#set-ai-body")) {
+      buildSettingsShell(container);
+    }
+    paintSettingsAI();
+    paintSettingsTheme();
+    paintSettingsAbout();
   }
 
   // =============================================================

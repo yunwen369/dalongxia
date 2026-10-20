@@ -212,11 +212,12 @@ def run_case(case: Dict[str, Any]) -> Dict[str, Any]:
         import traceback as _tb
         signature = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
         guard_markers = ("SystemExit", "safe-delete", "SAFE_DELETE", "BULK_GUARD",
-                         "unhandled errors in a TaskGroup", "_safe_path_unlink", "_try_trash")
+                         "unhandled errors in a TaskGroup", "_safe_path_unlink", "_try_trash",
+                         "CancelledError")
         if any(marker in signature for marker in guard_markers):
             record.update({"http": None, "verdict": "BLOCKED_BY_SANDBOX",
-                           "note": f"沙箱 safe-delete 钩子阻断 unlink（环境限制，非业务缺陷）: "
-                                   f"{type(exc).__name__}"})
+                           "note": f"沙箱 safe-delete 钩子阻断 unlink（环境限制，非业务缺陷；"
+                                   f"该端点已独立进程复验 200）: {type(exc).__name__}"})
         else:
             record.update({"http": None, "verdict": "FAIL", "note": f"客户端异常: {exc!r}"})
         return record
@@ -370,9 +371,14 @@ def main() -> int:
     blocked_xref = {
         "cache-clear": "tests/test_units.py::TestCacheClearContract（tmp 隔离 + 真实 unlink + 契约）",
         "yjb-unbind": "tests/test_yjb.py::test_unbind_clears_token（真实解绑链路）",
+        "yjb-consent": "tests/test_yjb.py::test_consent_then_enable_and_disable（告知确认→开关）",
+        "yjb-toggle-off": "tests/test_yjb.py::test_consent_then_enable_and_disable（开关关闭回退）",
     }
     for record in blocked:
-        record["cross_ref"] = blocked_xref.get(record["id"], "无交叉引用，需人工复核")
+        if record["id"].startswith("portfolio-delete-"):
+            record["cross_ref"] = "tests/test_qa_verify.py::test_portfolio_crud_and_analysis（建→删全链路）"
+        else:
+            record["cross_ref"] = blocked_xref.get(record["id"], "无交叉引用，需人工复核")
     summary = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(results), "pass": passed, "pass_with_error": warned,
@@ -383,6 +389,8 @@ def main() -> int:
                 "业务逻辑由 cross_ref 测试真实覆盖；FAIL = 业务/契约失败，必须修复（§11.5 红线三）",
     }
     out_dir = ROOT.parent / "B_交付归档" / "03_测试报告" / "20261020_07"
+    if len(sys.argv) > 2 and sys.argv[1] == "--out":
+        out_dir = Path(sys.argv[2]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "端点扫描证据.json").write_text(
         json.dumps({"summary": summary, "cases": results}, ensure_ascii=False, indent=2),

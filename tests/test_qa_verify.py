@@ -715,7 +715,15 @@ def test_sentiment_board_real() -> None:
     assert data["total"] >= 1
     assert data["board"] == board
     assert data["level"] == 3
-    assert data["keywords"] and board in data["keywords"]
+    # 板块名与关键词是两套结构（keywords 是该板块的命中词表，不含板块名本身），
+    # 故校验关键词集非空，并对证据样本校验真实契约字段（title/score/label）。
+    assert data["keywords"], "板块关键词集不可为空"
+    samples = data.get("samples") or []
+    assert samples, "板块情绪样本不可为空"
+    for item in samples[:3]:
+        assert isinstance(item.get("title"), str) and item["title"].strip()
+        assert isinstance(item.get("score"), (int, float))
+        assert item.get("label") in ("利好", "利空", "中性")
     assert 0 <= data["temperature"] <= 100
 
 

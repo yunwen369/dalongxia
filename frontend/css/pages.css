@@ -227,6 +227,11 @@
   height: 220px;
 }
 
+/* 四 pane 指标图（K线/成交量/MACD/KDJ）需要更高容器 */
+.pg-chart.tall {
+  height: 440px;
+}
+
 /* ---------- 四态：加载 / 空 / 错 / 默认 ---------- */
 .pg-state {
   display: flex;
@@ -604,6 +609,11 @@
 
   .pg-chart {
     height: 260px;
+  }
+
+  /* 1024 断点下四 pane 指标图适度压低，保持纵向不溢出 */
+  .pg-chart.tall {
+    height: 340px;
   }
 
   .pg-card {
