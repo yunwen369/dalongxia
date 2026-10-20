@@ -258,3 +258,51 @@ class TestCacheClearContract:
         assert body["data"].get("removed", 0) >= 2, "应报告删除数量"
         # 真实 unlink 生效：假缓存文件已消失
         assert not any(cache._disk_path(key).exists() for key in fake_keys)
+
+
+# =============================================================
+# 七、基金重仓口径（TC-基金-重仓）
+# =============================================================
+class TestHoldingCaliber:
+    """get_holding 口径：东财按年返回会拼接多季度，必须取最新季度前 10 大。
+
+    背景（阶段8 对账实锤）：fund_portfolio_hold_em(date=2026) 返回
+    「1季度 + 2季度」两段拼接（旧季度在前），直接切片会拿到旧季报前 10，
+    导致拟合估值权重偏差（P1 数据口径问题，已修）。
+    本用例以合成双季度 DataFrame 模拟该上游行为，不发起真实请求。
+    """
+
+    @staticmethod
+    def _fake_frame():
+        """构造「Q1 在前、Q2 在后且比例更大」的合成上游数据。"""
+        import pandas as pd
+
+        return pd.DataFrame([
+            {"股票代码": "600001", "股票名称": "旧季一", "占净值比例": 9.0,
+             "持股数": 100, "持仓市值": 900.0, "季度": "2026年1季度股票投资明细"},
+            {"股票代码": "600002", "股票名称": "旧季二", "占净值比例": 8.0,
+             "持股数": 100, "持仓市值": 800.0, "季度": "2026年1季度股票投资明细"},
+            {"股票代码": "600003", "股票名称": "旧季三", "占净值比例": 7.0,
+             "持股数": 100, "持仓市值": 700.0, "季度": "2026年1季度股票投资明细"},
+            {"股票代码": "688120", "股票名称": "新季一", "占净值比例": 9.22,
+             "持股数": 110, "持仓市值": 922.0, "季度": "2026年2季度股票投资明细"},
+            {"股票代码": "688012", "股票名称": "新季二", "占净值比例": 9.06,
+             "持股数": 110, "持仓市值": 906.0, "季度": "2026年2季度股票投资明细"},
+            {"股票代码": "002371", "股票名称": "新季三", "占净值比例": 9.03,
+             "持股数": 110, "持仓市值": 903.0, "季度": "2026年2季度股票投资明细"},
+        ])
+
+    def test_holding_takes_latest_quarter_top10(self, monkeypatch):
+        """必须取最新季度（Q2）且按占净值比例降序，不得混入旧季度行。"""
+        import akshare as ak
+
+        from backend.app.datasource import fund as fund_ds
+
+        monkeypatch.setattr(ak, "fund_portfolio_hold_em",
+                            lambda symbol, date: self._fake_frame())
+        holding = fund_ds.get_holding("017811")
+
+        codes = [item["code"] for item in holding["items"]]
+        assert codes == ["688120", "688012", "002371"], f"混入旧季度或未按比例降序: {codes}"
+        assert holding["quarter"] == "2026年2季度股票投资明细"
+        assert holding["caliber"].startswith("东财基金季报重仓（最新季度前10")

@@ -465,7 +465,13 @@ def get_realtime(code: str) -> Dict[str, Any]:
 
 
 def get_holding(code: str) -> Dict[str, Any]:
-    """重仓股（akshare fund_portfolio_hold_em，今年→去年→前年回退）。"""
+    """重仓股（akshare fund_portfolio_hold_em，今年→去年→前年回退）。
+
+    口径（2026-10-20 实测修订）：东财按年返回时会**拼接多个季度**的行
+    （如 2026 年返回「1季度」+「2季度」两段，旧季度在前）。必须先取
+    **最新季度**、再按「占净值比例」降序取前 10，否则拿到的是旧季报
+    前 10（拟合估值权重偏差，属数据口径错误）。
+    """
     year_now = date.today().year
     tried: List[str] = []
     for year in (year_now, year_now - 1, year_now - 2):
@@ -478,8 +484,13 @@ def get_holding(code: str) -> Dict[str, Any]:
         if not rows:
             tried.append(f"{year}:空")
             continue
+        # 1) 定位最新季度（季度串格式「YYYY年N季度股票投资明细」，字典序即时序）
+        latest_quarter = max((row.get("季度") or "" for row in rows), default="")
+        quarter_rows = [row for row in rows if (row.get("季度") or "") == latest_quarter]
+        # 2) 按占净值比例降序，真·前 10 大重仓
+        quarter_rows.sort(key=lambda row: _num(row.get("占净值比例")) or 0.0, reverse=True)
         items: List[Dict[str, Any]] = []
-        for row in rows:
+        for row in quarter_rows[:10]:
             items.append(
                 {
                     "code": str(row.get("股票代码") or ""),
@@ -494,10 +505,10 @@ def get_holding(code: str) -> Dict[str, Any]:
         return {
             "code": code,
             "year": year,
-            "items": items[:10],
-            "quarter": items[0].get("quarter"),
+            "items": items,
+            "quarter": latest_quarter,
             "source": "东财季报",
-            "caliber": "东财基金季报重仓（市值单位=万元，比例=占净值比）",
+            "caliber": "东财基金季报重仓（最新季度前10，市值单位=万元，比例=占净值比）",
         }
     raise ValueError(f"重仓数据不可用：{code}（{','.join(tried)}）")
 
