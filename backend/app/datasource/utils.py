@@ -169,7 +169,8 @@ def classify_market_status(
 
     Returns:
         Tuple[str, bool]: (状态文案, 是否盘中实时)。
-        状态只使用“盘中/盘前/盘后/收盘快照/时间未知”，不把收盘快照伪装成实时。
+        状态只使用"盘中/盘前/盘后/休市/收盘快照/时间未知"，
+        午间休市归"休市"，不把收盘快照或休市伪装成实时。
     """
     if as_of is None:
         return "时间未知", False
@@ -190,6 +191,9 @@ def classify_market_status(
             return "盘中", True
         if current < clock_time(9, 15):
             return "盘前", False
+        if clock_time(11, 30) < current < clock_time(13, 0):
+            # A股午间休市（11:30-13:00），非盘中、非实时
+            return "休市", False
         return "盘后", False
 
     if normalized == "hk":
@@ -199,6 +203,9 @@ def classify_market_status(
             return "盘中", True
         if current < clock_time(9, 30):
             return "盘前", False
+        if clock_time(12, 0) < current < clock_time(13, 0):
+            # 港股午间休市（12:00-13:00），非盘中、非实时
+            return "休市", False
         return "盘后", False
 
     if normalized == "us":
