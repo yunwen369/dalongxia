@@ -100,6 +100,7 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
     cache_key = f"market:index:{selected}"
 
     def loader() -> Dict[str, Any]:
+        """指数快照加载器：腾讯优先，A股可降级新浪（口径注明无开高低）。"""
         candidates: List[Any] = [
             ("腾讯", "腾讯/指数快照（A/港/美）", lambda: tencent.get_index_quotes(selected))
         ]
@@ -142,6 +143,7 @@ def market_index_kline(
     cache_key = f"market:index-kline:{normalized_code}:{period}"
 
     def loader() -> Dict[str, Any]:
+        """指数 K 线加载器：美股指数优先新浪（腾讯 fqkline 仅 1 根），A股腾讯优先。"""
         tencent_candidate = ("腾讯", f"腾讯/指数{period}", lambda: tencent.get_index_kline(normalized_code, period))
         sina_candidate = ("新浪", f"新浪/指数{period}", lambda: ashare.get_index_kline_sina(normalized_code, period))
         # 美股指数腾讯 fqkline 仅返回最近 1 根，优先新浪历史；A股指数腾讯优先、新浪兜底
@@ -184,6 +186,7 @@ def market_quote(
     cache_key = f"market:quote:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
+        """个股报价加载器：A股腾讯→新浪；港美股东财（生产候选）→腾讯。"""
         candidates: List[Any] = [
             ("腾讯", "腾讯/实时快照（收盘后为最后成交快照）", lambda: tencent.get_quote(code, normalized_market))
         ]
@@ -229,6 +232,7 @@ def market_kline(
     cache_key = f"market:kline:{normalized_market}:{code}:{period}:{adjust_value}"
 
     def loader() -> Dict[str, Any]:
+        """K 线加载器：A股东财→新浪→腾讯，港美股东财→腾讯；复权口径随参数。"""
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", f"东财/{period}{'不复权' if not adjust_value else '前复权' if adjust_value == 'qfq' else '后复权'}",
@@ -289,6 +293,7 @@ def market_minute(
     cache_key = f"market:minute:{normalized_market}:{code}:{period_value}"
 
     def loader() -> Dict[str, Any]:
+        """分时加载器：A股东财→新浪→腾讯；港美股走腾讯 1 分钟（东财无稳定免费通道）。"""
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", f"东财/{period_value}分钟", lambda: ashare.get_minute_em(code, period_value)),
@@ -351,6 +356,7 @@ def market_search(
     cache_key = f"market:search:{keyword}:{limit}"
 
     def loader() -> Dict[str, Any]:
+        """标的搜索加载器：腾讯智能联想（无备源，空结果按空态返回）。"""
         return with_fallback(
             [("腾讯", "腾讯/智能联想", lambda: tencent.get_search(keyword, limit))],
             empty_value=[],
@@ -385,6 +391,7 @@ def market_profile(
     cache_key = f"market:profile:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
+        """个股概况加载器：A股东财 F10；港美股由腾讯快照派生（标记简化建模）。"""
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", "东财/个股概况（日频）", lambda: ashare.get_profile_em(code)),
@@ -392,6 +399,7 @@ def market_profile(
             ]
         else:
             def basic_profile() -> Dict[str, Any]:
+                """境外简化概况：仅取腾讯快照可得字段，缺失项留空不臆造。"""
                 quote = tencent.get_quote(code, normalized_market)
                 return {
                     "symbol": code,

@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import utils
 
 netfix.apply_netfix()
@@ -44,6 +45,16 @@ def _call(func):
         if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
             raise NonRetryableError(f"上游通道不可用：{name}") from exc
         raise
+
+
+def _call_ths(func):
+    """同花顺/财联社 V8 类调用入口：进程级互斥 + 代理错误分类。
+
+    这两个源的签名/解密走 py_mini_racer（内嵌 V8），多线程并发首次创建
+    MiniRacer 上下文会触发 PartitionAlloc 重复初始化 FATAL、进程原生崩溃
+    （实测并发必崩，详见 core/v8_guard.py 背景说明）。
+    """
+    return _call(guard_v8(func))
 
 
 def _ensure_enabled(source: str = "akshare") -> None:
@@ -319,7 +330,7 @@ def _item(title: str, text: str, source: str, time_text: str, url: str, channel:
 def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
     """财联社 7×24 快讯（字段：标题/内容/发布日期/发布时间）。"""
     _ensure_enabled()
-    frame = _call(lambda: ak.stock_info_global_cls(symbol="全部"))
+    frame = _call_ths(lambda: ak.stock_info_global_cls(symbol="全部"))
     records = frame.to_dict("records")
     items: List[Dict[str, Any]] = []
     for row in records:
@@ -378,7 +389,7 @@ def _global_sina() -> List[Dict[str, Any]]:
 
 def _global_ths() -> List[Dict[str, Any]]:
     """同花顺全球快讯（20 条，标题/内容/发布时间/链接）。"""
-    frame = _call(lambda: ak.stock_info_global_ths())
+    frame = _call_ths(lambda: ak.stock_info_global_ths())
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
         title = _text(row.get("标题"))

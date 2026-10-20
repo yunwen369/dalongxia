@@ -33,6 +33,7 @@ from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.resilient import polite_sleep, retry_call
+from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import tencent, utils
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
@@ -68,6 +69,16 @@ def _call(func):
         if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
             raise NonRetryableError(f"上游通道不可用：{name}") from exc
         raise
+
+
+def _call_ths(func):
+    """同花顺 V8 类调用的统一入口：进程级互斥 + 代理错误分类。
+
+    同花顺 hexin-v 签名走 py_mini_racer（内嵌 V8），多线程并发首次创建
+    MiniRacer 上下文会触发 PartitionAlloc 重复初始化 FATAL，整个 worker
+    进程原生崩溃（实测并发必崩）。故全部同花顺调用经 v8_guard 串行化。
+    """
+    return _call(guard_v8(func))
 
 
 def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -123,7 +134,7 @@ def _industry_ths() -> List[Dict[str, Any]]:
     实测列：板块/涨跌幅(%)/总成交量(万手)/总成交额(亿元)/净流入(亿元)/上涨家数/下跌家数/领涨股。
     """
     _ensure_enabled()
-    frame = _call(lambda: ak.stock_board_industry_summary_ths())
+    frame = _call_ths(lambda: ak.stock_board_industry_summary_ths())
     items: List[Dict[str, Any]] = []
     for row in _clean_records(frame):
         name = str(row.get("板块") or "").strip()
@@ -184,7 +195,7 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
 def _concept_ths_names() -> List[Dict[str, Any]]:
     """同花顺概念名录（末级兜底：仅有名称/代码，无行情，pct/amount 为 None）。"""
     _ensure_enabled()
-    frame = _call(lambda: ak.stock_board_concept_name_ths())
+    frame = _call_ths(lambda: ak.stock_board_concept_name_ths())
     items: List[Dict[str, Any]] = []
     for row in _clean_records(frame):
         name = str(row.get("name") or "").strip()
@@ -408,7 +419,7 @@ def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
     _ensure_enabled()
     start_text, end_text = _default_kline_range()
     func = ak.stock_board_industry_index_ths if kind == "industry" else ak.stock_board_concept_index_ths
-    frame = _call(lambda: func(symbol=board, start_date=start_text, end_date=end_text))
+    frame = _call_ths(lambda: func(symbol=board, start_date=start_text, end_date=end_text))
     rows: List[Dict[str, Any]] = []
     for row in _clean_records(frame):
         rows.append(
@@ -700,7 +711,7 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     if market in ("hk", "us"):
         return []
     _ensure_enabled()
-    frame = _call(lambda: ak.stock_fund_flow_industry(symbol="即时"))
+    frame = _call_ths(lambda: ak.stock_fund_flow_industry(symbol="即时"))
     items: List[Dict[str, Any]] = []
     for row in _clean_records(frame):
         name = str(row.get("行业") or "").strip()
