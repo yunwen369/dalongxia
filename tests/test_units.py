@@ -541,7 +541,8 @@ class TestRoutersContract:
         """空数据铁律：provider 返回 [] → error=null + items:[] + count:0（不进错误态）。"""
         from backend.app.datasource import news as news_provider
 
-        monkeypatch.setattr(news_provider, "get_flash", lambda limit: [])
+        # 路由走多源入口 get_flash_multi（财联社不可用时回落全球快讯），故此处补丁需打在它上面
+        monkeypatch.setattr(news_provider, "get_flash_multi", lambda limit: [])
         body = self._client().get("/api/news/flash").json()
         assert body["error"] is None
         assert body["data"]["items"] == []
@@ -555,7 +556,7 @@ class TestRoutersContract:
         def _boom(*args, **kwargs):
             raise NonRetryableError("通道不可用")
 
-        monkeypatch.setattr(news_provider, "get_flash", _boom)
+        monkeypatch.setattr(news_provider, "get_flash_multi", _boom)
         body = self._client().get("/api/news/flash").json()
         assert body["error_code"] in ("UPSTREAM_ERROR", "UPSTREAM_TIMEOUT")
         assert body["data"]["items"] == []

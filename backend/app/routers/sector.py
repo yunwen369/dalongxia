@@ -340,6 +340,18 @@ def sector_kline(
 
     cache_key = f"sector:kline:{selected}:{board}:{period}"
 
+    if selected not in ("hk", "us") and not config.V8_SOURCES_ENABLED:
+        # 冻结环境禁用 V8 源（§13.6-2）：A 股板块指数日线仅有同花顺通道
+        return _pack(
+            {"items": [], "board": board, "period": period, "market": selected, "available": False},
+            "本地口径",
+            "安装版不提供同花顺板块指数日线（规范 §13.6-2 禁用 V8 依赖源）；"
+            "可改用个股 K 线与板块行情",
+            None,
+            "不可用",
+            False,
+        )
+
     if selected in ("hk", "us"):
         candidates: List[Any] = [
             ("腾讯", "腾讯/指数日线（境外简化建模，板块名需命中主要指数）",
@@ -473,6 +485,19 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
             ErrorCode.EMPTY_DATA,
             "港美股板块资金流暂无免费通道，已如实标注不可用。",
             data={"items": [], "market": selected},
+        )
+
+    if not config.V8_SOURCES_ENABLED:
+        # 冻结环境禁用 V8 源（§13.6-2）：板块资金流仅有同花顺通道，
+        # 按空/错分离如实标注不可用（空 items + 中文说明），不伪造数据、不落错误态。
+        return _pack(
+            {"items": [], "count": 0, "market": selected, "available": False},
+            "本地口径",
+            "安装版不提供同花顺板块资金流通道（规范 §13.6-2 禁用 V8 依赖源）；"
+            "可查看板块行情与个股四档资金流",
+            None,
+            "不可用",
+            False,
         )
 
     def loader() -> Dict[str, Any]:

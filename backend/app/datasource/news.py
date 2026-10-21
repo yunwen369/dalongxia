@@ -451,6 +451,28 @@ def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
     return items[: max(1, limit)]
 
 
+def get_flash_multi(limit: int = 50) -> List[Dict[str, Any]]:
+    """快讯多源取数：财联社优先，不可用时回落东财/新浪全球快讯。
+
+    冻结环境（规范 §13.6-2）禁用 py_mini_racer 依赖源后，财联社通道不可用；
+    此时自动改用纯 HTTP 的全球快讯，保证新闻与情绪视图仍有真实数据，
+    口径在徽标中如实标注（不伪造“财联社”来源）。
+
+    Args:
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；全通道失败时抛出最后一个异常，由路由层转错误态。
+    """
+    try:
+        items = get_flash(limit)
+        if items:
+            return items
+    except Exception:  # noqa: BLE001 - 主源不可用时降级到全球快讯
+        pass
+    return get_global(limit)
+
+
 def get_stock_news(symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
     """东财个股新闻（stock_news_em）。
 

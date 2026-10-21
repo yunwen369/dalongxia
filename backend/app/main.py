@@ -269,12 +269,110 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+def _run_frozen_check() -> int:
+    """冻结形态自检（``OpenBB-CN.exe --check``，不建窗口、不起服务）。
+
+    窗口化构建下 stdout 为 None，故先重定向 stdio，并把结果同时写入
+    ``logs/selfcheck.log``——便于安装测试自动化取证（不弹阻塞式对话框）。
+
+    Returns:
+        int: 0=可启动；2=WebView2 缺失；3=端口被非本应用占用。
+    """
+    from backend.app.core import desktop_shell
+
+    desktop_shell.redirect_stdio(config.LOG_DIR)
+    lines: List[str] = ["== OpenBB 中文投研工作台 · 安装版自检 =="]
+    lines.append(f"版本：{config.APP_VERSION}（{config.BUILD_TAG}）")
+    lines.append(f"程序目录：{config.PROJECT_DIR}")
+    lines.append(f"资源目录：{config.RESOURCE_DIR}")
+    lines.append(f"前端目录：{config.FRONTEND_DIR}（存在={config.FRONTEND_DIR.exists()}）")
+    lines.append(f"数据目录：{config.DATA_DIR}（可写={os.access(config.DATA_DIR, os.W_OK)}）")
+    ok, detail = desktop_shell.check_webview2()
+    lines.append(f"WebView2：{detail}")
+    code = 0
+    if not ok:
+        code = 2
+    elif _port_in_use(config.HOST, config.PORT):
+        if desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=3):
+            lines.append(f"端口 {config.PORT}：本应用已在运行，双击图标会复用该实例")
+        else:
+            lines.append(f"端口 {config.PORT}：被其他进程占用，启动将提示冲突")
+            code = 3
+    else:
+        lines.append(f"端口 {config.PORT}：空闲，启动将自动拉起本地服务")
+    summary = "\n".join(lines)
+    print(summary, flush=True)
+    try:
+        config.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        (config.LOG_DIR / "selfcheck.log").write_text(summary, encoding="utf-8")
+    except OSError:
+        pass
+    return code
+
+
+def _run_frozen() -> None:
+    """冻结形态启动：重定向 stdio → 后台线程跑 uvicorn → 主线程开窗口。
+
+    与源码模式的区别（§13.6-1）：窗口化构建没有控制台，必须先重定向
+    stdout/stderr 到日志文件；服务与窗口在同一进程内（不另起解释器）。
+
+    Raises:
+        SystemExit: WebView2 缺失（2）或端口被非本应用占用（2/3）时退出。
+    """
+    import uvicorn
+
+    from backend.app.core import desktop_shell
+
+    desktop_shell.redirect_stdio(config.LOG_DIR)
+    logger.info("冻结模式启动 %s %s（%s）", config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)
+
+    if _port_in_use(config.HOST, config.PORT):
+        # 端口已被本应用占用（用户重复双击图标）：直接复用，不再起第二个服务
+        if desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=3):
+            if not desktop_shell.open_window(config.BASE_URL, config.APP_NAME,
+                                             desktop_shell.resolve_icon(config.PROJECT_DIR)):
+                raise SystemExit(2)
+            return
+        message = _port_error_message(config.PORT, _find_port_owner(config.PORT))
+        logger.error("端口占用，启动中止：%s", message.replace("\n", " | "))
+        desktop_shell.show_error(message)
+        raise SystemExit(2)
+
+    def _serve() -> None:
+        """后台线程：单进程运行 uvicorn（log_config=None 避免读外部配置文件）。"""
+        try:
+            uvicorn.run(app, host=config.HOST, port=config.PORT,
+                        log_level="warning", log_config=None)
+        except Exception as exc:  # noqa: BLE001 - 线程内异常需落日志，否则窗口侧无声
+            logger.exception("本地服务异常退出：%s", exc)
+
+    threading.Thread(target=_serve, name="uvicorn", daemon=True).start()
+    if not desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=60):
+        desktop_shell.show_error(
+            "本地服务启动超时（60 秒），窗口无法打开。\n\n"
+            f"请查看日志：{config.LOG_DIR / 'app.log'}\n"
+            "常见原因：端口 6900 被占用、防火墙拦截、安装目录无写权限。"
+        )
+        raise SystemExit(3)
+    logger.info("本地服务就绪：%s", config.BASE_URL)
+    if not desktop_shell.open_window(config.BASE_URL, config.APP_NAME,
+                                     desktop_shell.resolve_icon(config.PROJECT_DIR)):
+        raise SystemExit(2)
+    logger.info("窗口已关闭，进程退出")
+
+
 def main() -> None:
-    """源码模式启动入口：端口预检 -> 启动 uvicorn -> 延迟打开浏览器。
+    """启动入口：冻结形态走内嵌窗口；源码模式走端口预检 + uvicorn + 浏览器。
 
     Raises:
         SystemExit: 启动前置检查失败需要终止进程时抛出。
     """
+    if config.IS_FROZEN:
+        if "--check" in sys.argv:
+            raise SystemExit(_run_frozen_check())
+        _run_frozen()
+        return
+
     import uvicorn
 
     logger.info("启动 %s %s（%s）", config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)

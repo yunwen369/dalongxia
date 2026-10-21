@@ -23,8 +23,8 @@ from fastapi import APIRouter, Query
 
 from backend.app import config
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
-from backend.app.core.resilient import with_fallback
+from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
+from backend.app.core.resilient import circuit_open, trip_circuit, with_fallback
 from backend.app.datasource import ashare, overseas, tencent, utils
 
 logger = logging.getLogger(__name__)
@@ -264,9 +264,26 @@ def market_quote(
         if normalized_market == "a":
             candidates.append(("新浪", "新浪/实时快照（收盘后为最后成交快照）", lambda: ashare.get_quote_sina(code)))
         else:
-            # 港美股：东财快照（生产候选，本机 push2 被重置）→ 腾讯
-            candidates.insert(0, ("东财", "东财/港美股快照（收盘后为最后成交快照）",
-                                  lambda: overseas.get_quote_em(code, normalized_market)))
+            # 港美股：东财快照（生产候选，本机 push2 被重置）→ 腾讯。
+            # 东财快照需拉全市场（数千行），失效时单次要等 60 秒；加进程级熔断，
+            # 冷却期内直接跳过（§6.5），避免每轮 TTL 过期都卡一分钟。
+            def _eastmoney_quote() -> Dict[str, Any]:
+                """东财港美股快照（带熔断）。"""
+                circuit_key = f"eastmoney:quote:{normalized_market}"
+                if circuit_open(circuit_key):
+                    raise NonRetryableError("东财港美股快照处于熔断期，已跳过")
+                try:
+                    return overseas.get_quote_em(code, normalized_market)
+                except Exception:  # noqa: BLE001 - 任何失败都触发熔断，交由腾讯兜底
+                    trip_circuit(circuit_key, 300.0)
+                    raise
+
+            # 顺序：腾讯优先（单只快照，字段完整、耗时 <1s），东财作备源。
+            # 依据阶段 9 实测：东财港美股快照需拉全市场（上万行），本机 push2 被重置时
+            # 单轮耗 170s+，作为首候选会让港美股报价首次加载不可用；腾讯为首候选后
+            # 首屏 <1s，东财仅在腾讯失败时兜底（并受熔断保护）。
+            candidates.append(("东财", "东财/港美股快照（收盘后为最后成交快照）",
+                               _eastmoney_quote))
         # 完整性校验：涨跌幅依赖前收，缺 prev_close 的快照（实测东财 AAPL 偶发只给价格）
         # 视为不可用并降级到下一源，避免把残缺报价渲染成“涨跌 0/空”。
         return with_fallback(candidates, need_rows=False, empty_value={},

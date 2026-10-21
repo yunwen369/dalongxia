@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -238,3 +239,43 @@ def with_fallback(
         "error_code": error_code.value,
         "attempts": attempts,
     }
+
+
+# =============================================================
+# 进程级熔断（§6.5 韧性补充）
+# =============================================================
+_CIRCUIT_UNTIL: Dict[str, float] = {}
+_CIRCUIT_LOCK = threading.Lock()
+
+
+def circuit_open(key: str) -> bool:
+    """判断某个源是否处于熔断冷却期。
+
+    场景：东财港美股快照需拉全市场（数千行），本机 push2 被重置时每次要耗
+    60 秒（20s×3 重试）才降级；缓存 TTL 仅 15 秒，等于每轮都卡一分钟。
+    熔断后冷却期内直接跳过，避免反复无效等待。
+
+    Args:
+        key: 熔断键（如 ``eastmoney:quote:hk``）。
+
+    Returns:
+        bool: True 表示仍在冷却期（应跳过该源）。
+    """
+    with _CIRCUIT_LOCK:
+        until = _CIRCUIT_UNTIL.get(key, 0.0)
+    return time.time() < until
+
+
+def trip_circuit(key: str, cooldown: float = 300.0) -> None:
+    """标记某源失效并进入冷却期。
+
+    Args:
+        key: 熔断键。
+        cooldown: 冷却秒数（默认 300 秒）。
+
+    Returns:
+        None: 仅更新进程内状态。
+    """
+    with _CIRCUIT_LOCK:
+        _CIRCUIT_UNTIL[key] = time.time() + cooldown
+    logger.warning("数据源进入熔断：%s（冷却 %.0f 秒）", key, cooldown)

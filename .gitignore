@@ -68,3 +68,7 @@ desktop.ini
 .DS_Store
 data/yjb_state.json
 data/scan_tmp_*/
+
+# PyInstaller 构建产物（阶段 9 封装）
+build_v*/
+dist_v*/

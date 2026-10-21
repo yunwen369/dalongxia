@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "0.2.1"  # 语义化版本号，与项目状态文档保持一致（0.2.1：补齐 F-027 一致预期缺口）
-BUILD_TAG = "v0.2.1-20261021"  # 构建标识，写入 /api/health 的 build 字段
+APP_VERSION = "1.0.0"  # 语义化版本号：首个正式发布版（阶段 9 封装）
+BUILD_TAG = "v1.0.0-20261021"  # 构建标识，写入 /api/health 的 build 字段
 
 HOST = "127.0.0.1"  # 仅监听本机回环地址，不对外网暴露
 PORT = 6900  # 固定端口，复刻 OpenBB ODP 本地连接器约定，禁止静默更换
@@ -35,15 +36,27 @@ BASE_URL = f"http://{HOST}:{PORT}"  # 同源访问基址，前端与 API 共用
 # =============================================================
 # 二、目录与文件路径（全部由本文件派生，业务代码禁止另行拼接）
 # =============================================================
-APP_DIR = Path(__file__).resolve().parent  # backend/app
-PROJECT_DIR = APP_DIR.parents[1]  # openbb-cn 工程根目录
-FRONTEND_DIR = PROJECT_DIR / "frontend"  # 前端静态资源目录
-DATA_DIR = PROJECT_DIR / "data"  # 运行时数据目录
+# 冻结形态判定（PyInstaller onedir）：影响资源定位与运行数据落盘位置（§13.6-7）。
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+APP_DIR = Path(__file__).resolve().parent  # backend/app（源码模式）
+if IS_FROZEN:
+    # 冻结模式：EXE 同级目录可写（data/logs 放这里），只读资源在 _internal（sys._MEIPASS）
+    PROJECT_DIR = Path(sys.executable).resolve().parent
+    RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", str(PROJECT_DIR)))
+else:
+    PROJECT_DIR = APP_DIR.parents[1]  # openbb-cn 工程根目录
+    RESOURCE_DIR = PROJECT_DIR
+FRONTEND_DIR = RESOURCE_DIR / "frontend"  # 前端静态资源目录（冻结时在 _internal/frontend）
+DATA_DIR = PROJECT_DIR / "data"  # 运行时数据目录（冻结时 = EXE_DIR/data）
 CACHE_DIR = DATA_DIR / "cache"  # 两级缓存的磁盘目录
 EXPORT_DIR = DATA_DIR / "exports"  # 导出文件预留目录
-LOG_DIR = PROJECT_DIR / "logs"  # 日志目录，按天滚动
+LOG_DIR = PROJECT_DIR / "logs"  # 日志目录，按天滚动（冻结时 = EXE_DIR/logs）
 AI_CONFIG_FILE = DATA_DIR / "ai_config.json"  # AI 配置落盘文件（含密钥，禁止入库）
 YJB_TOKEN_FILE = DATA_DIR / "yjb_token.json"  # 养基宝 Token 落盘文件（禁止入库）
+# 冻结环境禁用 py_mini_racer(V8) 依赖源（规范 §13.6-2）：
+# akshare 的同花顺/财联社接口经内嵌 V8 执行签名，打包后易原生崩溃；
+# 冻结模式一律跳过这些源，由新浪/申万/东财/腾讯等纯 HTTP 通道降级承接。
+V8_SOURCES_ENABLED = not IS_FROZEN
 ENV_FILE = PROJECT_DIR / ".env"  # 本地环境变量文件（禁止入库）
 
 # =============================================================

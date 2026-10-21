@@ -32,6 +32,9 @@ from __future__ import annotations
 import threading
 from typing import Callable, TypeVar
 
+from backend.app import config
+from backend.app.core.errors import NonRetryableError
+
 T = TypeVar("T")
 
 # 进程级可重入锁：同花顺 V8 调用串行化。RLock 允许 provider 内部
@@ -42,19 +45,32 @@ _V8_LOCK = threading.RLock()
 def guard_v8(func: Callable[..., T]) -> Callable[..., T]:
     """把函数调用包进进程级 V8 互斥锁（同步阻塞语义）。
 
+    冻结形态（PyInstaller onedir）下直接拒绝：规范 §13.6-2 要求打包后禁用
+    一切依赖 py_mini_racer 的 akshare 接口，由纯 HTTP 备源降级承接。
+
     Args:
         func: 无参 loader（lambda），内部会触发 akshare 同花顺 V8 路径。
 
     Returns:
         加锁后的同名函数；异常原样透传，由上层 resilient 处理。
+
+    Raises:
+        NonRetryableError: 冻结模式（V8 源禁用）时抛出，触发降级链切换备源。
     """
 
     def wrapper(*args, **kwargs) -> T:
-        """加锁执行原函数；异常原样透传，由上层 resilient 决定重试或降级。
+        """加锁执行原函数；冻结模式直接拒绝，交由降级链换源。
 
         Returns:
-            T: 计算结果。
+            T: 计算结果（透传 func 返回值）。
+
+        Raises:
+            NonRetryableError: config.V8_SOURCES_ENABLED 为 False 时抛出。
         """
+        if not config.V8_SOURCES_ENABLED:
+            raise NonRetryableError(
+                "冻结环境已禁用 py_mini_racer 依赖源（规范 §13.6-2），降级至纯 HTTP 备源"
+            )
         with _V8_LOCK:
             return func(*args, **kwargs)
 

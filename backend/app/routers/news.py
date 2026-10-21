@@ -154,7 +154,8 @@ def news_flash(
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
-            [("财联社", "财联社/7×24 快讯（标题+内容）", lambda: news_provider.get_flash(limit))],
+            [("财联社", "财联社/7×24 快讯（标题+内容）；不可用时回落东财/新浪全球快讯",
+              lambda: news_provider.get_flash_multi(limit))],
             empty_value=[],
         )
 

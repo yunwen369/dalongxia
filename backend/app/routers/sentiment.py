@@ -177,7 +177,8 @@ def sentiment_market(
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         if region == "cn":
-            return {"items": news_provider.get_flash(limit), "error": None}
+            # 多源快讯：冻结环境财联社不可用时回落东财/新浪，避免整条链路 500
+            return {"items": news_provider.get_flash_multi(limit), "error": None}
         merged = news_provider.dedup(news_provider.get_global(limit))
         return {"items": merged, "error": None}
 
