@@ -135,10 +135,10 @@ def test_quote_and_kline_real(symbol: str) -> None:
 
 
 def test_minute_real() -> None:
-    """分时：至少 30 个点、时间格式正确、价格量级合理。"""
+    """分时：非空、时间格式正确、价格量级合理（条数按时点放宽：开盘首分钟仅 1 点）。"""
     data = _success("/api/market/minute", {"symbol": "600519", "market": "a", "period": "1min"})
     items = data["items"]
-    assert len(items) >= 30
+    assert len(items) >= 5, f"A股分时过少：{len(items)}"
     assert data["source"] in {"东财", "新浪", "腾讯"}
     assert data["as_of"]
     for item in items[:5]:
@@ -377,6 +377,33 @@ def test_stock_profile_real() -> None:
     assert data["main_business"]
 
 
+def test_stock_estimates_real() -> None:
+    """机构一致预期（F-027）：分年度 EPS/净利覆盖 + 机构明细 + 数值量级合理。"""
+    data = _success("/api/stock/estimates", {"symbol": "688012", "market": "a"})
+    assert data["available"] is True
+    eps = data["eps"]
+    assert len(eps) >= 2, f"预测年度不足：{len(eps)}"
+    first = eps[0]
+    assert str(first["年度"]).isdigit()
+    assert first["预测机构数"] >= 1
+    # 中微公司 EPS 一致预期量级：0.1~50 元（拦截张冠李戴，如取到指数点位/股价）
+    assert 0.1 < first["均值"] < 50
+    assert first["最小值"] <= first["均值"] <= first["最大值"]
+    assert len(data["profit"]) == len(eps)
+    assert data["institutions"], "机构明细为空"
+    assert data["institutions"][0]["机构名称"]
+    assert data["detail"], "详细指标预测为空"
+
+
+def test_stock_estimates_unknown_symbol_empty() -> None:
+    """边界：无效代码 → 成功空态（error=null + available=false + 中文说明）。"""
+    body = _body("/api/stock/estimates", {"symbol": "000000", "market": "a"})
+    assert body["error"] is None
+    assert body["data"]["available"] is False
+    assert body["data"]["eps"] == []
+    assert "暂无" in body["data"]["note"]
+
+
 def test_stock_holders_real() -> None:
     """十大股东：报告期须为完整披露期（≥5 名），比例为正。"""
     data = _success("/api/stock/holders", {"symbol": "688012"})
@@ -404,12 +431,15 @@ def test_stock_realtime_panel_real() -> None:
     assert abs(quote["price"] - kline[-1]["close"]) / kline[-1]["close"] < 0.02
 
     minute = data["minute"]
-    assert len(minute) >= 30
+    assert len(minute) >= 10
     times = [item["time"] for item in minute]
     assert all(len(value) == 5 and value[2] == ":" for value in times[:5])
-    # 分时须覆盖上下午两段，且午休区间不出现数据点（P0-06 午休断裂）
+    # 分时须覆盖上午段；下午段与午休断裂只在已进入下午时判定——
+    # 盘中上午执行时分时只累积到当前时刻，写死「必须有 13:00 后数据点」会必然误报。
     assert any(value < "11:31" for value in times)
-    assert any(value >= "13:00" for value in times)
+    latest_time = max(times)
+    if latest_time >= "13:00":
+        assert any(value >= "13:00" for value in times)
     assert not any("11:31" <= value < "13:00" for value in times)
 
     fund = data["fund_dist"]
@@ -898,18 +928,19 @@ def test_portfolio_error_contract() -> None:
 # 批次 5.5：AI 配置（掩码/落盘）与对话（未配置引导）
 # =============================================================
 def test_us_quote_real() -> None:
-    """美股报价：苹果价格/昨收/币种，源为腾讯（东财 push2 本机不可用）。"""
+    """美股报价：苹果价格/昨收/币种；源可为东财或腾讯（降级链随源站可用性变化）。"""
     data = _success("/api/market/quote", {"symbol": "AAPL", "market": "us"})
     quote = data["quote"]
     assert quote["name"]
+    # prev_close 是涨跌幅计算前提：无论命中哪个源都必须非空（残缺快照应在路由层被降级）
     assert quote["price"] > 0 and quote["prev_close"] > 0
     assert quote["currency"] == "USD"
-    assert data["source"] == "腾讯"
+    assert data["source"] in {"腾讯", "东财"}, f"未预期的报价源：{data['source']}"
     assert quote["market_status"] in {"盘中", "盘前", "盘后", "收盘快照", "时间未知", "休市"}
 
 
 def test_us_kline_real() -> None:
-    """美股 K 线：320 根、日期升序（回归：无交易所后缀只返回 2 条的缺陷）。"""
+    """美股 K 线：≥200 根、日期升序、最新日期不陈旧（回归：无交易所后缀只返回 2 条的缺陷）。"""
     data = _success("/api/market/kline",
                     {"symbol": "AAPL", "market": "us", "period": "日k", "adjust": "qfq"})
     items = data["items"]
@@ -918,15 +949,16 @@ def test_us_kline_real() -> None:
     assert dates == sorted(dates)
     assert dates[-1] >= "2026-09-01", f"最新日期异常：{dates[-1]}"
     assert items[-1]["high"] >= items[-1]["low"] > 0
-    assert data["source"] == "腾讯"
+    # 源名不写死：东财与腾讯均可为有效来源，数据质量（条数/日期/OHLC）才是判据
+    assert data["source"] in {"腾讯", "东财"}, f"未预期的 K 线源：{data['source']}"
 
 
 def test_hk_kline_and_quote_real() -> None:
-    """港股 K 线与报价：腾讯 00700，币种 HKD。"""
+    """港股 K 线与报价：00700 条数充足、币种 HKD、价格为正。"""
     kline = _success("/api/market/kline",
                      {"symbol": "00700", "market": "hk", "period": "日k", "adjust": "qfq"})
     assert len(kline["items"]) >= 200
-    assert kline["source"] == "腾讯"
+    assert kline["source"] in {"腾讯", "东财"}, f"未预期的 K 线源：{kline['source']}"
     quote = _success("/api/market/quote", {"symbol": "00700", "market": "hk"})["quote"]
     assert quote["currency"] == "HKD"
     assert quote["price"] > 0
@@ -941,11 +973,22 @@ def test_us_minute_unavailable() -> None:
 
 
 def test_hk_minute_real() -> None:
-    """港股分时：腾讯 1 分钟，≥100 点且时间格式正确。"""
+    """港股分时：腾讯 1 分钟；盘中按已开盘分钟数放宽，收盘后要求全天点数。"""
     data = _success("/api/market/minute", {"symbol": "00700", "market": "hk"})
     items = data["items"]
-    assert len(items) >= 100, f"港股分时不足：{len(items)}"
+    assert items, "港股分时为空"
+    worst = min(item["time"] for item in items)
+    latest = max(item["time"] for item in items)
+    assert len(worst) == 5 and worst[2] == ":"
+    # 盘中只累积到当前时刻（09:30 起每分钟 1 点）；收盘后应为全天 ~330 点。
+    # 不写死「≥100」：否则盘中执行必然误报。
+    if latest < "15:59":
+        assert len(items) >= 10, f"港股分时不足（盘中）：{len(items)}（{worst}–{latest}）"
+    else:
+        assert len(items) >= 200, f"港股分时不足（收盘）：{len(items)}"
     assert all(len(item["time"]) == 5 and item["time"][2] == ":" for item in items[:5])
+    # 时段口径：东财分钟线返回「20261021 10:11:00」形态，此前解析失败 → 恒为「时间未知」
+    assert data["market_status"] != "时间未知", "分时时间解析失败（date+time 格式未覆盖）"
 
 
 def test_overseas_index_real() -> None:

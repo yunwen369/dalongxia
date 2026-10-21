@@ -224,6 +224,31 @@ class TestMarketClock:
         assert status == expected
         assert realtime is (expected == "盘中")
 
+    @pytest.mark.parametrize("text", [
+        "20261021 10:11:00",   # 东财分钟线：无横线日期 + 时间（本轮修复）
+        "20261016161447",      # 腾讯紧凑格式
+        "2026/10/16 18:31:15",  # 新浪斜杠格式
+        "2026-10-16 16:42:09",  # 标准格式
+        "2026-10-16 16:42",     # 无秒
+    ])
+    def test_parse_datetime_formats(self, text):
+        """时间解析：覆盖东财 date+time 形态，避免港股盘中被判「时间未知」。"""
+        from backend.app.datasource import utils
+
+        parsed = utils.parse_datetime(text)
+        assert parsed is not None, f"未解析：{text}"
+        assert parsed.year == 2026
+
+    def test_hk_intraday_not_unknown(self):
+        """港股盘中：东财分钟线时间经解析后应判「盘中」且 is_realtime=True。"""
+        from backend.app.datasource import utils
+
+        now = datetime(2026, 10, 21, 10, 11)
+        parsed = utils.parse_datetime("20261021 10:11:00")
+        status, realtime = utils.classify_market_status(parsed, "hk", now=now)
+        assert status == "盘中"
+        assert realtime is True
+
 
 # =============================================================
 # 六、缓存清理端点契约（TC-系统-缓存）
@@ -446,6 +471,52 @@ class TestRoutersContract:
         body = self._client().get("/api/stock/profile", params={"symbol": "688999", "market": "a"}).json()
         assert body["error"] is None
         assert body["data"]["name"] == "测试设备公司"
+
+    # ---------- stock：一致预期（F-027）三路径 ----------
+    def test_stock_estimates_success(self, monkeypatch):
+        """一致预期：同花顺补丁命中 → eps/profit/years 透传 + source=同花顺。"""
+        from backend.app.datasource import stock as stock_provider
+
+        payload = {
+            "eps": [{"年度": "2026", "预测机构数": 23, "最小值": 3.13, "均值": 4.16,
+                     "最大值": 7.2, "行业平均数": 2.04}],
+            "profit": [{"年度": "2026", "预测机构数": 23, "最小值": 29.25, "均值": 38.61,
+                        "最大值": 54.59, "行业平均数": 15.02}],
+            "institutions": [{"机构名称": "华安证券", "报告日期": "2026-09-28"}],
+            "detail": [{"预测指标": "营业收入(元)", "预测2026-平均": "169.13亿"}],
+            "years": ["2026"], "available": True, "caliber_note": "同花顺盈利预测",
+        }
+        monkeypatch.setattr(stock_provider, "get_estimates",
+                            lambda code, market: dict(payload))
+        body = self._client().get(
+            "/api/stock/estimates", params={"symbol": "688012", "market": "a"}).json()
+        assert body["error"] is None
+        assert body["data"]["source"] == "同花顺"
+        assert body["data"]["eps"][0]["均值"] == 4.16
+        assert body["data"]["years"] == ["2026"]
+
+    def test_stock_estimates_empty_is_success(self, monkeypatch):
+        """空/错分离：无机构覆盖 → error=null + 空列表 + available=false（不得进错误态）。"""
+        from backend.app.datasource import stock as stock_provider
+
+        monkeypatch.setattr(stock_provider, "get_estimates", lambda code, market: {
+            "eps": [], "profit": [], "institutions": [], "detail": [], "years": [],
+            "available": False, "note": "该标的暂无机构预测覆盖",
+        })
+        body = self._client().get(
+            "/api/stock/estimates", params={"symbol": "000000", "market": "a"}).json()
+        assert body["error"] is None
+        assert body["data"]["eps"] == []
+        assert body["data"]["available"] is False
+        assert "暂无" in body["data"]["note"]
+
+    def test_stock_estimates_us_market_empty(self):
+        """港美股：provider 真实分支返回空结构（无需补丁），契约仍为成功空态。"""
+        body = self._client().get(
+            "/api/stock/estimates", params={"symbol": "AAPL", "market": "us"}).json()
+        assert body["error"] is None
+        assert body["data"]["available"] is False
+        assert body["data"]["eps"] == []
 
     # ---------- news：快讯成功 + 空数据铁律 ----------
     def test_news_flash_success_scores_items(self, monkeypatch):

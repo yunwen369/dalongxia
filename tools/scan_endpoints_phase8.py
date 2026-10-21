@@ -113,6 +113,10 @@ CASES: List[Dict[str, Any]] = [
     {"id": "sector-trend", "m": "GET", "p": "/api/sector/trend", "q": {"boards": "半导体,银行"}},
     # —— stock 7 端点（A股 F10 全量）——
     {"id": "stock-profile", "m": "GET", "p": "/api/stock/profile", "q": {"symbol": "600519"}},
+    {"id": "stock-estimates", "m": "GET", "p": "/api/stock/estimates",
+     "q": {"symbol": "688012", "market": "a"}},
+    {"id": "stock-estimates-us-empty", "m": "GET", "p": "/api/stock/estimates",
+     "q": {"symbol": "AAPL", "market": "us"}},
     {"id": "stock-holders", "m": "GET", "p": "/api/stock/holders", "q": {"symbol": "600519"}},
     {"id": "stock-panel", "m": "GET", "p": "/api/stock/realtime-panel", "q": {"symbol": "600519"}},
     {"id": "stock-fin-summary", "m": "GET", "p": "/api/stock/financial-summary", "q": {"symbol": "600519"}},

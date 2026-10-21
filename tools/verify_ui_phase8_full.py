@@ -271,18 +271,29 @@ def main() -> None:
 
         # D2 空态：美股分时免费通道不可用（已登记缺口 D3）→ 分时 Tab 空态。
         # setEmpty 真实 DOM：div.pg-state > div.pg-state-title（body data-state="empty"）。
+        # 先导航到空白页重置文档：D1 的限速条件恢复后，同一文档内的后续导航仍可能
+        # 复用慢速连接，导致 charting 首屏迟迟不就绪、点击 Tab 时 body 尚未挂载。
+        goto(cdp, "about:blank")
         goto(cdp, args.base + "/#/charting?symbol=AAPL&market=us")
         wait_blocks(cdp, 45)
-        cdp.eval_js("(function(){var b=document.querySelector('#ch-tabs .pg-tab[data-tab=\"minute\"]');"
-                    "if(b){b.click();}return !!b;})()")
+        tab_clicked = cdp.eval_js(
+            "(function(){var b=document.querySelector('#ch-tabs .pg-tab[data-tab=\"minute\"]');"
+            "if(b){b.click();}return !!b;})()")
         empty_text = wait_js(cdp, "(function(){var b=document.getElementById('ch02-body');"
                                    "if(!b)return null;"
                                    "var n=b.querySelector('.pg-state-title');"
-                                   "return n?n.textContent:(b.getAttribute('data-state')==='empty'?b.textContent.slice(0,40):null);})()", 15)
+                                   "return n?n.textContent:(b.getAttribute('data-state')==='empty'?b.textContent.slice(0,40):null);})()", 25)
+        empty_diag = None
+        if not empty_text:
+            empty_diag = cdp.eval_js(
+                "(function(){var b=document.getElementById('ch02-body');"
+                "return {tabClicked:" + ("true" if tab_clicked else "false") + ","
+                "bodyExists:!!b, state:b?b.getAttribute('data-state'):null,"
+                "bodyText:b?b.textContent.slice(0,60):null};})()")
         shot(cdp, os.path.join(args.out, "state_empty_charting_minute.png"))
         result["shots"].append("state_empty_charting_minute.png")
-        four_states["empty"] = {"text": empty_text, "ok": bool(empty_text)}
-        print(f"[D] empty: {empty_text}")
+        four_states["empty"] = {"text": empty_text, "ok": bool(empty_text), "diag": empty_diag}
+        print(f"[D] empty: {empty_text} diag={empty_diag}")
 
         # D3 错误态：CDP 离线模拟 → 双区块错误态（中文原因）→ 恢复后回默认
         cdp.call("Network.emulateNetworkConditions",
@@ -378,10 +389,16 @@ def main() -> None:
         # F2 模态框：仪表板「+ 新建」→ overlay 出现 → 取消关闭（不改数据）
         goto(cdp, args.base + "/#/dashboard")
         wait_blocks(cdp, 45)
+        # 工具栏渲染完再点：dashboard 首屏异步（注册表 + 6 组件），直接点击可能落空
+        new_btn = wait_js(
+            cdp,
+            "(function(){var bs=document.querySelectorAll('#page-dashboard button');"
+            "for(var i=0;i<bs.length;i++){if(bs[i].textContent.indexOf('新建')>=0){return bs[i].outerHTML.slice(0,40);}}"
+            "return null;})()", 20)
         cdp.eval_js("(function(){var bs=document.querySelectorAll('#page-dashboard button');"
                     "for(var i=0;i<bs.length;i++){if(bs[i].textContent.indexOf('新建')>=0){bs[i].click();return true;}}"
                     "return false;})()")
-        modal_open = wait_js(cdp, "!!document.querySelector('.ui-overlay .ui-modal')", 6)
+        modal_open = wait_js(cdp, "!!document.querySelector('.ui-overlay .ui-modal')", 8)
         shot(cdp, os.path.join(args.out, "overlay_modal_new_dashboard.png"))
         result["shots"].append("overlay_modal_new_dashboard.png")
         if modal_open:
@@ -390,7 +407,7 @@ def main() -> None:
             time.sleep(0.3)
         modal_closed = cdp.eval_js("!document.querySelector('.ui-overlay .ui-modal')")
         overlays["modal_new_dashboard"] = {"opened": bool(modal_open), "closed": modal_closed is True,
-                                           "ok": bool(modal_open) and modal_closed is True}
+                                           "button": new_btn, "ok": bool(modal_open) and modal_closed is True}
         result["sections"]["F_overlays"] = overlays
         print(f"[F] overlays: {overlays}")
 
