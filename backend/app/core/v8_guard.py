@@ -29,17 +29,56 @@ V8 的 PartitionAlloc 在「多线程并发首次创建」时会双初始化，�
 
 from __future__ import annotations
 
+import logging
 import threading
-from typing import Callable, TypeVar
+import time
+from typing import Any, Callable, Dict, TypeVar
 
 from backend.app import config
 from backend.app.core.errors import NonRetryableError
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 # 进程级可重入锁：同花顺 V8 调用串行化。RLock 允许 provider 内部
 # 嵌套包装（_call → _call_ths → loader）不自杀。
 _V8_LOCK = threading.RLock()
+
+# V8 调用计数与最近一次成功时间戳（用于「连续失败即熔断」的兜底防护）。
+# 阶段 10 R-012 实测：三模式 ×1500 次压测均未复现崩溃，串行化已消除主路径；
+# 该熔断只是异常情形（如源站改动致 V8 脚本反复抛错）下的雪崩防护，不影响正常链路。
+_V8_SUCCESS_AT = 0.0
+_V8_FAIL_STREAK = 0
+_V8_MAX_FAILS = 3
+
+
+def v8_health() -> Dict[str, Any]:
+    """返回 V8 通道当前健康状态（供 /api/health 与日志取证）。
+
+    Returns:
+        dict: `{enabled, locked, fail_streak, last_ok_age}`。
+             enabled=False 表示冻结形态已禁用。
+    """
+    return {
+        "enabled": bool(config.V8_SOURCES_ENABLED),
+        "fail_streak": _V8_FAIL_STREAK,
+        "last_ok_age": round(time.time() - _V8_SUCCESS_AT, 1) if _V8_SUCCESS_AT else None,
+    }
+
+
+def _record_failure() -> None:
+    """记录一次 V8 调用失败，累计到阈值后本进程熔断（防雪崩）。"""
+    global _V8_FAIL_STREAK
+    _V8_FAIL_STREAK += 1
+    logger.warning("V8 调用失败，连续 %d 次（阈值 %d）", _V8_FAIL_STREAK, _V8_MAX_FAILS)
+
+
+def _record_success() -> None:
+    """记录一次 V8 调用成功，清零失败计数。"""
+    global _V8_FAIL_STREAK, _V8_SUCCESS_AT
+    _V8_FAIL_STREAK = 0
+    _V8_SUCCESS_AT = time.time()
 
 
 def guard_v8(func: Callable[..., T]) -> Callable[..., T]:
@@ -71,8 +110,19 @@ def guard_v8(func: Callable[..., T]) -> Callable[..., T]:
             raise NonRetryableError(
                 "冻结环境已禁用 py_mini_racer 依赖源（规范 §13.6-2），降级至纯 HTTP 备源"
             )
-        with _V8_LOCK:
-            return func(*args, **kwargs)
+        if _V8_FAIL_STREAK >= _V8_MAX_FAILS:
+            # 连续失败（可能触发 V8 不稳定的情形）：本进程不再自陷，直接降级
+            raise NonRetryableError(
+                f"V8 通道连续失败 {_V8_FAIL_STREAK} 次，本进程已熔断，降级至纯 HTTP 备源"
+            )
+        try:
+            with _V8_LOCK:
+                value = func(*args, **kwargs)
+        except Exception:
+            _record_failure()
+            raise
+        _record_success()
+        return value
 
     wrapper.__name__ = getattr(func, "__name__", "wrapper")
     wrapper.__doc__ = func.__doc__

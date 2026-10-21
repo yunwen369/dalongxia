@@ -537,6 +537,33 @@ class TestRoutersContract:
         assert all(-0.1 <= item["sentiment"]["score"] <= 0.1 for item in items), "分值越界 ±0.1"
         assert all(item["sentiment"]["label"] for item in items)
 
+
+    def test_kline_sw_mapping_and_period(self, monkeypatch):
+        """申万 K 线备源：映射命中降级、缺失报错（供上层转空态）。"""
+        from backend.app.datasource import sector as sector_provider
+
+        assert sector_provider.SW_INDEX_CODE.get("半导体设备") == "850818.SI"
+
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            [{"日期": f"2026-10-0{i}", "开盘": "1", "最高": "2",
+              "最低": "0.5", "收盘": "1.5", "成交量": "10", "成交额": "15"} for i in range(1, 4)]
+        )
+
+        monkeypatch.setattr(sector_provider, "_call", lambda loader: frame)
+        daily = sector_provider._kline_sw("半导体设备", "daily")
+        assert len(daily) == 3 and daily[-1]["close"] == 1.5
+        weekly = sector_provider._kline_sw("半导体设备", "weekly")
+        assert len(weekly) < 3  # 日线聚合为周线
+
+        monkeypatch.setattr(sector_provider, "SW_INDEX_CODE", {})
+        try:
+            sector_provider._kline_sw("半导体设备", "daily")
+            raise AssertionError("映射缺失应抛 ValueError")
+        except ValueError:
+            pass
+
     def test_news_flash_empty_is_success(self, monkeypatch):
         """空数据铁律：provider 返回 [] → error=null + items:[] + count:0（不进错误态）。"""
         from backend.app.datasource import news as news_provider

@@ -340,18 +340,6 @@ def sector_kline(
 
     cache_key = f"sector:kline:{selected}:{board}:{period}"
 
-    if selected not in ("hk", "us") and not config.V8_SOURCES_ENABLED:
-        # 冻结环境禁用 V8 源（§13.6-2）：A 股板块指数日线仅有同花顺通道
-        return _pack(
-            {"items": [], "board": board, "period": period, "market": selected, "available": False},
-            "本地口径",
-            "安装版不提供同花顺板块指数日线（规范 §13.6-2 禁用 V8 依赖源）；"
-            "可改用个股 K 线与板块行情",
-            None,
-            "不可用",
-            False,
-        )
-
     if selected in ("hk", "us"):
         candidates: List[Any] = [
             ("腾讯", "腾讯/指数日线（境外简化建模，板块名需命中主要指数）",
@@ -377,7 +365,17 @@ def sector_kline(
 
     result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "board": board, "period": period})
+        # 板块指数 K 线属派生能力：同花顺禁用后由申万指数承接（§13.6-2），
+        # 申万名录未收录该板块名时按「空态 + 中文说明」处理，不伪装成通道故障。
+        return _pack(
+            {"items": [], "board": board, "period": period, "market": selected, "available": False},
+            "本地口径",
+            "暂未收录该板块的指数序列（同花顺通道在安装版不可用，申万行业名录未覆盖该名称）。"
+            "可查看板块行情或用同源行业（如「半导体设备」）对比。",
+            None,
+            "不可用",
+            False,
+        )
     data = result["data"] or {}
     items = data.get("items") or []
     as_of = f"{items[-1].get('date')} 15:00:00" if items else None
@@ -488,13 +486,15 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
         )
 
     if not config.V8_SOURCES_ENABLED:
-        # 冻结环境禁用 V8 源（§13.6-2）：板块资金流仅有同花顺通道，
-        # 按空/错分离如实标注不可用（空 items + 中文说明），不伪造数据、不落错误态。
+        # 冻结环境禁用 V8 源（§13.6-2）：板块资金流唯一通道为同花顺（V8 签名）。
+        # 经实测（阶段 10 L-4）：东财板块资金流走 push2（本机被重置）、
+        # ak.stock_fund_flow_concept 名义"概念"实为同花顺 V8 源、自下而上聚合需数百次
+        # HTTP 不可行。故如实返回空态 + 指引（改用个股四档资金流，该通道纯 HTTP 可用）。
         return _pack(
             {"items": [], "count": 0, "market": selected, "available": False},
             "本地口径",
-            "安装版不提供同花顺板块资金流通道（规范 §13.6-2 禁用 V8 依赖源）；"
-            "可查看板块行情与个股四档资金流",
+            "安装版不提供板块资金流（唯一来源为同花顺 V8 通道，规范 §13.6-2 禁用）。"
+            "可改用「个股 → 资金分布」查看单只标的的四档真实资金流。",
             None,
             "不可用",
             False,

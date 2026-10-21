@@ -38,6 +38,7 @@ from backend.app.datasource import tencent, utils
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
 netfix.apply_netfix()
+from backend.app.datasource.sw_board_map import SW_INDEX_CODE
 import akshare as ak  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -715,7 +716,55 @@ def get_sector_kline(board: str, period: str = "daily", market: str = "cn") -> D
         except Exception as exc:  # noqa: BLE001 - 记录后尝试下一级
             errors.append(f"{kind}:{type(exc).__name__}")
             logger.info("板块K线降级：%s %s 失败（%s）", kind, board, type(exc).__name__)
+    # A 股备源：申万行业指数日线（纯 HTTP，冻结环境可用；命名不一致时按缺失处理）
+    try:
+        items = _kline_sw(board, period)
+        return {"board": board, "period": period, "items": items, "index_code": SW_INDEX_CODE.get(board),
+                "model": "申万指数日线"}
+    except Exception as exc:  # noqa: BLE001 - 映射缺失或接口失败 → 透出给上层空态
+        errors.append(f"申万:{type(exc).__name__}")
     raise ValueError("板块 K 线全部通道失败：" + "，".join(errors))
+
+
+def _kline_sw(board: str, period: str) -> List[Dict[str, Any]]:
+    """申万行业指数日线（纯 HTTP 备源，冻结环境可用）。
+
+    来源：`ak.index_hist_sw(symbol=代码)`，列 代码/日期/收盘/开盘/最高/最低/成交量/成交额。
+    映射表由 `sw_board_map.SW_INDEX_CODE`（497 个申万一/二/三级行业，见该文件说明）承载；
+    同花顺板块名与申万行业名命名不一致时按缺失处理，不伪造指数。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 板块名无申万映射或接口返回空数据时抛出。
+    """
+    code = SW_INDEX_CODE.get(board)
+    if not code:
+        raise ValueError(f"申万行业映射缺失：{board}")
+    _ensure_enabled()
+    symbol = code.split(".")[0]
+    frame = _call(lambda: ak.index_hist_sw(symbol=symbol, period="day"))
+    rows: List[Dict[str, Any]] = []
+    for row in _clean_records(frame):
+        rows.append(
+            {
+                "date": str(row.get("日期"))[:10],
+                "open": _round(_num(row.get("开盘"))),
+                "high": _round(_num(row.get("最高"))),
+                "low": _round(_num(row.get("最低"))),
+                "close": _round(_num(row.get("收盘"))),
+                "volume": _round(_num(row.get("成交量")), 0),
+                "amount": _round(_num(row.get("成交额")), 0),
+            }
+        )
+    if not rows:
+        raise ValueError(f"申万行业指数日线为空：{board}")
+    return _aggregate_period(rows, period)
 
 
 def _sina_label(board: str) -> Optional[str]:

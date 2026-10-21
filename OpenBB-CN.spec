@@ -46,6 +46,17 @@ hiddenimports += [
     'pythonnet',
     'clr_loader',
 ]
+# lxml 的 C 扩展（etree/html/_elementtree）与实体映射不被自动收全，
+# 冻结形态下 akshare 的 read_html 通道会抛 LibNotFoundError（阶段 10 L-4 实测发现）
+for package in ('lxml', 'lxml.etree', 'lxml.html', 'lxml.objectify', 'lxml.html.clean'):
+    try:
+        pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hidden
+    except Exception:  # noqa: BLE001 - 单个子包缺失不影响整体
+        pass
+
 for package in ('webview', 'pythonnet', 'clr_loader', 'bottle', 'proxy_tools'):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     datas += pkg_datas
