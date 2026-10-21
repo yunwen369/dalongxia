@@ -24,13 +24,27 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_enabled() -> None:
-    """检查腾讯源开关；被环境变量禁用时立即失败，供降级链切换。"""
+    """检查腾讯源开关；被环境变量禁用时立即失败，供降级链切换。
+
+    Raises:
+        NonRetryableError: 腾讯源已被 OPENBB_DISABLE_TENCENT 禁用。
+    """
     if not config.PROVIDER_SWITCHES.get("tencent", True):
         raise NonRetryableError("腾讯源已被 OPENBB_DISABLE_TENCENT 禁用")
 
 
 def _split_quote_body(text: str) -> List[str]:
-    """从 v_sh600519="..." 中取出字段数组。"""
+    """从 v_sh600519="..." 中取出字段数组。
+
+    Args:
+        text: 待解析或清洗的文本。
+
+    Returns:
+        list[str]: 字符串列表。
+
+    Raises:
+        ValueError: 腾讯报价返回格式异常。
+    """
     if '="' not in text:
         raise ValueError("腾讯报价返回格式异常")
     body = text.split('="', 1)[1].rstrip('";\n\r ')
@@ -153,6 +167,9 @@ def get_index_quotes(market: str = "all") -> List[Dict[str, Any]]:
 
     Returns:
         List[Dict[str, Any]]: 指数报价列表。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
     selected = [
@@ -188,7 +205,16 @@ def get_index_quotes(market: str = "all") -> List[Dict[str, Any]]:
 
 
 def _kline_key(period_key: str, adjust: str, is_index: bool = False) -> str:
-    """返回腾讯 K 线 JSON 中的数据键。"""
+    """返回腾讯 K 线 JSON 中的数据键。
+
+    Args:
+        period_key: 周期键名。
+        adjust: 复权方式：qfq=前复权 / hfq=后复权 / 空=不复权。
+        is_index: 是否为指数。
+
+    Returns:
+        str: 文本结果。
+    """
     if is_index:
         return period_key
     return f"{adjust}{period_key}" if adjust else period_key
@@ -199,6 +225,15 @@ def _parse_kline_rows(rows: List[List[Any]]) -> List[Dict[str, Any]]:
 
     腾讯行格式：[日期, 开, 收, 高, 低, 成交量(手), 成交额?]；
     成交额字段并非所有周期都返回，缺失时为 None。
+
+    Args:
+        rows: 数据行列表。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 腾讯 K 线返回空数据。
     """
     items: List[Dict[str, Any]] = []
     prev_close: Optional[float] = None
@@ -256,6 +291,9 @@ def get_kline(
 
     Returns:
         List[Dict[str, Any]]: 日期/开/收/高/低/量/额/涨跌幅。
+
+    Raises:
+        ValueError: 腾讯 K 线返回空数据。
     """
     _ensure_enabled()
     code, normalized_market, tencent_code = utils.normalize_symbol(symbol, market)
@@ -269,7 +307,14 @@ def get_kline(
     key = _kline_key(period_key, adjust_value)
 
     def fetch(param_code: str) -> List[Dict[str, Any]]:
-        """按给定腾讯代码请求并解析；返回空列表表示该代码无有效数据。"""
+        """按给定腾讯代码请求并解析；返回空列表表示该代码无有效数据。
+
+        Args:
+            param_code: 待校验的代码参数。
+
+        Returns:
+            list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+        """
         param = f"{param_code},{period_key},,,{limit_value},{adjust_value}"
         payload = utils.http_get_json(url, params={"param": param}, referer=config.TENCENT_REFERER)
         data = payload.get("data", {}).get(param_code, {})
@@ -337,6 +382,10 @@ def get_minute(symbol: str, market: str = "a", period: str = "1min") -> List[Dic
 
     Returns:
         List[Dict[str, Any]]: 时间/价格/成交量/成交额。
+
+    Raises:
+        NonRetryableError: 腾讯分时仅支持 1 分钟粒度。
+        ValueError: 腾讯分时返回空数据。
     """
     _ensure_enabled()
     if str(period).lower() not in ("1", "1min", "1m"):
@@ -345,7 +394,14 @@ def get_minute(symbol: str, market: str = "a", period: str = "1min") -> List[Dic
     url = f"{config.TENCENT_KLINE_BASE}/appstock/app/minute/query"
 
     def fetch(param_code: str) -> Dict[str, Any]:
-        """按给定腾讯代码取分时容器；返回 {date, data}。"""
+        """按给定腾讯代码取分时容器；返回 {date, data}。
+
+        Args:
+            param_code: 待校验的代码参数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         payload = utils.http_get_json(
             url,
             params={"code": param_code},
@@ -401,7 +457,14 @@ def get_minute(symbol: str, market: str = "a", period: str = "1min") -> List[Dic
 
 
 def _decode_hint(text: str) -> str:
-    """还原腾讯 smartbox 的 \\uXXXX 转义。"""
+    """还原腾讯 smartbox 的 \\uXXXX 转义。
+
+    Args:
+        text: 待解析或清洗的文本。
+
+    Returns:
+        str: 文本结果。
+    """
     try:
         return json.loads(f'"{text}"')
     except json.JSONDecodeError:
@@ -417,6 +480,9 @@ def get_search(keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
 
     Returns:
         List[Dict[str, Any]]: symbol/name/market/type/tencent_code。
+
+    Raises:
+        ValueError: 搜索关键词不能为空。
     """
     _ensure_enabled()
     query = (keyword or "").strip()

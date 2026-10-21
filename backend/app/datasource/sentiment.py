@@ -109,7 +109,16 @@ BOUND_STRONG = 0.06
 
 
 def _clamp(value: float, low: float, high: float) -> float:
-    """把数值限制在 [low, high] 区间。"""
+    """把数值限制在 [low, high] 区间。
+
+    Args:
+        value: 待处理数值。
+        low: 最低值。
+        high: 最高值。
+
+    Returns:
+        float: 数值结果。
+    """
     return max(low, min(high, value))
 
 
@@ -165,7 +174,14 @@ def _match_events(text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]
 
 
 def _source_weight(source: str) -> float:
-    """按来源返回可信度权重；未登记来源取 0.75。"""
+    """按来源返回可信度权重；未登记来源取 0.75。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Returns:
+        float: 数值结果。
+    """
     if not source:
         return DEFAULT_SOURCE_WEIGHT
     for name, weight in SOURCE_WEIGHTS.items():

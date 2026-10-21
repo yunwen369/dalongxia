@@ -33,18 +33,44 @@ router = APIRouter(prefix="/api/fund", tags=["基金"])
 
 
 def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。"""
+    """参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _not_found(message: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """未找到响应。"""
+    """未找到响应。
+
+    Args:
+        message: 中文提示文案。
+        data: 待包装或清洗的数据主体。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.NOT_FOUND, message, data=data or {})
 
 
 def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
           market_status: str = "T+1 公布净值") -> Dict[str, Any]:
-    """组装响应，附带数据源/口径/时间。"""
+    """组装响应，附带数据源/口径/时间。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update({
         "source": source,
@@ -57,7 +83,16 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
 
 
 def _run(key: str, ttl: int, loader):
-    """缓存执行，异常统一转中文错误。"""
+    """缓存执行，异常统一转中文错误。
+
+    Args:
+        key: 缓存键 / 字典键。
+        ttl: 缓存有效期（秒）。
+        loader: 缓存未命中时的加载函数（返回数据或 {data, error}）。
+
+    Returns:
+        dict: 函数内构造的结果字典。
+    """
     try:
         return cache.get_or_load(key, ttl, lambda: {"data": loader(), "error": None})
     except Exception as exc:  # noqa: BLE001 - 转结构化错误
@@ -70,7 +105,15 @@ def fund_search(
     q: str = Query(..., description="代码/简称/拼音"),
     limit: int = Query(20, ge=1, le=50),
 ) -> Dict[str, Any]:
-    """基金搜索。"""
+    """基金搜索。
+
+    Args:
+        q: 代码/简称/拼音。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     keyword = (q or "").strip()
     if not keyword:
         return _bad("q 参数不可为空")
@@ -86,7 +129,14 @@ def fund_search(
 
 @router.get("/realtime")
 def fund_realtime(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """最新净值与日涨幅（T+1 口径）。"""
+    """最新净值与日涨幅（T+1 口径）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -106,7 +156,16 @@ def fund_nav(
     page: int = Query(1, ge=1, le=200),
     size: int = Query(30, ge=1, le=500),
 ) -> Dict[str, Any]:
-    """净值历史。"""
+    """净值历史。
+
+    Args:
+        code: 6 位基金代码。
+        page: 页码（从 1 开始）。
+        size: 条数 / 字节数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -123,7 +182,14 @@ def fund_nav(
 
 @router.get("/holding")
 def fund_holding(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """重仓股（季报口径）。"""
+    """重仓股（季报口径）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -139,7 +205,14 @@ def fund_holding(code: str = Query(..., description="6 位基金代码")) -> Dic
 
 @router.get("/info")
 def fund_info(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """基金档案。"""
+    """基金档案。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -155,7 +228,14 @@ def fund_info(code: str = Query(..., description="6 位基金代码")) -> Dict[s
 
 @router.get("/performance")
 def fund_performance(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """阶段业绩与排名。"""
+    """阶段业绩与排名。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -175,7 +255,16 @@ def fund_drawdown(
     start: str = Query("", description="起始日期 YYYY-MM-DD"),
     end: str = Query("", description="结束日期 YYYY-MM-DD"),
 ) -> Dict[str, Any]:
-    """最大回撤（净值自算）。"""
+    """最大回撤（净值自算）。
+
+    Args:
+        code: 6 位基金代码。
+        start: 起始日期 YYYY-MM-DD。
+        end: 结束日期 YYYY-MM-DD。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -191,7 +280,14 @@ def fund_drawdown(
 
 @router.get("/dividend")
 def fund_dividend(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """分红记录。"""
+    """分红记录。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
@@ -208,7 +304,14 @@ def fund_dividend(code: str = Query(..., description="6 位基金代码")) -> Di
 
 @router.get("/position")
 def fund_position(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """持仓分布：蛋卷端点需登录，依规范禁用（如实标注，不编造）。"""
+    """持仓分布：蛋卷端点需登录，依规范禁用（如实标注，不编造）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")

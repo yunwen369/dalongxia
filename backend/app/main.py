@@ -139,7 +139,15 @@ def _find_port_owner(port: int) -> List[str]:
 
 
 def _port_error_message(port: int, pids: List[str]) -> str:
-    """生成端口占用的中文错误提示（含下一步操作）。"""
+    """生成端口占用的中文错误提示（含下一步操作）。
+
+    Args:
+        port: 端口号。
+        pids: 进程号列表。
+
+    Returns:
+        str: 文本结果。
+    """
     pid_text = "、".join(pids) if pids else "未知"
     hint = f"taskkill /PID {pids[0]} /F" if pids else f"netstat -ano | findstr :{port}"
     return (
@@ -150,7 +158,15 @@ def _port_error_message(port: int, pids: List[str]) -> str:
 
 
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    """把 HTTP 异常转换为统一 {data,error} 结构，避免英文堆栈外泄。"""
+    """把 HTTP 异常转换为统一 {data,error} 结构，避免英文堆栈外泄。
+
+    Args:
+        request: HTTP 请求对象。
+        exc: 捕获到的异常。
+
+    Returns:
+        JSONResponse: FastAPI 响应对象（统一错误体，中文文案且不泄露堆栈）。
+    """
     if exc.status_code == 404:
         message = "接口或页面不存在，请检查地址；接口清单请访问 /docs。"
     elif exc.status_code == 405:
@@ -165,7 +181,15 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
 async def _validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """把参数校验异常转换为中文提示。"""
+    """把参数校验异常转换为中文提示。
+
+    Args:
+        request: HTTP 请求对象。
+        exc: 捕获到的异常。
+
+    Returns:
+        JSONResponse: FastAPI 响应对象（统一错误体，中文文案且不泄露堆栈）。
+    """
     fields: List[str] = []
     for item in exc.errors():
         location = item.get("loc", [])
@@ -180,7 +204,15 @@ async def _validation_exception_handler(
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """兜底异常处理：记录完整堆栈到日志，前端只看到中文提示。"""
+    """兜底异常处理：记录完整堆栈到日志，前端只看到中文提示。
+
+    Args:
+        request: HTTP 请求对象。
+        exc: 捕获到的异常。
+
+    Returns:
+        JSONResponse: FastAPI 响应对象（统一错误体，中文文案且不泄露堆栈）。
+    """
     logger.exception("未捕获异常：%s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=200,
@@ -238,7 +270,11 @@ app = create_app()
 
 
 def main() -> None:
-    """源码模式启动入口：端口预检 -> 启动 uvicorn -> 延迟打开浏览器。"""
+    """源码模式启动入口：端口预检 -> 启动 uvicorn -> 延迟打开浏览器。
+
+    Raises:
+        SystemExit: 启动前置检查失败需要终止进程时抛出。
+    """
     import uvicorn
 
     logger.info("启动 %s %s（%s）", config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)

@@ -50,7 +50,11 @@ def guard_v8(func: Callable[..., T]) -> Callable[..., T]:
     """
 
     def wrapper(*args, **kwargs) -> T:
-        """加锁执行原函数；异常原样透传，由上层 resilient 决定重试或降级。"""
+        """加锁执行原函数；异常原样透传，由上层 resilient 决定重试或降级。
+
+        Returns:
+            T: 计算结果。
+        """
         with _V8_LOCK:
             return func(*args, **kwargs)
 

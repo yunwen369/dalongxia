@@ -35,12 +35,27 @@ _ALLOWED_MARKETS = ("a", "hk", "us")
 
 
 def _bad_request(message: str) -> Dict[str, Any]:
-    """返回参数错误响应。"""
+    """返回参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """把 with_fallback 的失败结果转换为统一错误响应。"""
+    """把 with_fallback 的失败结果转换为统一错误响应。
+
+    Args:
+        result: 上游返回结果。
+        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         code = ErrorCode(str(result.get("error_code")))
     except ValueError:
@@ -49,7 +64,16 @@ def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
 
 
 def _cached(key: str, ttl: int, loader) -> Dict[str, Any]:
-    """缓存优先执行；缓存层已处理空值防污染与磁盘兜底。"""
+    """缓存优先执行；缓存层已处理空值防污染与磁盘兜底。
+
+    Args:
+        key: 缓存键 / 字典键。
+        ttl: 缓存有效期（秒）。
+        loader: 缓存未命中时的加载函数（返回数据或 {data, error}）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return cache.get_or_load(key, ttl, loader)
 
 
@@ -61,7 +85,19 @@ def _pack(
     market_status: str,
     is_realtime: bool,
 ) -> Dict[str, Any]:
-    """组装成功响应，统一附带数据源/口径/时间/市场状态。"""
+    """组装成功响应，统一附带数据源/口径/时间/市场状态。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
+        is_realtime: 是否为盘中实时数据。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update(
         {
@@ -76,7 +112,14 @@ def _pack(
 
 
 def _kline_status(items: List[Dict[str, Any]]) -> tuple[Optional[str], str, bool]:
-    """K 线以最后一根日期作为数据时间，始终标记为日线收盘口径。"""
+    """K 线以最后一根日期作为数据时间，始终标记为日线收盘口径。
+
+    Args:
+        items: 记录列表。
+
+    Returns:
+        tuple[Optional[str], str, bool]: 计算结果。
+    """
     if not items:
         return None, "时间未知", False
     last_date = str(items[-1].get("date", ""))
@@ -100,7 +143,11 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
     cache_key = f"market:index:{selected}"
 
     def loader() -> Dict[str, Any]:
-        """指数快照加载器：腾讯优先，A股可降级新浪（口径注明无开高低）。"""
+        """指数快照加载器：腾讯优先，A股可降级新浪（口径注明无开高低）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         candidates: List[Any] = [
             ("腾讯", "腾讯/指数快照（A/港/美）", lambda: tencent.get_index_quotes(selected))
         ]
@@ -134,7 +181,15 @@ def market_index_kline(
     code: str = Query("000001", description="指数代码，如 000001/HSI/DJI"),
     period: str = Query("日k", description="日k/周k/月k"),
 ) -> Dict[str, Any]:
-    """指数 K 线。"""
+    """指数 K 线。
+
+    Args:
+        code: 指数代码，如 000001/HSI/DJI。
+        period: 日k/周k/月k。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         normalized_code, _ = utils.index_code_to_tencent(code)
         utils.period_to_tencent(period)
@@ -143,7 +198,11 @@ def market_index_kline(
     cache_key = f"market:index-kline:{normalized_code}:{period}"
 
     def loader() -> Dict[str, Any]:
-        """指数 K 线加载器：美股指数优先新浪（腾讯 fqkline 仅 1 根），A股腾讯优先。"""
+        """指数 K 线加载器：美股指数优先新浪（腾讯 fqkline 仅 1 根），A股腾讯优先。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         tencent_candidate = ("腾讯", f"腾讯/指数{period}", lambda: tencent.get_index_kline(normalized_code, period))
         sina_candidate = ("新浪", f"新浪/指数{period}", lambda: ashare.get_index_kline_sina(normalized_code, period))
         # 美股指数腾讯 fqkline 仅返回最近 1 根，优先新浪历史；A股指数腾讯优先、新浪兜底
@@ -175,7 +234,15 @@ def market_quote(
     symbol: str = Query(..., min_length=1, description="股票代码，如 600519"),
     market: str = Query("a", description="a/hk/us"),
 ) -> Dict[str, Any]:
-    """单只股票报价。"""
+    """单只股票报价。
+
+    Args:
+        symbol: 股票代码，如 600519。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 a/hk/us")
@@ -186,7 +253,11 @@ def market_quote(
     cache_key = f"market:quote:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
-        """个股报价加载器：A股腾讯→新浪；港美股东财（生产候选）→腾讯。"""
+        """个股报价加载器：A股腾讯→新浪；港美股东财（生产候选）→腾讯。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         candidates: List[Any] = [
             ("腾讯", "腾讯/实时快照（收盘后为最后成交快照）", lambda: tencent.get_quote(code, normalized_market))
         ]
@@ -222,7 +293,17 @@ def market_kline(
     period: str = Query("日k", description="日k/周k/月k"),
     adjust: str = Query("qfq", description="qfq/hfq/不复权"),
 ) -> Dict[str, Any]:
-    """股票 K 线（A股东财→新浪→腾讯；港美股腾讯）。"""
+    """股票 K 线（A股东财→新浪→腾讯；港美股腾讯）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        period: 日k/周k/月k。
+        adjust: qfq/hfq/不复权。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 a/hk/us")
@@ -235,7 +316,11 @@ def market_kline(
     cache_key = f"market:kline:{normalized_market}:{code}:{period}:{adjust_value}"
 
     def loader() -> Dict[str, Any]:
-        """K 线加载器：A股东财→新浪→腾讯，港美股东财→腾讯；复权口径随参数。"""
+        """K 线加载器：A股东财→新浪→腾讯，港美股东财→腾讯；复权口径随参数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", f"东财/{period}{'不复权' if not adjust_value else '前复权' if adjust_value == 'qfq' else '后复权'}",
@@ -282,7 +367,16 @@ def market_minute(
     market: str = Query("a", description="a/hk/us"),
     period: str = Query("1min", description="1/5/15/30/60 分钟"),
 ) -> Dict[str, Any]:
-    """分时数据（A股东财→新浪→腾讯；港美股腾讯）。"""
+    """分时数据（A股东财→新浪→腾讯；港美股腾讯）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        period: 1/5/15/30/60 分钟。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 a/hk/us")
@@ -296,7 +390,11 @@ def market_minute(
     cache_key = f"market:minute:{normalized_market}:{code}:{period_value}"
 
     def loader() -> Dict[str, Any]:
-        """分时加载器：A股东财→新浪→腾讯；港美股走腾讯 1 分钟（东财无稳定免费通道）。"""
+        """分时加载器：A股东财→新浪→腾讯；港美股走腾讯 1 分钟（东财无稳定免费通道）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", f"东财/{period_value}分钟", lambda: ashare.get_minute_em(code, period_value)),
@@ -352,14 +450,26 @@ def market_search(
     q: str = Query(..., min_length=1, description="代码/名称/拼音"),
     limit: int = Query(20, ge=1, le=50),
 ) -> Dict[str, Any]:
-    """智能联想搜索。"""
+    """智能联想搜索。
+
+    Args:
+        q: 代码/名称/拼音。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     keyword = (q or "").strip()
     if not keyword:
         return _bad_request("搜索关键词不能为空")
     cache_key = f"market:search:{keyword}:{limit}"
 
     def loader() -> Dict[str, Any]:
-        """标的搜索加载器：腾讯智能联想（无备源，空结果按空态返回）。"""
+        """标的搜索加载器：腾讯智能联想（无备源，空结果按空态返回）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("腾讯", "腾讯/智能联想", lambda: tencent.get_search(keyword, limit))],
             empty_value=[],
@@ -383,7 +493,15 @@ def market_profile(
     symbol: str = Query(..., min_length=1),
     market: str = Query("a", description="a/hk/us"),
 ) -> Dict[str, Any]:
-    """个股概况（A股东财→巨潮；港美股腾讯基础字段）。"""
+    """个股概况（A股东财→巨潮；港美股腾讯基础字段）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 a/hk/us")
@@ -394,7 +512,11 @@ def market_profile(
     cache_key = f"market:profile:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
-        """个股概况加载器：A股东财 F10；港美股由腾讯快照派生（标记简化建模）。"""
+        """个股概况加载器：A股东财 F10；港美股由腾讯快照派生（标记简化建模）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         if normalized_market == "a":
             candidates: List[Any] = [
                 ("东财", "东财/个股概况（日频）", lambda: ashare.get_profile_em(code)),
@@ -402,7 +524,11 @@ def market_profile(
             ]
         else:
             def basic_profile() -> Dict[str, Any]:
-                """境外简化概况：仅取腾讯快照可得字段，缺失项留空不臆造。"""
+                """境外简化概况：仅取腾讯快照可得字段，缺失项留空不臆造。
+
+                Returns:
+                    dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+                """
                 quote = tencent.get_quote(code, normalized_market)
                 return {
                     "symbol": code,

@@ -16,7 +16,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import certifi
 
@@ -29,7 +29,11 @@ _CERT_PATH: Optional[Path] = None  # 实际生效的 ASCII 证书路径
 
 
 def _iter_candidate_dirs() -> Iterator[Path]:
-    """按优先级产出可用的证书目录候选（全部要求纯 ASCII 路径）。"""
+    """按优先级产出可用的证书目录候选（全部要求纯 ASCII 路径）。
+
+    Returns:
+        Iterator[Path]: 计算结果。
+    """
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         yield Path(local_app_data) / "OpenBB-CN" / "certs"
@@ -40,7 +44,14 @@ def _iter_candidate_dirs() -> Iterator[Path]:
 
 
 def _is_writable_dir(directory: Path) -> bool:
-    """检测目录是否可创建且可写，避免选到只读路径。"""
+    """检测目录是否可创建且可写，避免选到只读路径。
+
+    Args:
+        directory: 目录路径。
+
+    Returns:
+        bool: 判定结果。
+    """
     try:
         directory.mkdir(parents=True, exist_ok=True)
         probe = directory / ".write_test"
@@ -108,11 +119,15 @@ def apply_netfix() -> Optional[Path]:
 
 
 def get_ca_bundle() -> Optional[str]:
-    """返回当前生效的 CA 证书路径，供诊断接口使用。"""
+    """返回当前生效的 CA 证书路径，供诊断接口使用。
+
+    Returns:
+        str | None: 文本；缺失返回 None。
+    """
     return str(_CERT_PATH) if _CERT_PATH else None
 
 
-def make_session():
+def make_session() -> "requests.Session":
     """创建绕过系统代理、带重试的 requests 会话。
 
     Returns:
@@ -145,7 +160,8 @@ def make_session():
     return session
 
 
-def http_request(method: str, url: str, *, timeout: Optional[int] = None, **kwargs):
+def http_request(method: str, url: str, *, timeout: Optional[int] = None,
+                 **kwargs) -> "requests.Response":
     """使用统一会话发起一次 HTTP 请求。
 
     Args:
@@ -169,7 +185,7 @@ def http_request(method: str, url: str, *, timeout: Optional[int] = None, **kwar
         session.close()
 
 
-def make_curl_session():
+def make_curl_session() -> Any:
     """创建 curl_cffi 会话，供需要浏览器指纹的源站使用。
 
     Returns:

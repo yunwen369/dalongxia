@@ -35,7 +35,11 @@ _A_SHARE = {
 
 @router.get("/status")
 def connectors_status() -> Dict[str, Any]:
-    """返回数据源开关与三市场能力矩阵。"""
+    """返回数据源开关与三市场能力矩阵。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     capability = overseas.capability_matrix()
     markets = {"a": _A_SHARE, "hk": capability["hk"], "us": capability["us"]}
 

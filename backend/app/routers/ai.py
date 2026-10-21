@@ -31,13 +31,21 @@ router = APIRouter(prefix="/api/ai", tags=["AI"])
 
 
 def _now() -> str:
-    """当前时间字符串（北京时间口径）。"""
+    """当前时间字符串（北京时间口径）。
+
+    Returns:
+        str: 文本结果。
+    """
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 @router.get("/config")
 def get_config() -> Dict[str, Any]:
-    """读取 AI 配置（密钥掩码）。"""
+    """读取 AI 配置（密钥掩码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     public = config.get_public_ai_config()
     return ok({
         **public,
@@ -55,6 +63,12 @@ def save_config(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
     Body:
         {base_url, api_key?, model?}；api_key 留空表示保留原值。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     base_url = str(payload.get("base_url") or "").strip()
     api_key = str(payload.get("api_key") or "").strip()
@@ -109,6 +123,12 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
     Body:
         {message} 或 {messages:[{role,content}, ...]}
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     raw_messages = payload.get("messages")
     messages: List[Dict[str, str]] = []

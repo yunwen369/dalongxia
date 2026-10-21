@@ -37,12 +37,27 @@ _ALLOWED_MARKETS = ("cn", "hk", "us")
 
 
 def _bad_request(message: str) -> Dict[str, Any]:
-    """参数错误响应。"""
+    """参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """把降级链失败结果转为统一错误响应，空结构保持与成功态同构。"""
+    """把降级链失败结果转为统一错误响应，空结构保持与成功态同构。
+
+    Args:
+        result: 上游返回结果。
+        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         code = ErrorCode(str(result.get("error_code")))
     except ValueError:
@@ -58,7 +73,19 @@ def _pack(
     market_status: str,
     is_realtime: bool,
 ) -> Dict[str, Any]:
-    """组装成功响应，统一附带数据源/口径/时间/市场状态。"""
+    """组装成功响应，统一附带数据源/口径/时间/市场状态。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
+        is_realtime: 是否为盘中实时数据。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update(
         {
@@ -73,7 +100,11 @@ def _pack(
 
 
 def _status_now() -> tuple[str, str, bool]:
-    """按当前时间推断市场状态与是否实时（收盘后为快照，不伪装实时）。"""
+    """按当前时间推断市场状态与是否实时（收盘后为快照，不伪装实时）。
+
+    Returns:
+        tuple[str, str, bool]: 计算结果。
+    """
     now = datetime.now()
     status, is_realtime = utils.classify_market_status(now, "a")
     return now.strftime("%Y-%m-%d %H:%M:%S"), status, is_realtime
@@ -98,7 +129,11 @@ def _run_chain(
     """
 
     def loader() -> Dict[str, Any]:
-        """实际取数入口，交给 with_fallback 逐源尝试。"""
+        """实际取数入口，交给 with_fallback 逐源尝试。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(candidates, empty_value=empty_value)
 
     return cache.get_or_load(cache_key, ttl, loader)
@@ -108,7 +143,14 @@ def _run_chain(
 # 一、行业 / 概念行情
 # =============================================================
 def _industry_cached(market: str) -> Dict[str, Any]:
-    """行业行情（带缓存）；heatmap/summary 复用同一份缓存，避免重复请求源站。"""
+    """行业行情（带缓存）；heatmap/summary 复用同一份缓存，避免重复请求源站。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if market in ("hk", "us"):
         candidates: List[Any] = [
             ("腾讯", "境外简化建模：主要指数+代表个股（无板块专项通道）",
@@ -126,7 +168,14 @@ def _industry_cached(market: str) -> Dict[str, Any]:
 
 
 def _concept_cached(market: str) -> Dict[str, Any]:
-    """概念行情（带缓存）。"""
+    """概念行情（带缓存）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if market in ("hk", "us"):
         candidates: List[Any] = [
             ("腾讯", "境外简化建模：港美股无免费概念板块通道", lambda: sector_provider.get_overseas_items(market)),
@@ -143,7 +192,14 @@ def _concept_cached(market: str) -> Dict[str, Any]:
 
 @router.get("/industry")
 def sector_industry(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
-    """行业板块行情列表（S-04 排行表数据源）。"""
+    """行业板块行情列表（S-04 排行表数据源）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -164,7 +220,14 @@ def sector_industry(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
 
 @router.get("/concept")
 def sector_concept(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
-    """概念板块行情列表（S-05 排行表数据源）。"""
+    """概念板块行情列表（S-05 排行表数据源）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -191,7 +254,15 @@ def sector_heatmap(
     market: str = Query("cn", description="cn/hk/us"),
     kind: str = Query("industry", description="industry/concept"),
 ) -> Dict[str, Any]:
-    """热力图节点（S-03）。value=abs(涨跌幅)，pct 保留原值供颜色与标签使用。"""
+    """热力图节点（S-03）。value=abs(涨跌幅)，pct 保留原值供颜色与标签使用。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        kind: 类别：industry=行业 / concept=概念。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -216,7 +287,14 @@ def sector_heatmap(
 
 @router.get("/summary")
 def sector_summary(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
-    """板块摘要（S-06）：领涨/领跌/净流入 Top3 + 成交额集中度。"""
+    """板块摘要（S-06）：领涨/领跌/净流入 Top3 + 成交额集中度。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -244,7 +322,16 @@ def sector_kline(
     period: str = Query("daily", description="daily/weekly/monthly"),
     market: str = Query("cn", description="cn/hk/us"),
 ) -> Dict[str, Any]:
-    """板块指数 K 线（V-01）。"""
+    """板块指数 K 线（V-01）。
+
+    Args:
+        board: 板块名，如 半导体。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if not board.strip():
         return _bad_request("board 参数不可为空")
     selected = (market or "cn").lower()
@@ -265,7 +352,11 @@ def sector_kline(
         ]
 
     def loader() -> Dict[str, Any]:
-        """板块 K 线取数。"""
+        """板块 K 线取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             candidates,
             empty_value={"items": [], "board": board, "period": period},
@@ -299,7 +390,15 @@ def sector_cons(
     board: str = Query(..., description="板块名"),
     market: str = Query("cn", description="cn/hk/us"),
 ) -> Dict[str, Any]:
-    """板块成分股（V-03）。"""
+    """板块成分股（V-03）。
+
+    Args:
+        board: 板块名。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if not board.strip():
         return _bad_request("board 参数不可为空")
     selected = (market or "cn").lower()
@@ -316,7 +415,11 @@ def sector_cons(
         )
 
     def loader() -> Dict[str, Any]:
-        """成分股取数：新浪 → 申万 → 东财，三个独立候选便于徽章如实显示命中源。"""
+        """成分股取数：新浪 → 申万 → 东财，三个独立候选便于徽章如实显示命中源。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [
                 ("新浪", "新浪/板块成分（权重按流通市值占比）",
@@ -354,7 +457,14 @@ def sector_cons(
 # =============================================================
 @router.get("/fundflow")
 def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
-    """板块资金流向（S-07）。主力净额/流入/流出为真实值；超大单/大单源不提供，返回 None。"""
+    """板块资金流向（S-07）。主力净额/流入/流出为真实值；超大单/大单源不提供，返回 None。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -366,7 +476,11 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
         )
 
     def loader() -> Dict[str, Any]:
-        """资金流取数（同花顺行业资金流）。"""
+        """资金流取数（同花顺行业资金流）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("同花顺", "同花顺/行业资金流（单位=亿元；无超大单/大单分项）",
               sector_provider.get_fundflow)],
@@ -394,7 +508,16 @@ def sector_trend(
     days: int = Query(30, ge=5, le=120, description="取最近 N 个交易日"),
     market: str = Query("cn", description="cn/hk/us"),
 ) -> Dict[str, Any]:
-    """多板块归一化走势对比（首个交易日=100），由板块 K 线聚合，不额外编造数据。"""
+    """多板块归一化走势对比（首个交易日=100），由板块 K 线聚合，不额外编造数据。
+
+    Args:
+        boards: 逗号分隔板块名，最多 6 个。
+        days: 取最近 N 个交易日。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "cn").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 cn/hk/us")
@@ -407,7 +530,11 @@ def sector_trend(
     cache_key = f"sector:trend:{selected}:{','.join(names)}:{days}"
 
     def loader() -> Dict[str, Any]:
-        """趋势取数：逐个板块复用 K 线，单板块失败不阻断整体。"""
+        """趋势取数：逐个板块复用 K 线，单板块失败不阻断整体。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [
                 ("同花顺", "同花顺/板块指数日线归一化（首日=100）",

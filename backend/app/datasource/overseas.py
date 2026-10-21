@@ -32,15 +32,32 @@ US_PREFIXES = ("105.", "106.", "107.")
 
 
 def _ensure_enabled(source: str) -> None:
-    """检查数据源开关。"""
+    """检查数据源开关。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     from backend.app import config
 
     if not config.PROVIDER_SWITCHES.get(source, True):
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
-def _call(func):
-    """统一包装 akshare 调用：本机 push2 系失败为确定性失效，直接降级。"""
+def _call(func) -> Any:
+    """统一包装 akshare 调用：本机 push2 系失败为确定性失效，直接降级。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     try:
         return func()
     except Exception as exc:  # noqa: BLE001
@@ -54,6 +71,16 @@ def get_quote_em(symbol: str, market: str) -> Dict[str, Any]:
     """东财港美股快照（生产候选；本机被源站重置）。
 
     实现方式：拉全市场快照后按代码查单条（东财无单只港美快照接口）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled("eastmoney")
     if market == "us":
@@ -92,7 +119,20 @@ def get_quote_em(symbol: str, market: str) -> Dict[str, Any]:
 
 
 def get_kline_em(symbol: str, market: str, period: str, adjust: str) -> List[Dict[str, Any]]:
-    """东财港美股 K 线（生产候选；本机被源站重置）。"""
+    """东财港美股 K 线（生产候选；本机被源站重置）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+        adjust: 复权方式：qfq=前复权 / hfq=后复权 / 空=不复权。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     _ensure_enabled("eastmoney")
     period_map = {"日k": "daily", "周k": "weekly", "月k": "monthly",
                   "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
@@ -119,7 +159,17 @@ def get_kline_em(symbol: str, market: str, period: str, adjust: str) -> List[Dic
 
 
 def _to_kline_rows(frame) -> List[Dict[str, Any]]:
-    """东财 K 线列（日期/开盘/收盘/最高/最低/成交量/成交额/涨跌幅）→ 统一结构。"""
+    """东财 K 线列（日期/开盘/收盘/最高/最低/成交量/成交额/涨跌幅）→ 统一结构。
+
+    Args:
+        frame: 源站原始表（pandas DataFrame）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 东财 K 线为空。
+    """
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
         items.append(
@@ -140,12 +190,24 @@ def _to_kline_rows(frame) -> List[Dict[str, Any]]:
 
 
 def get_minute(symbol: str, market: str) -> List[Dict[str, Any]]:
-    """分时：腾讯 1 分钟（东财港美分时无稳定免费通道，实测不可用）。"""
+    """分时：腾讯 1 分钟（东财港美分时无稳定免费通道，实测不可用）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return tencent.get_minute(symbol, market, "1min")
 
 
 def capability_matrix() -> Dict[str, Any]:
-    """港美股能力矩阵（供 /api/connectors/status 展示，D3 如实标注）。"""
+    """港美股能力矩阵（供 /api/connectors/status 展示，D3 如实标注）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {
         "us": {
             "quote": {"available": True, "source": "腾讯", "note": "收盘后为最后成交快照"},

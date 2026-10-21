@@ -49,7 +49,14 @@ EM_FHSP_REFERER = "https://fundf10.eastmoney.com/"
 
 
 def _num(value: Any) -> Optional[float]:
-    """安全转 float（字符串含 % 或空值返回 None）。"""
+    """安全转 float（字符串含 % 或空值返回 None）。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     if value is None:
         return None
     text = str(value).strip().replace("%", "")
@@ -62,12 +69,31 @@ def _num(value: Any) -> Optional[float]:
 
 
 def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
-    """保留小数位，None 原样返回。"""
+    """保留小数位，None 原样返回。
+
+    Args:
+        value: 待处理数值。
+        digits: 保留小数位数。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     return None if value is None else round(value, digits)
 
 
 def _danjuan(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """调用蛋卷接口，返回 data 段；result_code 非 0 视为失败（含需登录场景）。"""
+    """调用蛋卷接口，返回 data 段；result_code 非 0 视为失败（含需登录场景）。
+
+    Args:
+        path: 接口路径 / 文件路径。
+        params: 请求参数（查询串键值对）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     payload = utils.http_get_json(
         DANJUAN_BASE + path,
         params=params or {},
@@ -81,7 +107,18 @@ def _danjuan(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
 
 
 def get_search(keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """基金搜索（天天基金全量名录本地过滤，支持代码/简称/拼音）。"""
+    """基金搜索（天天基金全量名录本地过滤，支持代码/简称/拼音）。
+
+    Args:
+        keyword: 搜索关键词。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 关键词不可为空。
+    """
     text = (keyword or "").strip()
     if not text:
         raise ValueError("关键词不可为空")
@@ -108,7 +145,17 @@ def get_search(keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def get_detail(code: str) -> Dict[str, Any]:
-    """基金档案（蛋卷主源）。"""
+    """基金档案（蛋卷主源）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     data = _danjuan(f"/djapi/fund/{code}")
     if not data.get("fd_code"):
         raise ValueError(f"蛋卷未返回档案：{code}")
@@ -135,7 +182,17 @@ def get_detail(code: str) -> Dict[str, Any]:
 
 
 def get_derived(code: str) -> Dict[str, Any]:
-    """阶段业绩与排名（蛋卷 derived）。"""
+    """阶段业绩与排名（蛋卷 derived）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     data = _danjuan(f"/djapi/fund/derived/{code}")
     if not data:
         raise ValueError(f"蛋卷未返回业绩：{code}")
@@ -188,7 +245,19 @@ def get_derived(code: str) -> Dict[str, Any]:
 
 
 def get_nav(code: str, page: int = 1, size: int = 30) -> Dict[str, Any]:
-    """净值历史：蛋卷（size≤500）→ 东财 lsjz（pageSize 20，翻页换算）。"""
+    """净值历史：蛋卷（size≤500）→ 东财 lsjz（pageSize 20，翻页换算）。
+
+    Args:
+        code: 证券或基金代码。
+        page: 页码（从 1 开始）。
+        size: 条数 / 字节数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 蛋卷净值返回空。
+    """
     safe_size = max(1, min(size, 500))
     try:
         data = _danjuan(f"/djapi/fund/nav/history/{code}", {"page": page, "size": safe_size})
@@ -248,7 +317,17 @@ def get_nav(code: str, page: int = 1, size: int = 30) -> Dict[str, Any]:
 
 
 def _t1_latest(code: str) -> Dict[str, Any]:
-    """T+1 基准净值（蛋卷 derived → 东财 lsjz），供拟合估算取基准，不进入估值链。"""
+    """T+1 基准净值（蛋卷 derived → 东财 lsjz），供拟合估算取基准，不进入估值链。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     try:
         derived = get_derived(code)
         if derived.get("unit_nav") is not None:
@@ -281,6 +360,12 @@ def _batch_pct(codes: list) -> Dict[str, float]:
     """批量取 A 股涨跌幅（腾讯 q= 多代码，字段 32 为涨跌幅%）。
 
     单次请求替代 N 次串行请求，显著降低耗时与限频风险；解析失败返回空字典。
+
+    Args:
+        codes: 代码列表。
+
+    Returns:
+        dict: 指标名 → 数值。
     """
     if not codes:
         return {}
@@ -322,6 +407,12 @@ def get_fitted_estimate(code: str) -> Dict[str, Any]:
 
     Returns:
         dict: {pct, nav, nav_date, source, caliber, coverage, is_estimate}
+
+    Args:
+        code: 证券或基金代码。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     holding = get_holding(code)
     # 注意：这里必须取「T+1 基准净值」，不能调用 get_realtime——后者在增强通道开启时会
@@ -373,6 +464,12 @@ def get_realtime(code: str) -> Dict[str, Any]:
 
     Returns:
         dict: {code, nav, nav_date, day_growth, source, caliber, is_estimate, attempts}
+
+    Args:
+        code: 证券或基金代码。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     attempts: List[Dict[str, Any]] = []
 
@@ -471,6 +568,15 @@ def get_holding(code: str) -> Dict[str, Any]:
     （如 2026 年返回「1季度」+「2季度」两段，旧季度在前）。必须先取
     **最新季度**、再按「占净值比例」降序取前 10，否则拿到的是旧季报
     前 10（拟合估值权重偏差，属数据口径错误）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     year_now = date.today().year
     tried: List[str] = []
@@ -514,7 +620,14 @@ def get_holding(code: str) -> Dict[str, Any]:
 
 
 def get_info(code: str) -> Dict[str, Any]:
-    """基金档案聚合：蛋卷主源 + 雪球补字段（失败不影响主档）。"""
+    """基金档案聚合：蛋卷主源 + 雪球补字段（失败不影响主档）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     detail = get_detail(code)
     extra: Dict[str, Any] = {}
     try:
@@ -538,7 +651,14 @@ def get_info(code: str) -> Dict[str, Any]:
 
 
 def get_performance(code: str) -> Dict[str, Any]:
-    """阶段业绩（蛋卷 derived），附名称从档案接口取（derived 不含 fd_name）。"""
+    """阶段业绩（蛋卷 derived），附名称从档案接口取（derived 不含 fd_name）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     derived = get_derived(code)
     name = None
     try:
@@ -561,8 +681,16 @@ def get_drawdown(code: str, start: str = "", end: str = "") -> Dict[str, Any]:
     - 当前回撤 = NAV[-1] / peak[-1] - 1。
 
     Args:
+        start: 起始日期（YYYY-MM-DD）。
+        end: 结束日期（YYYY-MM-DD）。
         code: 基金代码。
         start/end: 可选日期过滤（YYYY-MM-DD），留空取全部。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     payload = get_nav(code, page=1, size=500)
     items = [item for item in payload["items"] if item.get("nav")]
@@ -608,7 +736,17 @@ def get_drawdown(code: str, start: str = "", end: str = "") -> Dict[str, Any]:
 
 
 def get_dividend(code: str) -> Dict[str, Any]:
-    """分红记录（东财 fhsp HTML 解析）。"""
+    """分红记录（东财 fhsp HTML 解析）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     html = utils.http_get_text(
         EM_FHSP_URL.format(code=code),
         referer=EM_FHSP_REFERER,
@@ -655,7 +793,17 @@ def get_dividend(code: str) -> Dict[str, Any]:
 
 
 def get_position(code: str) -> Dict[str, Any]:
-    """基金持仓分布：蛋卷该端点需登录，按规范禁用并如实说明。"""
+    """基金持仓分布：蛋卷该端点需登录，按规范禁用并如实说明。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 蛋卷 /djapi/fund/position 需登录态（实测 rc=300001），依规范禁用；可用「重仓股」（东财季报）替代，行业分布暂不可用。
+    """
     raise NonRetryableError(
         "蛋卷 /djapi/fund/position 需登录态（实测 rc=300001），依规范禁用；"
         "可用「重仓股」（东财季报）替代，行业分布暂不可用。"

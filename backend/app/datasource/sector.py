@@ -51,16 +51,32 @@ OVERSEAS_REPRESENTATIVES: Dict[str, List[str]] = {
 
 
 def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关，被环境变量禁用时抛出确定性异常（不重试）。"""
+    """检查数据源开关，被环境变量禁用时抛出确定性异常（不重试）。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     if not config.PROVIDER_SWITCHES.get(source, True):
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
-def _call(func):
+def _call(func) -> Any:
     """统一包装 akshare 调用。
 
     本机代理环境会让东财 push2 系抛 ProxyError，这类失败属确定性失效，
     重试只会放大无效请求，因此直接降级到备源。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
     """
     try:
         return func()
@@ -71,18 +87,31 @@ def _call(func):
         raise
 
 
-def _call_ths(func):
+def _call_ths(func) -> Any:
     """同花顺 V8 类调用的统一入口：进程级互斥 + 代理错误分类。
 
     同花顺 hexin-v 签名走 py_mini_racer（内嵌 V8），多线程并发首次创建
     MiniRacer 上下文会触发 PartitionAlloc 重复初始化 FATAL，整个 worker
     进程原生崩溃（实测并发必崩）。故全部同花顺调用经 v8_guard 串行化。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
     """
     return _call(guard_v8(func))
 
 
 def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """DataFrame → 可 JSON 序列化 records（NaN→None，numpy 标量→Python）。"""
+    """DataFrame → 可 JSON 序列化 records（NaN→None，numpy 标量→Python）。
+
+    Args:
+        frame: 源站原始表（pandas DataFrame）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     records: List[Dict[str, Any]] = []
     for raw in frame.to_dict("records"):
         row: Dict[str, Any] = {}
@@ -98,12 +127,27 @@ def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 def _num(value: Any) -> Optional[float]:
-    """安全转 float，None/空串/NaN 一律返回 None（空值不补 0）。"""
+    """安全转 float，None/空串/NaN 一律返回 None（空值不补 0）。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     return utils.to_float(value)
 
 
 def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
-    """统一保留小数位，None 原样返回。"""
+    """统一保留小数位，None 原样返回。
+
+    Args:
+        value: 待处理数值。
+        digits: 保留小数位数。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     return None if value is None else round(value, digits)
 
 
@@ -112,8 +156,17 @@ _LOOKUP: Dict[str, Any] = {}
 _LOOKUP_TS: Dict[str, float] = {}
 
 
-def _lookup(key: str, ttl: int, loader):
-    """进程内映射表缓存（仅用于「板块名→代码」这类低频变动字典）。"""
+def _lookup(key: str, ttl: int, loader) -> Any:
+    """进程内映射表缓存（仅用于「板块名→代码」这类低频变动字典）。
+
+    Args:
+        key: 缓存键 / 字典键。
+        ttl: 缓存有效期（秒）。
+        loader: 缓存未命中时的加载函数（返回数据或 {data, error}）。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+    """
     import time
 
     now = time.time()
@@ -132,6 +185,12 @@ def _industry_ths() -> List[Dict[str, Any]]:
     """同花顺行业汇总（主源）。
 
     实测列：板块/涨跌幅(%)/总成交量(万手)/总成交额(亿元)/净流入(亿元)/上涨家数/下跌家数/领涨股。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 同花顺行业汇总返回空数据。
     """
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_board_industry_summary_ths())
@@ -163,6 +222,16 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
 
     实测列：label/板块/公司家数/涨跌幅(%)/总成交额(元)/个股-涨跌幅/股票名称。
     新浪不提供「板块主力净流入」，故 net_inflow=None（空值显示无数据）。
+
+    Args:
+        indicator: 指标名（如 预测年报每股收益）。
+        kind: 类别：industry=行业 / concept=概念。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_sector_spot(indicator=indicator))
@@ -193,7 +262,14 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
 
 
 def _concept_ths_names() -> List[Dict[str, Any]]:
-    """同花顺概念名录（末级兜底：仅有名称/代码，无行情，pct/amount 为 None）。"""
+    """同花顺概念名录（末级兜底：仅有名称/代码，无行情，pct/amount 为 None）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 同花顺概念名录返回空数据。
+    """
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_board_concept_name_ths())
     items: List[Dict[str, Any]] = []
@@ -225,6 +301,15 @@ def _overseas_items(market: str) -> List[Dict[str, Any]]:
     """港美股「境外简化建模」：主要指数 + 代表个股（真实行情，非板块）。
 
     设计基准附录 B-1：akshare 1.19.1 无港美股板块专项免费通道，本批按此建模并如实标注口径。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 港美股代表标的返回空数据。
     """
     items: List[Dict[str, Any]] = []
     for quote in tencent.get_index_quotes(market):
@@ -269,19 +354,34 @@ def _overseas_items(market: str) -> List[Dict[str, Any]]:
 
 
 def get_industry(market: str = "cn") -> List[Dict[str, Any]]:
-    """行业板块行情列表（cn 主源同花顺；hk/us 境外简化建模）。"""
+    """行业板块行情列表（cn 主源同花顺；hk/us 境外简化建模）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     if market in ("hk", "us"):
         return _overseas_items(market)
     return _industry_ths()
 
 
 def get_industry_ths() -> List[Dict[str, Any]]:
-    """行业行情·主源（同花顺）。供路由层降级链直接调用。"""
+    """行业行情·主源（同花顺）。供路由层降级链直接调用。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return _industry_ths()
 
 
 def get_industry_sina() -> List[Dict[str, Any]]:
-    """行业行情·备源（新浪行业）。"""
+    """行业行情·备源（新浪行业）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return _sina_sector_items("新浪行业", "行业")
 
 
@@ -290,29 +390,54 @@ def get_industry_csrc() -> List[Dict[str, Any]]:
 
     注意：akshare 1.19.1 实测该分支抛 UnboundLocalError（上游解析缺陷），
     保留调用入口以便上游修复后自动生效，当前命中必然失败并降级，不得计入可用通道。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
     return _sina_sector_items("证监会行业", "行业")
 
 
 def get_concept(market: str = "cn") -> List[Dict[str, Any]]:
-    """概念板块行情列表。港美股无免费概念通道，返回空列表由上层渲染空态。"""
+    """概念板块行情列表。港美股无免费概念通道，返回空列表由上层渲染空态。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     if market in ("hk", "us"):
         return []
     return _sina_sector_items("概念", "概念")
 
 
 def get_concept_sina() -> List[Dict[str, Any]]:
-    """概念行情·主源（新浪概念）。"""
+    """概念行情·主源（新浪概念）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return _sina_sector_items("概念", "概念")
 
 
 def get_concept_ths() -> List[Dict[str, Any]]:
-    """概念行情·备源（同花顺概念名录，仅名称/代码，无行情）。"""
+    """概念行情·备源（同花顺概念名录，仅名称/代码，无行情）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return _concept_ths_names()
 
 
 def get_overseas_items(market: str) -> List[Dict[str, Any]]:
-    """港美股境外简化建模项（主要指数 + 代表个股）。"""
+    """港美股境外简化建模项（主要指数 + 代表个股）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return _overseas_items(market)
 
 
@@ -347,20 +472,50 @@ def heatmap_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def get_heatmap(market: str = "cn", kind: str = "industry") -> List[Dict[str, Any]]:
-    """热力图节点（直接取数版本，供测试/独立调用；路由层复用缓存后的同一派生函数）。"""
+    """热力图节点（直接取数版本，供测试/独立调用；路由层复用缓存后的同一派生函数）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        kind: 类别：industry=行业 / concept=概念。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     source = get_concept(market) if kind == "concept" else get_industry(market)
     return heatmap_from_items(source)
 
 
 def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[str, Any]:
-    """由行情列表派生板块摘要：领涨/领跌/主力净流入 Top3 + 成交额集中度。"""
+    """由行情列表派生板块摘要：领涨/领跌/主力净流入 Top3 + 成交额集中度。
+
+    Args:
+        items: 记录列表。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     def _pct_key(entry: Dict[str, Any]) -> float:
-        """按涨跌幅排序的取值函数，空值按 0 处理。"""
+        """按涨跌幅排序的取值函数，空值按 0 处理。
+
+        Args:
+            entry: 组件条目（含 id 与 span）。
+
+        Returns:
+            float: 数值结果。
+        """
         value = _num(entry.get("pct"))
         return value if value is not None else 0.0
 
     def _flow_key(entry: Dict[str, Any]) -> float:
-        """按净流入排序的取值函数，空值按 0 处理。"""
+        """按净流入排序的取值函数，空值按 0 处理。
+
+        Args:
+            entry: 组件条目（含 id 与 span）。
+
+        Returns:
+            float: 数值结果。
+        """
         value = _num(entry.get("net_inflow"))
         return value if value is not None else 0.0
 
@@ -376,7 +531,14 @@ def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[
     concentration = round(top10 / total * 100, 2) if total > 0 else None
 
     def _brief(entry: Dict[str, Any]) -> Dict[str, Any]:
-        """摘要卡只保留必要字段，避免把整表塞进首页。"""
+        """摘要卡只保留必要字段，避免把整表塞进首页。
+
+        Args:
+            entry: 组件条目（含 id 与 span）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return {
             "name": entry.get("name"),
             "pct": entry.get("pct"),
@@ -396,7 +558,14 @@ def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[
 
 
 def get_summary(market: str = "cn") -> Dict[str, Any]:
-    """板块摘要（直接取数版本）。"""
+    """板块摘要（直接取数版本）。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return summary_from_items(get_industry(market), market)
 
 
@@ -404,7 +573,14 @@ def get_summary(market: str = "cn") -> Dict[str, Any]:
 # 三、板块 K 线 / 成分股
 # =============================================================
 def _default_kline_range(days: int = 400) -> Tuple[str, str]:
-    """板块 K 线默认区间（同花顺接口必须显式传起止日期）。"""
+    """板块 K 线默认区间（同花顺接口必须显式传起止日期）。
+
+    Args:
+        days: 统计天数。
+
+    Returns:
+        Tuple[str, str]: 计算结果。
+    """
     end = date.today()
     start = end - timedelta(days=days)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
@@ -415,6 +591,17 @@ def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
 
     实测列：日期/开盘价/最高价/最低价/收盘价/成交量/成交额。
     同花顺仅提供日线，周/月线由本函数按日线聚合。
+
+    Args:
+        kind: 类别：industry=行业 / concept=概念。
+        board: 板块名称（与板块树中的名称一致）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
     start_text, end_text = _default_kline_range()
@@ -439,13 +626,28 @@ def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
 
 
 def _aggregate_period(rows: List[Dict[str, Any]], period: str) -> List[Dict[str, Any]]:
-    """把日线升频为周线/月线（开=首日开，收=末日收，高低取极值，量额求和）。"""
+    """把日线升频为周线/月线（开=首日开，收=末日收，高低取极值，量额求和）。
+
+    Args:
+        rows: 记录行列表。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     key = (period or "daily").lower()
     if key in ("daily", "日k", "day"):
         return rows
 
     def bucket(date_text: str) -> str:
-        """按周（ISO 周）或月分组，返回分组键。"""
+        """按周（ISO 周）或月分组，返回分组键。
+
+        Args:
+            date_text: 日期文本。
+
+        Returns:
+            str: 文本结果。
+        """
         try:
             day = date.fromisoformat(date_text)
         except ValueError:
@@ -480,6 +682,17 @@ def get_sector_kline(board: str, period: str = "daily", market: str = "cn") -> D
     """板块指数 K 线。返回 {items, board, period, index_code}。
 
     降级链：同花顺行业 → 同花顺概念 → 港美股/指数走腾讯指数 K 线。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: board 参数不可为空。
     """
     if not board:
         raise ValueError("board 参数不可为空")
@@ -509,10 +722,20 @@ def _sina_label(board: str) -> Optional[str]:
     """在新冠板块列表中反查 label（stock_sector_detail 必须传 label 而非名称）。
 
     板块名录变动极慢，映射表进程内缓存 1 小时，避免每次请求都拉两张全表。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        str | None: 文本；缺失返回 None。
     """
 
     def build() -> Dict[str, str]:
-        """构建 {板块名: label} 映射（概念优先，其次新浪行业）。"""
+        """构建 {板块名: label} 映射（概念优先，其次新浪行业）。
+
+        Returns:
+            dict: Dict[str, str] 结构的结果。
+        """
         mapping: Dict[str, str] = {}
         for indicator in ("新浪行业", "概念", "地域"):
             try:
@@ -535,6 +758,15 @@ def _cons_sina(board: str) -> List[Dict[str, Any]]:
 
     实测列：code/name/changepercent/trade/amount/nmc(流通市值)/mktcap。
     权重按流通市值占比计算（新浪不直接提供权重）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     label = _sina_label(board)
     if not label:
@@ -568,6 +800,15 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
     `sw_index_first_info`（31 个一级）均返回 行业代码/行业名称；
     `sw_index_third_cons(symbol=行业代码)` 对一/二/三级代码均可返回成分
     （实测 801081.SI 半导体二级返回 182 只），列含 股票代码/股票简称/价格/市值/近1日涨幅。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
 
@@ -577,6 +818,12 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         申万三个层级的 HTML 页面偶发返回空文档（akshare 解析抛 AttributeError），
         因此按「一级→二级→三级」顺序合并，且必须拿到一级名录才允许缓存，
         避免把残缺映射写进进程缓存导致后续请求持续失败。
+
+        Returns:
+            dict: Dict[str, str] 结构的结果。
+
+        Raises:
+            ValueError: 申万行业名录暂不可用（一级名录未取到）。
         """
         mapping: Dict[str, str] = {}
         first_ok = False
@@ -632,7 +879,17 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
 
 
 def _cons_em(board: str) -> List[Dict[str, Any]]:
-    """东财板块成分（生产环境备用；本机 push2 被源站重置，见 L-20）。"""
+    """东财板块成分（生产环境备用；本机 push2 被源站重置，见 L-20）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_board_industry_cons_em(symbol=board))
     rows = _clean_records(frame)
@@ -656,22 +913,50 @@ def _cons_em(board: str) -> List[Dict[str, Any]]:
 
 
 def _sort_cons(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """成分股按涨跌幅降序排列，缺失涨跌幅的排在末尾（不参与比较）。"""
+    """成分股按涨跌幅降序排列，缺失涨跌幅的排在末尾（不参与比较）。
+
+    Args:
+        items: 记录列表。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return sorted(items, key=lambda item: (_num(item.get("pct")) is None, -(_num(item.get("pct")) or 0.0)))
 
 
 def get_cons_sina(board: str) -> Dict[str, Any]:
-    """成分股·主源（新浪），返回结构供路由降级链直接使用。"""
+    """成分股·主源（新浪），返回结构供路由降级链直接使用。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {"board": board, "items": _sort_cons(_cons_sina(board)), "source_hint": "新浪"}
 
 
 def get_cons_sw(board: str) -> Dict[str, Any]:
-    """成分股·备源（申万，支持一/二/三级行业名）。"""
+    """成分股·备源（申万，支持一/二/三级行业名）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {"board": board, "items": _sort_cons(_cons_sw(board)), "source_hint": "申万"}
 
 
 def get_cons_em(board: str) -> Dict[str, Any]:
-    """成分股·三级兜底（东财；本机 push2 被重置，仅生产备用）。"""
+    """成分股·三级兜底（东财；本机 push2 被重置，仅生产备用）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {"board": board, "items": _sort_cons(_cons_em(board)), "source_hint": "东财"}
 
 
@@ -680,6 +965,16 @@ def get_cons(board: str, market: str = "cn") -> Dict[str, Any]:
 
     路由层使用 get_cons_sina / get_cons_sw / get_cons_em 三个独立候选，
     以便降级命中时徽章显示真实源名（§8 双徽章要求）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: board 参数不可为空。
     """
     if not board:
         raise ValueError("board 参数不可为空")
@@ -707,6 +1002,15 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
 
     实测列：行业/行业-涨跌幅/流入资金/流出资金/净额（单位=亿元）。
     源不提供超大单/大单分项 → super_big/big 置 None，前端显示「无数据」。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 同花顺板块资金流返回空数据。
     """
     if market in ("hk", "us"):
         return []
@@ -740,6 +1044,9 @@ def get_trend(boards: List[str], days: int = 30, market: str = "cn") -> Dict[str
         boards: 板块名列表（1–6 个）。
         days: 取最近 N 个交易日。
         market: cn/hk/us。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     series: List[Dict[str, Any]] = []
     failures: List[str] = []

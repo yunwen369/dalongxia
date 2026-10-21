@@ -209,7 +209,11 @@ class AIConfig:
 
     @property
     def configured(self) -> bool:
-        """判断 AI 配置是否完整可用。"""
+        """判断 AI 配置是否完整可用。
+
+        Returns:
+            bool: 判定结果。
+        """
         return bool(self.base_url and self.api_key and self.model)
 
 
@@ -267,7 +271,11 @@ def _read_ai_config_file(path: Path) -> Dict[str, Any]:
 
 
 def _first_non_empty(*values: Optional[str]) -> str:
-    """返回第一个非空字符串，用于多来源优先级取值。"""
+    """返回第一个非空字符串，用于多来源优先级取值。
+
+    Returns:
+        str: 文本结果。
+    """
     for value in values:
         if value is not None and str(value).strip():
             return str(value).strip()

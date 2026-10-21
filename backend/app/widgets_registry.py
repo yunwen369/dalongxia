@@ -42,6 +42,9 @@ def _widget(
         api: 绑定的接口路径列表。
         jump: 跳转目标路由（无跳转留空）。
         desc: 口径说明。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     return {
         "id": widget_id,
@@ -145,10 +148,21 @@ WIDGETS: List[Dict[str, Any]] = [
 
 
 def all_widgets() -> List[Dict[str, Any]]:
-    """返回全部组件元数据（按区块编号顺序）。"""
+    """返回全部组件元数据（按区块编号顺序）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return WIDGETS
 
 
 def by_page(page: str) -> List[Dict[str, Any]]:
-    """按页面筛选组件元数据。"""
+    """按页面筛选组件元数据。
+
+    Args:
+        page: 页面标识（视图 id，如 home/sectors/news）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     return [item for item in WIDGETS if item["page"] == page]

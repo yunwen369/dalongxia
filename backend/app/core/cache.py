@@ -50,13 +50,27 @@ def is_meaningful(value: Any) -> bool:
 
 
 def _disk_path(key: str) -> Path:
-    """把缓存键映射为磁盘文件路径（md5 避免中文与非法字符）。"""
+    """把缓存键映射为磁盘文件路径（md5 避免中文与非法字符）。
+
+    Args:
+        key: 缓存键 / 字典键。
+
+    Returns:
+        Path: 文件路径。
+    """
     digest = hashlib.md5(key.encode("utf-8")).hexdigest()
     return config.CACHE_DIR / f"{digest}.json"
 
 
 def _read_disk(key: str) -> Optional[Tuple[float, Any]]:
-    """读取磁盘缓存，返回 (时间戳, 值)；失败时返回 None。"""
+    """读取磁盘缓存，返回 (时间戳, 值)；失败时返回 None。
+
+    Args:
+        key: 缓存键 / 字典键。
+
+    Returns:
+        Optional[Tuple[float, Any]]: 可能为 None。
+    """
     path = _disk_path(key)
     if not path.is_file():
         return None
@@ -70,7 +84,16 @@ def _read_disk(key: str) -> Optional[Tuple[float, Any]]:
 
 
 def _write_disk(key: str, timestamp: float, value: Any) -> bool:
-    """原子写入磁盘缓存，成功返回 True。"""
+    """原子写入磁盘缓存，成功返回 True。
+
+    Args:
+        key: 缓存键 / 字典键。
+        timestamp: 时间戳（秒）。
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        bool: 判定结果。
+    """
     path = _disk_path(key)
     temp_path = path.with_suffix(".tmp")
     try:

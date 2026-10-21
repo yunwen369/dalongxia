@@ -31,7 +31,7 @@ import akshare as ak  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-def _call_ak(func):
+def _call_ak(func) -> Any:
     """调用 akshare；把本机代理配置导致的 ProxyError 视为确定性失效，跳过重试。
 
     Args:
@@ -50,13 +50,27 @@ def _call_ak(func):
 
 
 def _ensure_enabled(source: str) -> None:
-    """检查数据源开关。"""
+    """检查数据源开关。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     if not config.PROVIDER_SWITCHES.get(source, True):
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """把 DataFrame 转为可 JSON 序列化的 records（NaN→None，numpy 标量→Python）。"""
+    """把 DataFrame 转为可 JSON 序列化的 records（NaN→None，numpy 标量→Python）。
+
+    Args:
+        frame: 源站原始表（pandas DataFrame）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     records: List[Dict[str, Any]] = []
     for raw in frame.to_dict("records"):
         row: Dict[str, Any] = {}
@@ -72,7 +86,14 @@ def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 def _date_text(value: Any) -> str:
-    """把日期/时间列统一为字符串。"""
+    """把日期/时间列统一为字符串。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        str: 文本结果。
+    """
     if value is None:
         return ""
     if isinstance(value, (datetime, date)):
@@ -81,14 +102,31 @@ def _date_text(value: Any) -> str:
 
 
 def _default_range(days: int = 730) -> tuple[str, str]:
-    """返回默认起止日期（YYYYMMDD）。"""
+    """返回默认起止日期（YYYYMMDD）。
+
+    Args:
+        days: 统计天数。
+
+    Returns:
+        tuple[str, str]: 计算结果。
+    """
     end = date.today()
     start = end - timedelta(days=days)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
 
 def _period_to_ak(period: str) -> str:
-    """把周期转换为 akshare 参数。"""
+    """把周期转换为 akshare 参数。
+
+    Args:
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        ValueError: period 仅支持 daily/weekly/monthly。
+    """
     key = (period or "daily").strip().lower()
     mapping = {"daily": "daily", "weekly": "weekly", "monthly": "monthly",
                "日k": "daily", "周k": "weekly", "月k": "monthly"}
@@ -108,6 +146,9 @@ def get_kline_em(symbol: str, period: str = "daily", adjust: str = "qfq") -> Lis
 
     Returns:
         List[Dict[str, Any]]: 日期/开/收/高/低/量/额/涨跌幅。
+
+    Raises:
+        ValueError: 东财K线返回空数据。
     """
     _ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
@@ -145,7 +186,20 @@ def get_kline_em(symbol: str, period: str = "daily", adjust: str = "qfq") -> Lis
 
 
 def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> List[Dict[str, Any]]:
-    """新浪 K 线（备源，仅日/周/月日线）。"""
+    """新浪 K 线（备源，仅日/周/月日线）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+        adjust: 复权方式：qfq=前复权 / hfq=后复权 / 空=不复权。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        NonRetryableError: 新浪K线仅支持日线。
+        ValueError: 新浪K线返回空数据。
+    """
     _ensure_enabled("sina")
     if _period_to_ak(period) != "daily":
         # 新浪 stock_zh_a_daily 只有日线，周/月线必须交给腾讯备源，避免口径错位
@@ -184,7 +238,17 @@ def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> L
 
 
 def get_quote_sina(symbol: str) -> Dict[str, Any]:
-    """新浪单只 A股报价（腾讯主源失败时的备源）。"""
+    """新浪单只 A股报价（腾讯主源失败时的备源）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 新浪报价返回格式异常。
+    """
     _ensure_enabled("sina")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
     url = f"{config.SINA_QUOTE_BASE}/list={tencent_code}"
@@ -247,7 +311,18 @@ def get_quote_sina(symbol: str) -> Dict[str, Any]:
 
 
 def get_minute_em(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
-    """东财分时（主源）。"""
+    """东财分时（主源）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 东财分时返回空数据。
+    """
     _ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(
@@ -279,7 +354,18 @@ def get_minute_em(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
 
 
 def get_minute_sina(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
-    """新浪分时（备源）。"""
+    """新浪分时（备源）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 新浪分时返回空数据。
+    """
     _ensure_enabled("sina")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(
@@ -320,6 +406,12 @@ def get_index_quotes_sina() -> List[Dict[str, Any]]:
 
     新浪 s_ 前缀接口不返回开高低，只返回名称/点位/涨跌/涨跌幅/成交量/成交额；
     这里如实标注“无开高低”，并由路由层在徽章显示备源。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 新浪指数快照返回空数据。
     """
     _ensure_enabled("sina")
     selected = [item for item in config.MARKET_INDEXES if item["market"] == "a"]
@@ -370,7 +462,18 @@ def get_index_quotes_sina() -> List[Dict[str, Any]]:
 
 
 def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any]]:
-    """新浪指数日线（A股指数备源；美股指数用 index_us_stock_sina）。"""
+    """新浪指数日线（A股指数备源；美股指数用 index_us_stock_sina）。
+
+    Args:
+        code: 证券或基金代码。
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 新浪指数K线返回空数据。
+    """
     _ensure_enabled("sina")
     normalized, _ = utils.index_code_to_tencent(code)
     if normalized in ("DJI", "IXIC", "INX"):
@@ -420,7 +523,17 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
 
 
 def get_profile_em(symbol: str) -> Dict[str, Any]:
-    """东财个股概况（主源，失败时由巨潮备源兜底）。"""
+    """东财个股概况（主源，失败时由巨潮备源兜底）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 东财个股概况返回空数据。
+    """
     _ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(lambda: ak.stock_individual_info_em(symbol=code))
@@ -447,7 +560,17 @@ def get_profile_em(symbol: str) -> Dict[str, Any]:
 
 
 def get_profile_em_f10(symbol: str) -> Dict[str, Any]:
-    """东财 F10 个股概况（直连 datacenter，不使用 V8/mini_racer）。"""
+    """东财 F10 个股概况（直连 datacenter，不使用 V8/mini_racer）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 东财F10个股概况返回空数据。
+    """
     _ensure_enabled("em_f10")
     code, _, secucode = utils.normalize_symbol(symbol, "a")
     secucode = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ' if code.startswith(('0', '2', '3')) else 'BJ'}"
@@ -532,6 +655,15 @@ def get_spot_row(symbol: str) -> Dict[str, Any]:
     """东财全市场快照中的单行（仅封装，不进入单标的主降级链）。
 
     全市场接口一次返回 5000+ 行且易限频，单标的报价优先用腾讯/新浪。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 东财全市场快照返回空数据。
     """
     _ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")

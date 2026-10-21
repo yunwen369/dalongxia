@@ -28,7 +28,16 @@ router = APIRouter(prefix="/api/portfolio", tags=["持仓"])
 
 
 def _pack(data: Dict[str, Any], caliber: str, as_of: str = None) -> Dict[str, Any]:
-    """组装响应（持仓为本地数据，source 固定「本地持仓」）。"""
+    """组装响应（持仓为本地数据，source 固定「本地持仓」）。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update({
         "source": "本地持仓",
@@ -43,7 +52,11 @@ def _pack(data: Dict[str, Any], caliber: str, as_of: str = None) -> Dict[str, An
 @router.get("")
 @router.get("/")
 def list_portfolio() -> Dict[str, Any]:
-    """读取全部持仓。"""
+    """读取全部持仓。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     data = store.load()
     return _pack(
         {"items": data.get("items") or [], "count": len(data.get("items") or []),
@@ -56,7 +69,14 @@ def list_portfolio() -> Dict[str, Any]:
 @router.post("")
 @router.post("/")
 def create_portfolio(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """新增持仓。"""
+    """新增持仓。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         item = store.add_item(payload)
     except ValueError as exc:
@@ -67,7 +87,15 @@ def create_portfolio(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @router.put("/{item_id}")
 def update_portfolio(item_id: str = Path(...), payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """更新持仓。"""
+    """更新持仓。
+
+    Args:
+        item_id: 条目主键。
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         item = store.update_item(item_id, payload)
     except KeyError:
@@ -80,7 +108,14 @@ def update_portfolio(item_id: str = Path(...), payload: Dict[str, Any] = Body(..
 
 @router.delete("/{item_id}")
 def delete_portfolio(item_id: str = Path(...)) -> Dict[str, Any]:
-    """删除持仓。"""
+    """删除持仓。
+
+    Args:
+        item_id: 条目主键。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         store.remove_item(item_id)
     except KeyError:
@@ -91,10 +126,18 @@ def delete_portfolio(item_id: str = Path(...)) -> Dict[str, Any]:
 
 @router.get("/analysis")
 def portfolio_analysis() -> Dict[str, Any]:
-    """持仓分析：本币市值/盈亏 + 人民币折算 + 市场分布。"""
+    """持仓分析：本币市值/盈亏 + 人民币折算 + 市场分布。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
 
     def loader() -> Dict[str, Any]:
-        """逐条取价并计算（单条失败不阻断整体）。"""
+        """逐条取价并计算（单条失败不阻断整体）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return store.analyze()
 
     data = cache.get_or_load("portfolio:analysis", 30, loader)

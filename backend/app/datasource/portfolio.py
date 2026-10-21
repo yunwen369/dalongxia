@@ -40,12 +40,20 @@ FX_REFERER = "https://finance.sina.com.cn/"
 
 
 def _empty_store() -> Dict[str, Any]:
-    """返回空持仓结构。"""
+    """返回空持仓结构。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {"items": [], "updated_at": None}
 
 
 def load() -> Dict[str, Any]:
-    """读取持仓文件；文件不存在或损坏时返回空结构（不抛错，避免首页白屏）。"""
+    """读取持仓文件；文件不存在或损坏时返回空结构（不抛错，避免首页白屏）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if not PORTFOLIO_FILE.exists():
         return _empty_store()
     try:
@@ -60,7 +68,11 @@ def load() -> Dict[str, Any]:
 
 
 def save(payload: Dict[str, Any]) -> None:
-    """原子写入持仓文件（先写 .tmp 再替换），并更新时间戳。"""
+    """原子写入持仓文件（先写 .tmp 再替换），并更新时间戳。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+    """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
     payload["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -75,6 +87,12 @@ def _validate(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     Raises:
         ValueError: 市场/代码/份额/成本不合法。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     market = str(payload.get("market") or "a").lower()
     if market not in CURRENCY_BY_MARKET:
@@ -104,7 +122,14 @@ def _validate(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def add_item(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """新增持仓并返回该条记录。"""
+    """新增持仓并返回该条记录。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     item = _validate(payload)
     store = load()
     store["items"].append(item)
@@ -113,7 +138,18 @@ def add_item(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def update_item(item_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """按 id 更新持仓（部分字段）。"""
+    """按 id 更新持仓（部分字段）。
+
+    Args:
+        item_id: 条目主键。
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        KeyError: 必需字段缺失时抛出。
+    """
     store = load()
     for index, item in enumerate(store["items"]):
         if item.get("id") != item_id:
@@ -129,7 +165,14 @@ def update_item(item_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def remove_item(item_id: str) -> None:
-    """按 id 删除持仓。"""
+    """按 id 删除持仓。
+
+    Args:
+        item_id: 条目主键。
+
+    Raises:
+        KeyError: 必需字段缺失时抛出。
+    """
     store = load()
     remaining = [item for item in store["items"] if item.get("id") != item_id]
     if len(remaining) == len(store["items"]):
@@ -172,6 +215,9 @@ def _price_of(item: Dict[str, Any]) -> Tuple[Optional[float], Optional[str], str
 
     Returns:
         tuple: (price, price_time, source_label)；失败返回 (None, None, 原因)。
+
+    Args:
+        item: 单条记录。
     """
     market = item.get("market")
     symbol = item.get("symbol")
@@ -190,7 +236,11 @@ def _price_of(item: Dict[str, Any]) -> Tuple[Optional[float], Optional[str], str
 
 
 def analyze() -> Dict[str, Any]:
-    """持仓分析：逐条算本币市值/盈亏，再折算人民币并给出市场分布。"""
+    """持仓分析：逐条算本币市值/盈亏，再折算人民币并给出市场分布。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     store = load()
     fx = get_fx()
     items: List[Dict[str, Any]] = []

@@ -29,12 +29,29 @@ router = APIRouter(prefix="/api/sentiment", tags=["情绪"])
 
 
 def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。"""
+    """参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str] = None) -> Dict[str, Any]:
-    """组装响应，附带口径与时间（情绪为派生指标，非实时行情）。"""
+    """组装响应，附带口径与时间（情绪为派生指标，非实时行情）。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update({
         "source": source,
@@ -47,7 +64,15 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str] 
 
 
 def _samples(items: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
-    """取影响度最高的若干条作为证据样本（按 |score| 倒序）。"""
+    """取影响度最高的若干条作为证据样本（按 |score| 倒序）。
+
+    Args:
+        items: 记录列表。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     ordered = sorted(
         items,
         key=lambda item: abs(float((item.get("sentiment") or {}).get("score") or 0.0)),
@@ -74,14 +99,27 @@ def sentiment_stock(
     name: str = Query("", description="证券名称（用于提升命中率，可选）"),
     limit: int = Query(20, ge=1, le=100),
 ) -> Dict[str, Any]:
-    """个股情绪：个股新闻 + 快讯中命中代码/名称的条目。"""
+    """个股情绪：个股新闻 + 快讯中命中代码/名称的条目。
+
+    Args:
+        symbol: 证券代码。
+        name: 证券名称（用于提升命中率，可选）。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     code = str(symbol).strip()
     if not code:
         return _bad("symbol 参数不可为空")
     keyword = name.strip()
 
     def loader() -> Dict[str, Any]:
-        """个股新闻取数（东财）。"""
+        """个股新闻取数（东财）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         try:
             return {"items": news_provider.get_stock_news(code, limit), "error": None}
         except Exception as exc:  # noqa: BLE001 - 失败由上层转空态
@@ -113,7 +151,16 @@ def sentiment_market(
     region: str = Query("cn", description="cn=国内快讯 / global=全球快讯"),
     limit: int = Query(60, ge=1, le=200),
 ) -> Dict[str, Any]:
-    """市场情绪温度：国内快讯或全球快讯聚合，可限定板块。"""
+    """市场情绪温度：国内快讯或全球快讯聚合，可限定板块。
+
+    Args:
+        board: 可选：限定板块。
+        region: cn=国内快讯 / global=全球快讯。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if region not in ("cn", "global"):
         return _bad("region 仅支持 cn/global")
     keywords: List[str] = []
@@ -124,7 +171,11 @@ def sentiment_market(
         keywords = node.get("keywords") or [board]
 
     def loader() -> Dict[str, Any]:
-        """按区域取新闻池（cn=财联社，global=三源合并）。"""
+        """按区域取新闻池（cn=财联社，global=三源合并）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         if region == "cn":
             return {"items": news_provider.get_flash(limit), "error": None}
         merged = news_provider.dedup(news_provider.get_global(limit))
@@ -154,7 +205,15 @@ def sentiment_board(
     board: str = Query(..., description="板块名（末级/二级/一级）"),
     limit: int = Query(50, ge=1, le=200),
 ) -> Dict[str, Any]:
-    """板块级情绪：板块命中快讯聚合。"""
+    """板块级情绪：板块命中快讯聚合。
+
+    Args:
+        board: 板块名（末级/二级/一级）。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     name = (board or "").strip()
     if not name:
         return _bad("board 参数不可为空")
@@ -163,7 +222,11 @@ def sentiment_board(
         return api_error(ErrorCode.NOT_FOUND, "板块不存在，请从板块树中选择。", data={"board": name})
 
     def loader() -> Dict[str, Any]:
-        """板块快讯取数。"""
+        """板块快讯取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return {"items": news_provider.search_by_sector(name, "time", max(limit, 60)), "error": None}
 
     cached = cache.get_or_load(f"sentiment:board:{name}:{limit}", config.TTL["news_flash"], loader)

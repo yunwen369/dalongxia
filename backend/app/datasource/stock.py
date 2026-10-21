@@ -58,13 +58,30 @@ NEGATIVE_WORDS = (
 
 
 def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关。"""
+    """检查数据源开关。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     if not config.PROVIDER_SWITCHES.get(source, True):
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
-def _call(func):
-    """统一包装 akshare 调用：确定性网络失效直接降级，不做无效重试。"""
+def _call(func) -> Any:
+    """统一包装 akshare 调用：确定性网络失效直接降级，不做无效重试。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     try:
         return func()
     except Exception as exc:  # noqa: BLE001
@@ -80,6 +97,12 @@ def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
     注意：`date`/`datetime`/`Timestamp` 若不转字符串，会在缓存落盘时触发
     `TypeError: Object of type date is not JSON serializable`（同花顺盈利预测的
     机构明细表含「报告日期」列，实测必现）。
+
+    Args:
+        frame: 源站原始表（pandas DataFrame）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
     records: List[Dict[str, Any]] = []
     for raw in frame.to_dict("records"):
@@ -98,17 +121,39 @@ def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 def _num(value: Any) -> Optional[float]:
-    """安全转 float，空值返回 None（不补 0）。"""
+    """安全转 float，空值返回 None（不补 0）。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     return utils.to_float(value)
 
 
 def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
-    """保留小数位。"""
+    """保留小数位。
+
+    Args:
+        value: 待处理数值。
+        digits: 保留小数位数。
+
+    Returns:
+        float | None: 数值；无法解析时返回 None（不补 0）。
+    """
     return None if value is None else round(value, digits)
 
 
 def _secucode(symbol: str) -> str:
-    """6 位代码 → 东财 SECUCODE（688012.SH / 000001.SZ / 830799.BJ）。"""
+    """6 位代码 → 东财 SECUCODE（688012.SH / 000001.SZ / 830799.BJ）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        str: 文本结果。
+    """
     code = str(symbol).strip()
     if code.startswith(("6", "9")):
         return f"{code}.SH"
@@ -118,7 +163,14 @@ def _secucode(symbol: str) -> str:
 
 
 def _sina_prefix(symbol: str) -> str:
-    """6 位代码 → 新浪前缀（sh/sz/bj），供 stock_financial_report_sina 使用。"""
+    """6 位代码 → 新浪前缀（sh/sz/bj），供 stock_financial_report_sina 使用。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        str: 文本结果。
+    """
     code = str(symbol).strip()
     if code.startswith(("6", "9")):
         return f"sh{code}"
@@ -138,6 +190,9 @@ def _em_report(report_name: str, filter_text: str, *, sort: str = "", size: int 
 
     Returns:
         List[Dict[str, Any]]: 数据行列表，空结果返回 []。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
     """
     params: Dict[str, Any] = {
         "reportName": report_name,
@@ -167,6 +222,16 @@ def get_profile(symbol: str, market: str = "a") -> Dict[str, Any]:
     """公司概况：基本信息 / 股本市值 / 主营范围。
 
     港美股无 F10 通道，退化为「腾讯行情 + 境外简化建模」口径（D3 已确认的缺口）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     if market in ("hk", "us"):
         quote = tencent.get_quote(symbol, market)
@@ -247,6 +312,13 @@ def _holders_of(report: str, symbol: str) -> Tuple[List[Dict[str, Any]], Optiona
     口径说明：东财 F10 的 END_DATE 既包含定期报告期，也包含临时披露日（如 2026-09-09 仅 3 名股东）。
     「十大股东」应以**完整披露期**为准，故按 END_DATE 倒序取第一个股东数 ≥5 的期次；
     若全部期次都不足 5 名，则退回最新一期并如实返回实际条数（不编造、不补齐）。
+
+    Args:
+        report: 报告标识。
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        Tuple[List[Dict[str, Any]], Optional[str]]: 计算结果。
     """
     rows = _em_report(report, f'(SECUCODE="{_secucode(symbol)}")', sort="END_DATE", size=400)
     if not rows:
@@ -286,7 +358,17 @@ def _holders_of(report: str, symbol: str) -> Tuple[List[Dict[str, Any]], Optiona
 
 
 def get_holders(symbol: str) -> Dict[str, Any]:
-    """十大股东 + 十大流通股东（最新一期）。"""
+    """十大股东 + 十大流通股东（最新一期）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     top, top_date = _holders_of("RPT_F10_EH_HOLDERS", symbol)
     free, free_date = _holders_of("RPT_F10_EH_FREEHOLDERS", symbol)
     if not top and not free:
@@ -309,6 +391,16 @@ def get_fund_dist(symbol: str) -> Dict[str, Any]:
     数据源：新浪 MoneyFlow.ssi_ssfx_flzjtj，字段 r0/r1/r2/r3 分别对应四档，
     `*_in` 为流入、`*_out` 为流出，单位元。占比以四档流入+流出合计为基数，
     与东财「主力净流入占成交额比」口径接近但非完全相同，已在接口说明书注明。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 新浪资金流返回格式异常。
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     code = str(symbol).strip()
     url = (
@@ -368,6 +460,12 @@ def _sentiment_of(text: str) -> Dict[str, Any]:
     """本地词典情绪打分（确定性规则，±1 分制映射为利好/利空/中性）。
 
     仅用于新闻标签，不使用大模型，符合「严禁把 LLM 当数据源」。
+
+    Args:
+        text: 待解析或清洗的文本。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     body = text or ""
     pos = sum(1 for word in POSITIVE_WORDS if word in body)
@@ -383,7 +481,15 @@ def _sentiment_of(text: str) -> Dict[str, Any]:
 
 
 def get_news(symbol: str, limit: int = 10) -> List[Dict[str, Any]]:
-    """个股相关新闻（东财 stock_news_em）。"""
+    """个股相关新闻（东财 stock_news_em）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_news_em(symbol=str(symbol)))
     items: List[Dict[str, Any]] = []
@@ -412,7 +518,17 @@ _RATING_NAMES = {0: "买入", 1: "增持", 2: "中性", 3: "减持", 4: "卖出"
 
 
 def _forecast_ths(symbol: str) -> Dict[str, Any]:
-    """同花顺 worth.html：评级分布（结构化 span）+ 研报摘要中的目标价。"""
+    """同花顺 worth.html：评级分布（结构化 span）+ 研报摘要中的目标价。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     url = f"https://basic.10jqka.com.cn/{symbol}/worth.html"
     html = utils.http_get_text(url, encoding="gbk", timeout=config.DATASOURCE_TIMEOUT)
     counts = re.findall(r'profit-forecast-tab-count-(\d)">(\d+)<', html)
@@ -445,7 +561,17 @@ def _forecast_ths(symbol: str) -> Dict[str, Any]:
 
 
 def _forecast_em(symbol: str) -> Dict[str, Any]:
-    """备源：东财研报列表（评级分布/机构家数，无目标价）。"""
+    """备源：东财研报列表（评级分布/机构家数，无目标价）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_research_report_em(symbol=str(symbol)))
     rows = _clean_records(frame)
@@ -472,7 +598,14 @@ def _forecast_em(symbol: str) -> Dict[str, Any]:
 
 
 def get_forecast(symbol: str) -> Dict[str, Any]:
-    """机构预测：评级分布 + 目标价区间。"""
+    """机构预测：评级分布 + 目标价区间。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return _forecast_ths(symbol)
 
 
@@ -503,7 +636,14 @@ def _estimates_ths(symbol: str) -> Dict[str, Any]:
     """
 
     def _table(indicator: str) -> List[Dict[str, Any]]:
-        """取单张预测表；上游返回空 DataFrame 时归一为空列表。"""
+        """取单张预测表；上游返回空 DataFrame 时归一为空列表。
+
+        Args:
+            indicator: 指标名（如 预测年报每股收益）。
+
+        Returns:
+            list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+        """
         frame = _call(lambda: ak.stock_profit_forecast_ths(symbol=str(symbol), indicator=indicator))
         if frame is None or len(frame) == 0:
             return []
@@ -588,6 +728,15 @@ def get_financial_summary(symbol: str) -> Dict[str, Any]:
 
     实测结构：行=指标（含「常用指标/每股指标/盈利能力」分组），列=报告期（倒序）。
     取「常用指标」分组的 6 个关键指标 × 最近 8 个报告期。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_abstract(symbol=str(symbol)))
@@ -624,7 +773,15 @@ def get_financial_summary(symbol: str) -> Dict[str, Any]:
 
 
 def _annual_columns(periods: List[str], years: int) -> List[str]:
-    """从报告期列中筛出年报（1231 结尾），按时间倒序取最近 N 年。"""
+    """从报告期列中筛出年报（1231 结尾），按时间倒序取最近 N 年。
+
+    Args:
+        periods: 报告期列表。
+        years: 统计年数。
+
+    Returns:
+        list[str]: 字符串列表。
+    """
     annual = [p for p in periods if str(p).endswith("1231")]
     return annual[:years]
 
@@ -633,6 +790,16 @@ def get_financial_trend(symbol: str, years: int = 5) -> Dict[str, Any]:
     """财务趋势四序列：营业总收入 / 净利润 / 营收增速 / 净利增速（年报口径）。
 
     数据源：新浪 stock_financial_report_sina（利润表，单位元）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        years: 统计年数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_report_sina(stock=_sina_prefix(symbol), symbol="利润表"))
@@ -645,14 +812,28 @@ def get_financial_trend(symbol: str, years: int = 5) -> Dict[str, Any]:
     annual = [row for row in rows if str(row.get("报告日") or "").endswith("1231")][-years:]
 
     def series(key: str) -> List[Optional[float]]:
-        """取出某字段的年度序列（元）。"""
+        """取出某字段的年度序列（元）。
+
+        Args:
+            key: 缓存键 / 字典键。
+
+        Returns:
+            list: List[Optional[float]] 结构的结果。
+        """
         return [_num(row.get(key)) for row in annual]
 
     revenue = series("营业总收入")
     profit = series("净利润")
 
     def growth(values: List[Optional[float]]) -> List[Optional[float]]:
-        """同比增速（%）；首年无上期基数返回 None，不补 0。"""
+        """同比增速（%）；首年无上期基数返回 None，不补 0。
+
+        Args:
+            values: 数值列表。
+
+        Returns:
+            list: List[Optional[float]] 结构的结果。
+        """
         result: List[Optional[float]] = []
         for index, value in enumerate(values):
             if index == 0 or value is None or values[index - 1] in (None, 0):
@@ -691,7 +872,18 @@ INDICATOR_KEYS: List[str] = [
 
 
 def get_financial_indicator(symbol: str, limit: int = 8) -> Dict[str, Any]:
-    """财务指标明细（新浪 stock_financial_analysis_indicator，最近 N 期）。"""
+    """财务指标明细（新浪 stock_financial_analysis_indicator，最近 N 期）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_analysis_indicator(symbol=str(symbol), start_year="2022"))
     rows = _clean_records(frame)
@@ -741,6 +933,12 @@ def get_financial_report(symbol: str, statement: str = "利润表", limit: int =
         symbol: 6 位代码。
         statement: 资产负债表 / 利润表 / 现金流量表。
         limit: 返回期数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        ValueError: statement 仅支持资产负债表/利润表/现金流量表。
     """
     allowed = ("资产负债表", "利润表", "现金流量表")
     if statement not in allowed:
@@ -770,6 +968,13 @@ def get_realtime_panel(symbol: str, market: str = "a") -> Dict[str, Any]:
 
     每块独立容错：单块失败记入 `blocks` 状态并返回 None，不让整页白屏，
     前端按块渲染空态或错误态（§7 四态就地渲染）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     blocks: Dict[str, str] = {}
     panel: Dict[str, Any] = {"symbol": symbol, "market": market}

@@ -36,12 +36,27 @@ _ALLOWED_MARKETS = ("a", "hk", "us")
 
 
 def _bad_request(message: str) -> Dict[str, Any]:
-    """参数错误响应。"""
+    """参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """降级链失败 → 统一错误响应。"""
+    """降级链失败 → 统一错误响应。
+
+    Args:
+        result: 上游返回结果。
+        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         code = ErrorCode(str(result.get("error_code")))
     except ValueError:
@@ -57,7 +72,19 @@ def _pack(
     market_status: str,
     is_realtime: bool,
 ) -> Dict[str, Any]:
-    """组装成功响应，附带数据源/口径/时间/市场状态。"""
+    """组装成功响应，附带数据源/口径/时间/市场状态。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
+        is_realtime: 是否为盘中实时数据。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update(
         {
@@ -72,7 +99,15 @@ def _pack(
 
 
 def _normalize(symbol: str, market: str) -> Optional[tuple]:
-    """校验并归一化代码；非法代码返回 None（由调用方转参数错误）。"""
+    """校验并归一化代码；非法代码返回 None（由调用方转参数错误）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        Optional[tuple]: 可能为 None。
+    """
     try:
         return utils.normalize_symbol(symbol, market)
     except Exception:  # noqa: BLE001 - 归一化失败即参数问题
@@ -80,7 +115,14 @@ def _normalize(symbol: str, market: str) -> Optional[tuple]:
 
 
 def _quote_status(quote: Optional[Dict[str, Any]]) -> tuple[Optional[str], str, bool]:
-    """从报价中取口径三要素，缺失时退回当前时间快照。"""
+    """从报价中取口径三要素，缺失时退回当前时间快照。
+
+    Args:
+        quote: 报价快照。
+
+    Returns:
+        tuple[Optional[str], str, bool]: 计算结果。
+    """
     if quote:
         return quote.get("quote_time"), quote.get("market_status") or "快照", bool(quote.get("is_realtime"))
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -95,7 +137,15 @@ def stock_profile(
     symbol: str = Query(..., description="证券代码，如 688012"),
     market: str = Query("a", description="a/hk/us"),
 ) -> Dict[str, Any]:
-    """公司概况（ST-08）。"""
+    """公司概况（ST-08）。
+
+    Args:
+        symbol: 证券代码，如 688012。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     selected = (market or "a").lower()
     if selected not in _ALLOWED_MARKETS:
         return _bad_request("market 仅支持 a/hk/us")
@@ -105,7 +155,11 @@ def stock_profile(
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """概况取数（东财 F10 主源；港美股退化为腾讯行情）。"""
+        """概况取数（东财 F10 主源；港美股退化为腾讯行情）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [
                 ("东财", "东财 F10 基本资料 + 东财估值 + 腾讯报价",
@@ -125,14 +179,25 @@ def stock_profile(
 
 @router.get("/holders")
 def stock_holders(symbol: str = Query(..., description="6 位 A股代码")) -> Dict[str, Any]:
-    """十大股东与十大流通股东（ST-10）。"""
+    """十大股东与十大流通股东（ST-10）。
+
+    Args:
+        symbol: 6 位 A股代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized = _normalize(symbol, "a")
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """股东取数（东财 F10，最新一期）。"""
+        """股东取数（东财 F10，最新一期）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("东财", "东财 F10 十大股东/十大流通股东（最新一期）",
               lambda: stock_provider.get_holders(code))],
@@ -161,6 +226,13 @@ def stock_realtime_panel(
 
     单块失败不影响整体：`blocks` 字段逐块标注 ok/failed/unsupported，
     前端据此就地渲染空态或错误态，不整页白屏。
+
+    Args:
+        symbol: 证券代码。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     selected = (market or "a").lower()
     if selected not in _ALLOWED_MARKETS:
@@ -171,7 +243,11 @@ def stock_realtime_panel(
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """聚合取数：报价/K线/分时走腾讯，资金/新闻/预测走新浪与东财/同花顺。"""
+        """聚合取数：报价/K线/分时走腾讯，资金/新闻/预测走新浪与东财/同花顺。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [
                 ("腾讯", "腾讯报价+腾讯K线/分时 + 新浪资金流 + 东财新闻 + 同花顺机构预测",
@@ -193,7 +269,15 @@ def stock_realtime_panel(
 # 三、财务四接口（A股专用）
 # =============================================================
 def _require_a_share(symbol: str, market: str) -> Optional[Dict[str, Any]]:
-    """财务接口仅支持 A股；非 A股返回明确中文说明的错误结构。"""
+    """财务接口仅支持 A股；非 A股返回明确中文说明的错误结构。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict | None: 命中时返回记录，缺失返回 None。
+    """
     if market != "a":
         return api_error(
             ErrorCode.EMPTY_DATA,
@@ -205,14 +289,25 @@ def _require_a_share(symbol: str, market: str) -> Optional[Dict[str, Any]]:
 
 @router.get("/financial-summary")
 def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代码")) -> Dict[str, Any]:
-    """财务摘要（ST-09 关键指标表：EPS/毛利率/ROE）。"""
+    """财务摘要（ST-09 关键指标表：EPS/毛利率/ROE）。
+
+    Args:
+        symbol: 6 位 A股代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized = _normalize(symbol, "a")
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """新浪财务摘要取数。"""
+        """新浪财务摘要取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("新浪", "新浪/财务摘要（常用指标，报告期倒序）",
               lambda: stock_provider.get_financial_summary(code))],
@@ -238,6 +333,13 @@ def stock_estimates(
 
     对应原版 FinScope 的 analyst estimates；同花顺盈利预测为等价数据源
     （覆盖机构聚合 + 逐机构明细 + 营业收入等详细指标），港美股无免费通道如实空态。
+
+    Args:
+        symbol: 证券代码，如 688012。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     selected = (market or "a").lower()
     if selected not in _ALLOWED_MARKETS:
@@ -252,6 +354,9 @@ def stock_estimates(
 
         validator 恒真：空数据由 provider 以 available=false 表达（§6.3 空/错分离），
         不得因“无机构覆盖”落入错误态；通道异常仍由 with_fallback 转错误码。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
             [("同花顺", "同花顺/盈利预测（机构覆盖聚合 + 逐机构明细）",
@@ -282,14 +387,26 @@ def stock_financial_trend(
     symbol: str = Query(..., description="6 位 A股代码"),
     years: int = Query(5, ge=1, le=10, description="年报年数"),
 ) -> Dict[str, Any]:
-    """财务趋势四序列（ST-09 趋势图）。"""
+    """财务趋势四序列（ST-09 趋势图）。
+
+    Args:
+        symbol: 6 位 A股代码。
+        years: 年报年数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized = _normalize(symbol, "a")
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """新浪利润表取数并计算同比。"""
+        """新浪利润表取数并计算同比。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("新浪", "新浪/利润表年报（营收/净利及同比）",
               lambda: stock_provider.get_financial_trend(code, years))],
@@ -311,14 +428,26 @@ def stock_financial_indicator(
     symbol: str = Query(..., description="6 位 A股代码"),
     limit: int = Query(8, ge=1, le=20, description="返回期数"),
 ) -> Dict[str, Any]:
-    """财务指标明细（ST-09 指标页签）。"""
+    """财务指标明细（ST-09 指标页签）。
+
+    Args:
+        symbol: 6 位 A股代码。
+        limit: 返回期数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized = _normalize(symbol, "a")
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """新浪财务分析指标取数。"""
+        """新浪财务分析指标取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("新浪", "新浪/财务分析指标（最近 N 期）",
               lambda: stock_provider.get_financial_indicator(code, limit))],
@@ -341,7 +470,16 @@ def stock_financial_report(
     statement: str = Query("利润表", description="资产负债表/利润表/现金流量表"),
     limit: int = Query(8, ge=1, le=20, description="返回期数"),
 ) -> Dict[str, Any]:
-    """三大报表（ST-09 报表页签）。"""
+    """三大报表（ST-09 报表页签）。
+
+    Args:
+        symbol: 6 位 A股代码。
+        statement: 资产负债表/利润表/现金流量表。
+        limit: 返回期数。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     normalized = _normalize(symbol, "a")
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
@@ -350,7 +488,11 @@ def stock_financial_report(
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
-        """新浪三表取数。"""
+        """新浪三表取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("新浪", f"新浪/{statement}（最近 {limit} 期）",
               lambda: stock_provider.get_financial_report(code, statement, limit))],

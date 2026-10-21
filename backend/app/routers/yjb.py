@@ -44,7 +44,16 @@ CONSENT_TEXT = """# 养基宝 / 盘中估值 合规告知书
 
 
 def _pack(data: Dict[str, Any], source: str, caliber: str) -> Dict[str, Any]:
-    """统一响应（连接器状态为配置/状态快照，非行情）。"""
+    """统一响应（连接器状态为配置/状态快照，非行情）。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update({
         "source": source,
@@ -58,7 +67,11 @@ def _pack(data: Dict[str, Any], source: str, caliber: str) -> Dict[str, Any]:
 
 @router.get("/status")
 def yjb_status() -> Dict[str, Any]:
-    """连接器状态（不含任何 token 内容）。"""
+    """连接器状态（不含任何 token 内容）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     data = yangjibao.status()
     data["consent_text"] = CONSENT_TEXT
     return _pack(data, "本地配置", "token 仅以 DPAPI 加密存储，禁用明文/日志/前端回显")
@@ -66,7 +79,14 @@ def yjb_status() -> Dict[str, Any]:
 
 @router.post("/consent")
 def yjb_consent(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """确认或拒绝合规告知书。"""
+    """确认或拒绝合规告知书。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     accepted = bool(payload.get("accepted"))
     state = yangjibao.accept_consent(accepted)
     cache.clear_cache()  # 合规状态变化后失效估值缓存，避免旧口径残留
@@ -79,7 +99,14 @@ def yjb_consent(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @router.post("/toggle")
 def yjb_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """一键开关增强通道（开启前必须有告知书确认）。"""
+    """一键开关增强通道（开启前必须有告知书确认）。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     enabled = bool(payload.get("enabled"))
     try:
         state = yangjibao.set_enabled(enabled)
@@ -95,7 +122,11 @@ def yjb_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @router.get("/qrcode")
 def yjb_qrcode() -> Dict[str, Any]:
-    """生成扫码会话与二维码（本地 segno 渲染）。"""
+    """生成扫码会话与二维码（本地 segno 渲染）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         session = yangjibao.start_qrcode_session()
     except Exception as exc:  # noqa: BLE001 - 通道不可用时给中文原因
@@ -110,14 +141,28 @@ def yjb_qrcode() -> Dict[str, Any]:
 
 @router.get("/poll")
 def yjb_poll(session_id: str = Query(..., description="二维码会话 id")) -> Dict[str, Any]:
-    """轮询扫码状态（前端 2 秒一次；幂等）。"""
+    """轮询扫码状态（前端 2 秒一次；幂等）。
+
+    Args:
+        session_id: 二维码会话 id。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     data = yangjibao.poll_session(session_id)
     return _pack(data, "养基宝", "状态机：等待扫码/已扫码待确认/成功/失效/超时")
 
 
 @router.post("/bind")
 def yjb_bind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """四要件校验通过后绑定（token 加密落盘，不回显）。"""
+    """四要件校验通过后绑定（token 加密落盘，不回显）。
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     session_id = str(payload.get("session_id") or "")
     if not session_id:
         return api_error(ErrorCode.INVALID_PARAM, "缺少 session_id，请重新扫码。")
@@ -134,7 +179,11 @@ def yjb_bind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @router.post("/unbind")
 def yjb_unbind() -> Dict[str, Any]:
-    """解绑：清除本地 token 与内存会话。"""
+    """解绑：清除本地 token 与内存会话。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     yangjibao.clear_token()
     cache.clear_cache()
     return _pack({"bound": False}, "本地配置", "已清除本地 token；不影响基金 T+1 净值功能")
@@ -142,7 +191,14 @@ def yjb_unbind() -> Dict[str, Any]:
 
 @router.get("/realtime")
 def yjb_realtime(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """盘中估值链（养基宝→拟合→T+1），返回命中源与合规口径。"""
+    """盘中估值链（养基宝→拟合→T+1），返回命中源与合规口径。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     symbol = (code or "").strip()
     if not symbol:
         return api_error(ErrorCode.INVALID_PARAM, "code 参数不可为空")

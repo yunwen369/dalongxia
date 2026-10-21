@@ -128,7 +128,15 @@ def to_float(value: Any, default: Optional[float] = None) -> Optional[float]:
 
 
 def to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
-    """把源站字符串安全转换为 int。"""
+    """把源站字符串安全转换为 int。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+        default: 缺省值。
+
+    Returns:
+        Optional[int]: 可能为 None。
+    """
     number = to_float(value)
     if number is None:
         return default
@@ -224,7 +232,14 @@ def classify_market_status(
 
 
 def market_label(market: str) -> str:
-    """返回市场中文名。"""
+    """返回市场中文名。
+
+    Args:
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+
+    Returns:
+        str: 文本结果。
+    """
     return config.MARKETS.get((market or "a").lower(), "A股")
 
 
@@ -320,7 +335,17 @@ def index_code_to_tencent(code: str) -> Tuple[str, str]:
 
 
 def period_to_tencent(period: str) -> str:
-    """把周期转换为腾讯 K 线参数。"""
+    """把周期转换为腾讯 K 线参数。
+
+    Args:
+        period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        ValueError: period 仅支持 daily/weekly/monthly 或 日k/周k/月k。
+    """
     key = (period or "daily").strip().lower()
     mapped = config.PERIOD_MAP.get(key)
     if mapped is None:
@@ -329,7 +354,17 @@ def period_to_tencent(period: str) -> str:
 
 
 def normalize_adjust(adjust: str) -> str:
-    """校验复权参数，返回 ""/qfq/hfq。"""
+    """校验复权参数，返回 ""/qfq/hfq。
+
+    Args:
+        adjust: 复权方式：qfq=前复权 / hfq=后复权 / 空=不复权。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        ValueError: adjust 仅支持 qfq/hfq/不复权。
+    """
     value = (adjust or "").strip().lower()
     aliases = {"none": "", "no": "", "不复权": "", "前复权": "qfq", "后复权": "hfq"}
     value = aliases.get(value, value)
@@ -339,5 +374,9 @@ def normalize_adjust(adjust: str) -> str:
 
 
 def today_text() -> str:
-    """返回今天的 ISO 日期。"""
+    """返回今天的 ISO 日期。
+
+    Returns:
+        str: 文本结果。
+    """
     return date.today().isoformat()

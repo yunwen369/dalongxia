@@ -41,12 +41,27 @@ _MARKETS = ("all", "a", "hk", "us")
 
 
 def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。"""
+    """参数错误响应。
+
+    Args:
+        message: 中文提示文案。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _failure(result: Dict[str, Any], empty: Any) -> Dict[str, Any]:
-    """降级链失败 → 统一错误响应。"""
+    """降级链失败 → 统一错误响应。
+
+    Args:
+        result: 上游返回结果。
+        empty: 空数据时的返回值。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     try:
         code = ErrorCode(str(result.get("error_code")))
     except ValueError:
@@ -56,7 +71,19 @@ def _failure(result: Dict[str, Any], empty: Any) -> Dict[str, Any]:
 
 def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
           market_status: str = "资讯快照", is_realtime: bool = False) -> Dict[str, Any]:
-    """组装响应并附带数据源/口径/时间。"""
+    """组装响应并附带数据源/口径/时间。
+
+    Args:
+        data: 待包装或清洗的数据主体。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        caliber: 口径说明（展示在口径徽章）。
+        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
+        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
+        is_realtime: 是否为盘中实时数据。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     payload = dict(data)
     payload.update({
         "source": source,
@@ -74,6 +101,13 @@ def _sort_items(items: List[Dict[str, Any]], sort: str) -> List[Dict[str, Any]]:
     - time：发布时间倒序；
     - impact：|情绪分| 倒序（影响度）；
     - relevance：板块命中数倒序，其次 |情绪分|，最后时间。
+
+    Args:
+        items: 记录列表。
+        sort: 排序方式：time=按时间倒序 / relevance=按相关度。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
     if sort == "impact":
         return sorted(
@@ -100,12 +134,25 @@ def news_flash(
     board: str = Query("", description="按板块名过滤（可选）"),
     sort: str = Query("time", description="time/impact"),
 ) -> Dict[str, Any]:
-    """财联社 7×24 快讯 + 本地初评。"""
+    """财联社 7×24 快讯 + 本地初评。
+
+    Args:
+        limit: 返回条数上限（超出上限按上限截断）。
+        board: 按板块名过滤（可选）。
+        sort: 排序方式：time=按时间倒序 / relevance=按相关度。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if sort not in _SORTS:
         return _bad("sort 仅支持 time/impact/relevance")
 
     def loader() -> Dict[str, Any]:
-        """取数并打分。"""
+        """取数并打分。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("财联社", "财联社/7×24 快讯（标题+内容）", lambda: news_provider.get_flash(limit))],
             empty_value=[],
@@ -140,13 +187,25 @@ def news_stock(
     symbol: str = Query(..., description="证券代码"),
     limit: int = Query(20, ge=1, le=100),
 ) -> Dict[str, Any]:
-    """个股新闻（东财）+ 本地初评 + 命中板块。"""
+    """个股新闻（东财）+ 本地初评 + 命中板块。
+
+    Args:
+        symbol: 证券代码。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     code = str(symbol).strip()
     if not code:
         return _bad("symbol 参数不可为空")
 
     def loader() -> Dict[str, Any]:
-        """个股新闻取数。"""
+        """个股新闻取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("东财", "东财/个股新闻（stock_news_em）", lambda: news_provider.get_stock_news(code, limit))],
             empty_value=[],
@@ -171,10 +230,21 @@ def news_stock(
 
 @router.get("/global")
 def news_global(limit: int = Query(100, ge=1, le=300)) -> Dict[str, Any]:
-    """全球快讯三源合并 + 去重 + 本地初评。"""
+    """全球快讯三源合并 + 去重 + 本地初评。
+
+    Args:
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
 
     def loader() -> Dict[str, Any]:
-        """三源合并取数。"""
+        """三源合并取数。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("东财/新浪/同花顺", "东财全球+新浪+同花顺（失败源自动跳过）",
               lambda: news_provider.get_global(limit))],
@@ -204,7 +274,16 @@ def news_sector_search(
     sort: str = Query("time", description="time/impact"),
     limit: int = Query(50, ge=1, le=200),
 ) -> Dict[str, Any]:
-    """板块快讯检索：快讯池按板块命中过滤 + 排序。"""
+    """板块快讯检索：快讯池按板块命中过滤 + 排序。
+
+    Args:
+        sector: 板块名（末级/二级/一级均可）。
+        sort: 排序方式：time=按时间倒序 / relevance=按相关度。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if sort not in _SORTS:
         return _bad("sort 仅支持 time/impact/relevance")
     name = (sector or "").strip()
@@ -216,7 +295,11 @@ def news_sector_search(
                          data={"items": [], "sector": name})
 
     def loader() -> Dict[str, Any]:
-        """板块快讯取数（财联社 + 三源全球）。"""
+        """板块快讯取数（财联社 + 三源全球）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        """
         return with_fallback(
             [("财联社/东财/新浪/同花顺", "快讯池按板块关键词命中过滤",
               lambda: news_provider.search_by_sector(name, "time", max(limit, 60)))],
@@ -244,7 +327,11 @@ def news_sector_search(
 
 @router.get("/board-tree")
 def news_board_tree() -> Dict[str, Any]:
-    """内置三市场板块树（版本化静态配置，非实时数据）。"""
+    """内置三市场板块树（版本化静态配置，非实时数据）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     tree = news_provider.get_board_tree()
     return _pack(
         tree,
@@ -265,7 +352,19 @@ def news_ai_feed(
     market: str = Query("all", description="all/a/hk/us"),
     symbol: str = Query("", description="可选：并入东财个股新闻"),
 ) -> Dict[str, Any]:
-    """多源新闻池：合并去重 + 板块命中 + 本地初评（确定性规则）。"""
+    """多源新闻池：合并去重 + 板块命中 + 本地初评（确定性规则）。
+
+    Args:
+        boards: 逗号分隔板块名（可选）。
+        sort: 排序方式：time=按时间倒序 / relevance=按相关度。
+        limit: 返回条数上限（超出上限按上限截断）。
+        region: 区域标识：cn=A股 / us=美股 / hk=港股。
+        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
+        symbol: 可选：并入东财个股新闻。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if sort not in _SORTS:
         return _bad("sort 仅支持 relevance/time/impact")
     if region not in _AI_FEED_REGIONS:
@@ -288,6 +387,9 @@ def news_ai_feed(
 
         板块过滤放到路由层做：这样「板块无命中」是空态而不是上游错误，
         避免把自然空态渲染成错误态（§7 空错严格区分）。
+
+        Returns:
+            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
             [("财联社/东财/新浪/同花顺", "多源合并去重（个股源在指定 symbol 时并入）",
@@ -360,6 +462,12 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
     Body:
         {title, content, board, path, sentiment, strength}
+
+    Args:
+        payload: 请求体（JSON 对象）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     title = str(payload.get("title") or "").strip()
     content = str(payload.get("content") or "").strip()

@@ -36,8 +36,18 @@ BOARD_TREE_VERSION = "20261020"
 _TITLE_NOISE = re.compile(r"[【】\[\]（）()\s　:：,，。.、!！?？\"'“”‘’|/\\-]+")
 
 
-def _call(func):
-    """统一包装 akshare 调用：确定性网络失效直接降级。"""
+def _call(func) -> Any:
+    """统一包装 akshare 调用：确定性网络失效直接降级。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     try:
         return func()
     except Exception as exc:  # noqa: BLE001
@@ -47,29 +57,57 @@ def _call(func):
         raise
 
 
-def _call_ths(func):
+def _call_ths(func) -> Any:
     """同花顺/财联社 V8 类调用入口：进程级互斥 + 代理错误分类。
 
     这两个源的签名/解密走 py_mini_racer（内嵌 V8），多线程并发首次创建
     MiniRacer 上下文会触发 PartitionAlloc 重复初始化 FATAL、进程原生崩溃
     （实测并发必崩，详见 core/v8_guard.py 背景说明）。
+
+    Args:
+        func: 待执行的无参取数函数。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
     """
     return _call(guard_v8(func))
 
 
 def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关。"""
+    """检查数据源开关。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     if not config.PROVIDER_SWITCHES.get(source, True):
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _text(value: Any) -> str:
-    """安全转字符串并去首尾空白。"""
+    """安全转字符串并去首尾空白。
+
+    Args:
+        value: 待处理值（类型由调用方约定）。
+
+    Returns:
+        str: 文本结果。
+    """
     return "" if value is None else str(value).strip()
 
 
 def _clean_title(title: str, content: str = "") -> str:
-    """标题为空时从正文【】前缀派生；仍为空则截取正文前 40 字。"""
+    """标题为空时从正文【】前缀派生；仍为空则截取正文前 40 字。
+
+    Args:
+        title: 标题。
+        content: 正文内容。
+
+    Returns:
+        str: 文本结果。
+    """
     if title:
         return title
     match = re.match(r"^【([^】]{4,60})】", content or "")
@@ -79,12 +117,28 @@ def _clean_title(title: str, content: str = "") -> str:
 
 
 def normalize_key(title: str) -> str:
-    """标题归一化：去括号/标点/空白并转小写，用于跨源去重。"""
+    """标题归一化：去括号/标点/空白并转小写，用于跨源去重。
+
+    Args:
+        title: 标题。
+
+    Returns:
+        str: 文本结果。
+    """
     return _TITLE_NOISE.sub("", (title or "").lower())
 
 
 def make_id(source: str, title: str, time_text: str) -> str:
-    """生成稳定 id（源+标题+时间），供前端 key 与去重使用。"""
+    """生成稳定 id（源+标题+时间），供前端 key 与去重使用。
+
+    Args:
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        title: 标题。
+        time_text: 时间文本。
+
+    Returns:
+        str: 文本结果。
+    """
     raw = f"{source}|{normalize_key(title)}|{time_text[:16]}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -94,7 +148,17 @@ def make_id(source: str, title: str, time_text: str) -> str:
 # =============================================================
 def _leaf(name: str, keywords: List[str], aliases: Optional[List[str]] = None,
           stocks: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
-    """构造末级板块节点：关键词用于新闻命中，个股为代表性标的（非成分表）。"""
+    """构造末级板块节点：关键词用于新闻命中，个股为代表性标的（非成分表）。
+
+    Args:
+        name: 名称。
+        keywords: 关键词列表。
+        aliases: 别名列表。
+        stocks: 股票代码列表。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     return {
         "name": name,
         "keywords": keywords,
@@ -204,7 +268,11 @@ BOARD_TREE: List[Dict[str, Any]] = [
 
 
 def _iter_leaves() -> Iterable[Dict[str, Any]]:
-    """遍历全部末级板块。"""
+    """遍历全部末级板块。
+
+    Returns:
+        Iterable[Dict[str, Any]]: 计算结果。
+    """
     for level1 in BOARD_TREE:
         for level2 in level1["children"]:
             for leaf in level2["children"]:
@@ -216,6 +284,9 @@ def sector_keywords() -> Dict[str, List[str]]:
 
     注意：只用 `keywords` 参与匹配，**不使用 aliases**——别名含「设备/材料/存储」这类
     超通用词，会把「显微镜设备」等无关新闻误判为板块命中（实测踩坑，2026-10-20）。
+
+    Returns:
+        dict: Dict[str, List[str]] 结构的结果。
     """
     mapping: Dict[str, List[str]] = {}
     for leaf in _iter_leaves():
@@ -224,7 +295,11 @@ def sector_keywords() -> Dict[str, List[str]]:
 
 
 def get_board_tree() -> Dict[str, Any]:
-    """返回三市场板块树（含版本号与统计）。"""
+    """返回三市场板块树（含版本号与统计）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     level1_count = len(BOARD_TREE)
     level2_count = sum(len(item["children"]) for item in BOARD_TREE)
     leaf_count = sum(len(level2["children"]) for item in BOARD_TREE for level2 in item["children"])
@@ -264,6 +339,12 @@ def board_leaf_names(name: str) -> List[str]:
 
     一级/二级板块本身不是命中单位（新闻命中只标末级），因此按一/二级筛选时
     必须展开为其末级子孙，否则过滤结果恒为空。
+
+    Args:
+        name: 名称。
+
+    Returns:
+        list[str]: 字符串列表。
     """
     if not name:
         return []
@@ -280,7 +361,14 @@ def board_leaf_names(name: str) -> List[str]:
 
 
 def resolve_board(name: str) -> Optional[Dict[str, Any]]:
-    """按末级/二级/一级名反查板块节点（含关键词），未命中返回 None。"""
+    """按末级/二级/一级名反查板块节点（含关键词），未命中返回 None。
+
+    Args:
+        name: 名称。
+
+    Returns:
+        dict | None: 命中时返回记录，缺失返回 None。
+    """
     if not name:
         return None
     for level1 in BOARD_TREE:
@@ -314,7 +402,19 @@ def resolve_board(name: str) -> Optional[Dict[str, Any]]:
 # 二、四个新闻源取数（统一结构）
 # =============================================================
 def _item(title: str, text: str, source: str, time_text: str, url: str, channel: str) -> Dict[str, Any]:
-    """构造统一新闻条目。"""
+    """构造统一新闻条目。
+
+    Args:
+        title: 标题。
+        text: 待解析或清洗的文本。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+        time_text: 时间文本。
+        url: 请求地址。
+        channel: 通道/子来源名称。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     clean_title = _clean_title(title, text)
     return {
         "id": make_id(channel, clean_title, time_text),
@@ -328,7 +428,14 @@ def _item(title: str, text: str, source: str, time_text: str, url: str, channel:
 
 
 def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
-    """财联社 7×24 快讯（字段：标题/内容/发布日期/发布时间）。"""
+    """财联社 7×24 快讯（字段：标题/内容/发布日期/发布时间）。
+
+    Args:
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_info_global_cls(symbol="全部"))
     records = frame.to_dict("records")
@@ -345,7 +452,15 @@ def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 def get_stock_news(symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """东财个股新闻（stock_news_em）。"""
+    """东财个股新闻（stock_news_em）。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_news_em(symbol=str(symbol)))
     items: List[Dict[str, Any]] = []
@@ -362,7 +477,11 @@ def get_stock_news(symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def _global_em() -> List[Dict[str, Any]]:
-    """东财全球快讯（200 条，标题/摘要/发布时间/链接）。"""
+    """东财全球快讯（200 条，标题/摘要/发布时间/链接）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     frame = _call(lambda: ak.stock_info_global_em())
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
@@ -376,7 +495,11 @@ def _global_em() -> List[Dict[str, Any]]:
 
 
 def _global_sina() -> List[Dict[str, Any]]:
-    """新浪全球快讯（20 条，仅 时间/内容，标题由【】前缀派生）。"""
+    """新浪全球快讯（20 条，仅 时间/内容，标题由【】前缀派生）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     frame = _call(lambda: ak.stock_info_global_sina())
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
@@ -388,7 +511,11 @@ def _global_sina() -> List[Dict[str, Any]]:
 
 
 def _global_ths() -> List[Dict[str, Any]]:
-    """同花顺全球快讯（20 条，标题/内容/发布时间/链接）。"""
+    """同花顺全球快讯（20 条，标题/内容/发布时间/链接）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
     frame = _call_ths(lambda: ak.stock_info_global_ths())
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
@@ -402,7 +529,17 @@ def _global_ths() -> List[Dict[str, Any]]:
 
 
 def get_global(limit: int = 100) -> List[Dict[str, Any]]:
-    """全球财经快讯三源合并（东财 + 新浪 + 同花顺），失败源自动跳过。"""
+    """全球财经快讯三源合并（东财 + 新浪 + 同花顺），失败源自动跳过。
+
+    Args:
+        limit: 返回条数上限（超出上限按上限截断）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 参数不合法或上游数据不满足口径时抛出。
+    """
     _ensure_enabled()
     items: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -460,7 +597,15 @@ def dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def match_boards(text: str, boards: Optional[List[str]] = None) -> List[str]:
-    """文本命中的末级板块列表，可按 boards 入参过滤。"""
+    """文本命中的末级板块列表，可按 boards 入参过滤。
+
+    Args:
+        text: 待解析或清洗的文本。
+        boards: 板块名列表（最多 6 个）。
+
+    Returns:
+        list[str]: 字符串列表。
+    """
     body = text or ""
     hits: List[str] = []
     for leaf in _iter_leaves():
@@ -478,6 +623,9 @@ def search_by_sector(sector: str, sort: str = "time", limit: int = 50) -> List[D
         sector: 板块名（末级/二级/一级均可）。
         sort: time=按时间倒序；impact=按情绪强度绝对值倒序（由路由层打分后重排）。
         limit: 返回条数。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
     node = resolve_board(sector)
     keywords = (node or {}).get("keywords") or ([sector] if sector else [])
@@ -504,12 +652,26 @@ def build_ai_feed(
     """五源新闻池：财联社 + 东财全球 + 新浪 + 同花顺（+ 东财个股，指定 symbol 时并入）。
 
     处理链：合并 → 标题去重 → 板块命中过滤 → 交由路由层做本地初评与排序。
+
+    Args:
+        boards: 板块名列表（最多 6 个）。
+        limit: 返回条数上限（超出上限按上限截断）。
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     pools: List[Dict[str, Any]] = []
     channels: List[Dict[str, Any]] = []
 
     def collect(name: str, loader, counter: Dict[str, Any]) -> None:
-        """采集单个源并记录条数，失败不阻断整体。"""
+        """采集单个源并记录条数，失败不阻断整体。
+
+        Args:
+            name: 名称。
+            loader: 缓存未命中时的加载函数（返回数据或 {data, error}）。
+            counter: 计数字典。
+        """
         try:
             rows = loader()
             pools.extend(rows)

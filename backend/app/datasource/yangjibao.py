@@ -70,7 +70,11 @@ class _DataBlob(ctypes.Structure):
 
 
 def _dpapi_available() -> bool:
-    """仅 Windows 且 crypt32 可用时支持加密落盘。"""
+    """仅 Windows 且 crypt32 可用时支持加密落盘。
+
+    Returns:
+        bool: 判定结果。
+    """
     if platform.system() != "Windows":
         return False
     try:
@@ -81,7 +85,18 @@ def _dpapi_available() -> bool:
 
 
 def _dpapi(protect: bool, data: bytes) -> bytes:
-    """调用 DPAPI 加/解密（用户级，绑定当前 Windows 账户）。"""
+    """调用 DPAPI 加/解密（用户级，绑定当前 Windows 账户）。
+
+    Args:
+        protect: 保护配置映射。
+        data: 待包装或清洗的数据主体。
+
+    Returns:
+        bytes: 计算结果。
+
+    Raises:
+        OSError: DPAPI 操作失败。
+    """
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
     buffer = ctypes.create_string_buffer(data, len(data))
@@ -102,7 +117,15 @@ def _dpapi(protect: bool, data: bytes) -> bytes:
 
 
 def _write_secure(path: Path, payload: Dict[str, Any]) -> None:
-    """加密写入 JSON；不可加密时拒绝写明文（规范 §12.3）。"""
+    """加密写入 JSON；不可加密时拒绝写明文（规范 §12.3）。
+
+    Args:
+        path: 接口路径 / 文件路径。
+        payload: 请求体（JSON 对象）。
+
+    Raises:
+        NonRetryableError: 当前系统不支持安全存储（DPAPI 不可用），已拒绝明文落盘。
+    """
     if not _dpapi_available():
         raise NonRetryableError("当前系统不支持安全存储（DPAPI 不可用），已拒绝明文落盘")
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -118,7 +141,14 @@ def _write_secure(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _read_secure(path: Path) -> Optional[Dict[str, Any]]:
-    """读取加密 JSON；文件缺失/损坏/非本机账户加密时返回 None。"""
+    """读取加密 JSON；文件缺失/损坏/非本机账户加密时返回 None。
+
+    Args:
+        path: 接口路径 / 文件路径。
+
+    Returns:
+        dict | None: 命中时返回记录，缺失返回 None。
+    """
     if not path.exists():
         return None
     try:
@@ -137,7 +167,11 @@ def _read_secure(path: Path) -> Optional[Dict[str, Any]]:
 # 二、状态与合规（告知书 / 增强开关）
 # =============================================================
 def _load_state() -> Dict[str, Any]:
-    """读取非敏感状态（告知书确认、增强通道开关）。"""
+    """读取非敏感状态（告知书确认、增强通道开关）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     if not YJB_STATE_FILE.exists():
         return {"consent": None, "enabled": False}
     try:
@@ -149,7 +183,11 @@ def _load_state() -> Dict[str, Any]:
 
 
 def _save_state(state: Dict[str, Any]) -> None:
-    """保存非敏感状态（不含 token）。"""
+    """保存非敏感状态（不含 token）。
+
+    Args:
+        state: 状态对象（读改写后原样返回）。
+    """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     temp = YJB_STATE_FILE.with_suffix(".json.tmp")
     with open(temp, "w", encoding="utf-8") as handle:
@@ -158,7 +196,14 @@ def _save_state(state: Dict[str, Any]) -> None:
 
 
 def accept_consent(accepted: bool) -> Dict[str, Any]:
-    """记录合规告知书确认；拒绝则同时关闭增强通道。"""
+    """记录合规告知书确认；拒绝则同时关闭增强通道。
+
+    Args:
+        accepted: 是否已确认合规告知书。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     state = _load_state()
     state["consent"] = {
         "accepted": bool(accepted),
@@ -171,7 +216,17 @@ def accept_consent(accepted: bool) -> Dict[str, Any]:
 
 
 def set_enabled(enabled: bool) -> Dict[str, Any]:
-    """开启/关闭增强通道；开启前必须已确认告知书。"""
+    """开启/关闭增强通道；开启前必须已确认告知书。
+
+    Args:
+        enabled: 是否启用。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        PermissionError: 请先阅读并确认《养基宝 / 盘中估值 合规告知书》。
+    """
     state = _load_state()
     if enabled and not (state.get("consent") or {}).get("accepted"):
         raise PermissionError("请先阅读并确认《养基宝 / 盘中估值 合规告知书》")
@@ -181,17 +236,33 @@ def set_enabled(enabled: bool) -> Dict[str, Any]:
 
 
 def token_path_exists() -> bool:
-    """是否已存在 token 文件（不读取内容）。"""
+    """是否已存在 token 文件（不读取内容）。
+
+    Returns:
+        bool: 判定结果。
+    """
     return YJB_TOKEN_FILE.exists()
 
 
 def load_token() -> Optional[Dict[str, Any]]:
-    """读取 token（仅后端使用，绝不返回前端）。"""
+    """读取 token（仅后端使用，绝不返回前端）。
+
+    Returns:
+        dict | None: 命中时返回记录，缺失返回 None。
+    """
     return _read_secure(YJB_TOKEN_FILE)
 
 
 def save_token(token: str, platform_name: str = "ios") -> None:
-    """加密落盘 token。"""
+    """加密落盘 token。
+
+    Args:
+        token: 访问令牌（敏感信息，不落日志）。
+        platform_name: 平台名称。
+
+    Raises:
+        ValueError: token 不可为空。
+    """
     if not token:
         raise ValueError("token 不可为空")
     _write_secure(YJB_TOKEN_FILE, {
@@ -213,7 +284,11 @@ def clear_token() -> None:
 
 
 def secret_configured() -> bool:
-    """签名盐是否已通过环境变量配置。"""
+    """签名盐是否已通过环境变量配置。
+
+    Returns:
+        bool: 判定结果。
+    """
     return bool(SECRET_NEW or SECRET_OLD)
 
 
@@ -221,7 +296,19 @@ def secret_configured() -> bool:
 # 三、协议调用（签名 + 四要件校验）
 # =============================================================
 def sign_new(path: str, token: str, timestamp: str) -> str:
-    """新接口签名：md5(基址+路径+token+SECRET_NEW+时间戳)。"""
+    """新接口签名：md5(基址+路径+token+SECRET_NEW+时间戳)。
+
+    Args:
+        path: 接口路径 / 文件路径。
+        token: 访问令牌（敏感信息，不落日志）。
+        timestamp: 时间戳（秒）。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        NonRetryableError: 未配置 YJB_SECRET_NEW，无法调用养基宝新接口。
+    """
     if not SECRET_NEW:
         raise NonRetryableError("未配置 YJB_SECRET_NEW，无法调用养基宝新接口")
     raw = f"{BASE_NEW}{path}{token}{SECRET_NEW}{timestamp}"
@@ -229,7 +316,19 @@ def sign_new(path: str, token: str, timestamp: str) -> str:
 
 
 def sign_old(path: str, token: str, timestamp: str) -> str:
-    """老接口签名：md5(路径+token+SECRET_OLD+时间戳)。"""
+    """老接口签名：md5(路径+token+SECRET_OLD+时间戳)。
+
+    Args:
+        path: 接口路径 / 文件路径。
+        token: 访问令牌（敏感信息，不落日志）。
+        timestamp: 时间戳（秒）。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        NonRetryableError: 未配置 YJB_SECRET_OLD，无法调用养基宝老接口。
+    """
     if not SECRET_OLD:
         raise NonRetryableError("未配置 YJB_SECRET_OLD，无法调用养基宝老接口")
     raw = f"{path}{token}{SECRET_OLD}{timestamp}"
@@ -238,7 +337,19 @@ def sign_old(path: str, token: str, timestamp: str) -> str:
 
 def _request(method: str, base: str, path: str, token: str = "", params: Optional[Dict[str, Any]] = None,
              use_old: bool = False) -> Dict[str, Any]:
-    """带签名的请求；签名盐缺失/连接失败均转确定性异常，便于上层判定。"""
+    """带签名的请求；签名盐缺失/连接失败均转确定性异常，便于上层判定。
+
+    Args:
+        method: HTTP 方法。
+        base: 基准值。
+        path: 接口路径 / 文件路径。
+        token: 访问令牌（敏感信息，不落日志）。
+        params: 请求参数（查询串键值对）。
+        use_old: 是否使用旧密钥（密钥轮换期）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     timestamp = str(int(time.time() * 1000))
     sign = sign_old(path, token, timestamp) if use_old else sign_new(path, token, timestamp)
     headers = {
@@ -265,6 +376,9 @@ def verify_token_four_elements(token: str) -> Dict[str, Any]:
     - 404 → 确定性无效（token 失效，可清除）；
     - 200 但 code!=200 或 data 空 → 无效（同样确定性，提示重绑）；
     - 连接异常/超时 → 非确定性（网络抖动，**不清 token**）。
+
+    Args:
+        token: 访问令牌（敏感信息，不落日志）。
     """
     try:
         result = _request("GET", BASE_OLD, "/user_account", token, use_old=True)
@@ -293,7 +407,14 @@ def verify_token_four_elements(token: str) -> Dict[str, Any]:
 
 
 def start_qrcode_session() -> Dict[str, Any]:
-    """创建扫码会话：调用 /qr_code 并用 segno 本地生成二维码（base64）。"""
+    """创建扫码会话：调用 /qr_code 并用 segno 本地生成二维码（base64）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 未配置养基宝签名密钥（YJB_SECRET_NEW/OLD），扫码绑定不可用。
+    """
     if not secret_configured():
         raise NonRetryableError("未配置养基宝签名密钥（YJB_SECRET_NEW/OLD），扫码绑定不可用")
     result = _request("GET", BASE_OLD, "/qr_code", use_old=True)
@@ -332,6 +453,12 @@ def poll_session(session_id: str) -> Dict[str, Any]:
 
     状态机：waiting（等待扫码）→ scanning（已扫码待确认）→ success（拿到 token）
            → expired（二维码失效）→ timeout（本地会话超时）。
+
+    Args:
+        session_id: 会话标识。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     session = _SESSIONS.get(session_id)
     if not session:
@@ -373,7 +500,17 @@ def poll_session(session_id: str) -> Dict[str, Any]:
 
 
 def confirm_bind(session_id: str) -> Dict[str, Any]:
-    """取会话内 token，四要件复核后加密落盘。"""
+    """取会话内 token，四要件复核后加密落盘。
+
+    Args:
+        session_id: 会话标识。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        PermissionError: 尚未扫码成功，无法绑定。
+    """
     session = _SESSIONS.get(session_id)
     if not session or session.get("state") != "success" or not session.get("token"):
         raise PermissionError("尚未扫码成功，无法绑定")
@@ -387,21 +524,46 @@ def confirm_bind(session_id: str) -> Dict[str, Any]:
 
 
 def fetch_increase_rate(fund_id: str) -> Dict[str, Any]:
-    """新接口实时涨幅（一级通道）。"""
+    """新接口实时涨幅（一级通道）。
+
+    Args:
+        fund_id: 基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     result = _request("GET", BASE_NEW, "/market/v1/fund/increase-rate",
                       token=(load_token() or {}).get("token", ""), params={"fund_id": fund_id})
     return _parse_estimate(result.get("text"), "养基宝/increase-rate")
 
 
 def fetch_gz_data(fund_id: str) -> Dict[str, Any]:
-    """新接口估值明细（一级通道备选）。"""
+    """新接口估值明细（一级通道备选）。
+
+    Args:
+        fund_id: 基金代码。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     result = _request("GET", BASE_NEW, "/market/v1/fund/gz-data",
                       token=(load_token() or {}).get("token", ""), params={"fund_id": fund_id})
     return _parse_estimate(result.get("text"), "养基宝/gz-data")
 
 
 def _parse_estimate(text: str, source: str) -> Dict[str, Any]:
-    """解析估值响应；缺字段即报错，不猜测。"""
+    """解析估值响应；缺字段即报错，不猜测。
+
+    Args:
+        text: 待解析或清洗的文本。
+        source: 数据源标识（用于降级链溯源与徽章展示）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
     try:
         body = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -418,7 +580,17 @@ def _parse_estimate(text: str, source: str) -> Dict[str, Any]:
 
 
 def search_fund_id(code: str) -> str:
-    """按基金代码换取养基宝 fund_id（新接口搜索）。"""
+    """按基金代码换取养基宝 fund_id（新接口搜索）。
+
+    Args:
+        code: 证券或基金代码。
+
+    Returns:
+        str: 文本结果。
+
+    Raises:
+        NonRetryableError: 未绑定养基宝，无法搜索 fund_id。
+    """
     token = (load_token() or {}).get("token", "")
     if not token:
         raise NonRetryableError("未绑定养基宝，无法搜索 fund_id")
@@ -436,7 +608,11 @@ def search_fund_id(code: str) -> str:
 
 
 def status() -> Dict[str, Any]:
-    """连接器状态（不含 token 内容）。"""
+    """连接器状态（不含 token 内容）。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+    """
     state = _load_state()
     token = load_token()
     return {
@@ -453,5 +629,9 @@ def status() -> Dict[str, Any]:
 
 
 def new_session_id() -> str:
-    """生成备用会话 id（二维码接口不可用时不使用）。"""
+    """生成备用会话 id（二维码接口不可用时不使用）。
+
+    Returns:
+        str: 文本结果。
+    """
     return py_secrets.token_hex(8)
