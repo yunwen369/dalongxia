@@ -136,10 +136,14 @@ def to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
 
 
 def parse_datetime(value: str) -> Optional[datetime]:
-    """解析腾讯/新浪常见时间格式。
+    """解析腾讯/新浪/东财常见时间格式。
+
+    支持：紧凑 `20261016161447`、`2026/10/16 18:31:15`、`2026-10-16 16:42:09`，
+    以及**无横线日期+时间** `20261021 10:11:00`（东财分钟线返回此形态；
+    缺此格式会使港股盘中数据被判为「时间未知」、is_realtime 误为 false）。
 
     Args:
-        value: 形如 20261016161447、2026/10/16 18:31:15、2026-10-16 16:42:09。
+        value: 时间字符串。
 
     Returns:
         Optional[datetime]: 解析结果；失败返回 None。
@@ -147,7 +151,8 @@ def parse_datetime(value: str) -> Optional[datetime]:
     text = (value or "").strip()
     if not text:
         return None
-    for fmt in ("%Y%m%d%H%M%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+    for fmt in ("%Y%m%d%H%M%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M", "%Y-%m-%d %H:%M"):
         try:
             return datetime.strptime(text, fmt)
         except ValueError:

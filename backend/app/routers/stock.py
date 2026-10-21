@@ -229,6 +229,54 @@ def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代�
                  f"{periods[0]} 报告期" if periods else None, "定期报告", False)
 
 
+@router.get("/estimates")
+def stock_estimates(
+    symbol: str = Query(..., description="证券代码，如 688012"),
+    market: str = Query("a", description="a/hk/us"),
+) -> Dict[str, Any]:
+    """机构一致预期（F-027）：分年度 EPS/净利润预测 + 机构明细 + 详细指标。
+
+    对应原版 FinScope 的 analyst estimates；同花顺盈利预测为等价数据源
+    （覆盖机构聚合 + 逐机构明细 + 营业收入等详细指标），港美股无免费通道如实空态。
+    """
+    selected = (market or "a").lower()
+    if selected not in _ALLOWED_MARKETS:
+        return _bad_request("market 仅支持 a/hk/us")
+    normalized = _normalize(symbol, selected)
+    if normalized is None:
+        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
+    code = normalized[0]
+
+    def loader() -> Dict[str, Any]:
+        """一致预期取数（同花顺 worth 页四表）。
+
+        validator 恒真：空数据由 provider 以 available=false 表达（§6.3 空/错分离），
+        不得因“无机构覆盖”落入错误态；通道异常仍由 with_fallback 转错误码。
+        """
+        return with_fallback(
+            [("同花顺", "同花顺/盈利预测（机构覆盖聚合 + 逐机构明细）",
+              lambda: stock_provider.get_estimates(code, selected))],
+            empty_value={"eps": [], "profit": [], "institutions": [], "detail": [], "years": [],
+                         "available": False},
+            validator=lambda value: True,
+        )
+
+    result = cache.get_or_load(f"stock:estimates:{selected}:{code}", config.TTL["estimates"], loader)
+    if result.get("error"):
+        return _failure(result, {"symbol": code, "market": selected,
+                                 "eps": [], "profit": [], "institutions": [], "detail": [], "years": []})
+    data = result["data"] or {}
+    years = data.get("years") or []
+    return _pack(
+        {"symbol": code, "market": selected, **data},
+        result.get("source") or "",
+        result.get("caliber") or data.get("caliber_note") or "",
+        f"{years[0]}–{years[-1]} 预测年度" if years else None,
+        "机构预测（日频更新）",
+        False,
+    )
+
+
 @router.get("/financial-trend")
 def stock_financial_trend(
     symbol: str = Query(..., description="6 位 A股代码"),

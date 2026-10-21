@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -74,13 +75,20 @@ def _call(func):
 
 
 def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """DataFrame → 可 JSON 序列化 records（NaN→None）。"""
+    """DataFrame → 可 JSON 序列化 records（NaN→None；日期转 ISO 字符串）。
+
+    注意：`date`/`datetime`/`Timestamp` 若不转字符串，会在缓存落盘时触发
+    `TypeError: Object of type date is not JSON serializable`（同花顺盈利预测的
+    机构明细表含「报告日期」列，实测必现）。
+    """
     records: List[Dict[str, Any]] = []
     for raw in frame.to_dict("records"):
         row: Dict[str, Any] = {}
         for key, value in raw.items():
             if pd.isna(value):
                 row[str(key)] = None
+            elif isinstance(value, (datetime, date)):
+                row[str(key)] = value.strftime("%Y-%m-%d")
             elif hasattr(value, "item"):
                 row[str(key)] = value.item()
             else:
@@ -466,6 +474,100 @@ def _forecast_em(symbol: str) -> Dict[str, Any]:
 def get_forecast(symbol: str) -> Dict[str, Any]:
     """机构预测：评级分布 + 目标价区间。"""
     return _forecast_ths(symbol)
+
+
+# =============================================================
+# 六、机构一致预期（F-027：原版 FinScope analyst estimates 的等价实现）
+# =============================================================
+def _estimates_ths(symbol: str) -> Dict[str, Any]:
+    """同花顺 worth.html 四张预测表 → 结构化一致预期。
+
+    源页面为公开披露聚合（无需登录），akshare 内部 requests + pandas.read_html，
+    不走 py_mini_racer；仍经 `_call` 串行包装以与其它同花顺调用保持同一纪律。
+
+    口径（2026-10-21 实测 688012）：
+      - eps：年度 / 预测机构数 / 最小 / 均值 / 最大 / 行业平均，单位 = 元/股；
+      - profit：同结构，单位 = 亿元；
+      - institutions：逐机构明细（机构/研究员/三年 EPS 与净利预测/报告日期），源仅列前 10 家；
+      - detail：详细指标预测（营业收入、增长率等 9 项，含历史实际值 + 未来三年均值）。
+    空表（如次新股无覆盖）返回空列表，由路由转空态，不伪造数据。
+
+    Args:
+        symbol: 6 位 A 股代码，如 "688012"。
+
+    Returns:
+        dict: 含 eps / profit / institutions / detail 四个列表与 caliber_note。
+
+    Raises:
+        ValueError: 四张表全部为空时抛出（交由上游转为空态或错误态）。
+    """
+
+    def _table(indicator: str) -> List[Dict[str, Any]]:
+        """取单张预测表；上游返回空 DataFrame 时归一为空列表。"""
+        frame = _call(lambda: ak.stock_profit_forecast_ths(symbol=str(symbol), indicator=indicator))
+        if frame is None or len(frame) == 0:
+            return []
+        return _clean_records(frame)
+
+    # 先探测页面是否有预测表：同花顺对「无效代码 / 无机构覆盖」返回 200 但无
+    # `profit-forecast` 表（实测 000000 → 37KB 无表、999999 → 2.2KB 空页），
+    # 此时 akshare 的 read_html 会抛解析异常，若直接透传会被误判为「通道故障」。
+    probe = _call(lambda: utils.http_get_text(
+        f"https://basic.10jqka.com.cn/{symbol}/worth.html",
+        encoding="gbk", timeout=config.DATASOURCE_TIMEOUT,
+    ))
+    if "profit-forecast" not in probe:
+        return {
+            "eps": [], "profit": [], "institutions": [], "detail": [], "years": [],
+            "available": False,
+            "note": "该标的暂无机构预测覆盖（代码可能不存在或暂无机构覆盖）",
+            "caliber_note": "同花顺盈利预测（页面无预测表）",
+        }
+
+    eps = _table("预测年报每股收益")
+    profit = _table("预测年报净利润")
+    institutions = _table("业绩预测详表-机构")
+    detail = _table("业绩预测详表-详细指标预测")
+    years = [row.get("年度") for row in eps if row.get("年度") is not None]
+    if not (eps or profit or institutions or detail):
+        # 空数据不是通道异常：按 §6.3 空/错分离，返回 available=false 的空结构，
+        # 由前端渲染中文空态（不得伪造成错误码，也不得编造数值）。
+        return {
+            "eps": [], "profit": [], "institutions": [], "detail": [], "years": [],
+            "available": False,
+            "note": "该标的暂无机构预测覆盖（同花顺盈利预测四表均为空）",
+            "caliber_note": "同花顺盈利预测（暂无机构覆盖）",
+        }
+    return {
+        "eps": eps,
+        "profit": profit,
+        "institutions": institutions,
+        "detail": detail,
+        "years": years,
+        "available": True,
+        "caliber_note": "同花顺盈利预测（机构覆盖聚合：均值/区间/行业平均；机构明细仅列前 10 家）",
+    }
+
+
+def get_estimates(symbol: str, market: str = "a") -> Dict[str, Any]:
+    """机构一致预期（分年度 EPS/净利润 + 机构明细 + 详细指标）。
+
+    港美股无免费一致预期通道（境外简化建模，D3 口径），返回空结构由前端如实空态。
+
+    Args:
+        symbol: 归一化后的证券代码。
+        market: a/hk/us。
+
+    Returns:
+        dict: eps / profit / institutions / detail 四列表 + years + caliber_note。
+    """
+    if market in ("hk", "us"):
+        return {"eps": [], "profit": [], "institutions": [], "detail": [], "years": [],
+                "available": False,
+                "note": "港美股无免费机构一致预期通道（境外简化建模）",
+                "caliber_note": "港美股无免费机构一致预期通道（境外简化建模）"}
+    return _estimates_ths(symbol)
+
 
 
 # =============================================================

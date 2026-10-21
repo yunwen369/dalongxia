@@ -196,7 +196,10 @@ def market_quote(
             # 港美股：东财快照（生产候选，本机 push2 被重置）→ 腾讯
             candidates.insert(0, ("东财", "东财/港美股快照（收盘后为最后成交快照）",
                                   lambda: overseas.get_quote_em(code, normalized_market)))
-        return with_fallback(candidates, need_rows=False, empty_value={}, validator=lambda q: bool(q.get("price")))
+        # 完整性校验：涨跌幅依赖前收，缺 prev_close 的快照（实测东财 AAPL 偶发只给价格）
+        # 视为不可用并降级到下一源，避免把残缺报价渲染成“涨跌 0/空”。
+        return with_fallback(candidates, need_rows=False, empty_value={},
+                             validator=lambda q: bool(q.get("price")) and bool(q.get("prev_close")))
 
     result = _cached(cache_key, config.TTL["realtime_quote"], loader)
     if result.get("error"):
