@@ -744,3 +744,33 @@
   font-size: var(--fs-body);
   font-family: var(--font);
 }
+
+/* 一致预期（F-027）：ST-06 卡片内的分年度机构预测表 */
+.pg-est-block {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.pg-est-block .pg-card-sub {
+  margin-bottom: 6px;
+}
+.pg-est-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-aux);
+}
+.pg-est-table th,
+.pg-est-table td {
+  text-align: right;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.pg-est-table th:first-child,
+.pg-est-table td:first-child {
+  text-align: left;
+}
+.pg-est-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+}

@@ -494,6 +494,8 @@
   /** 加载单个组件数据（失败就地显示错误 + 重试）。 */
   function loadWidget(body, card, entry, meta) {
     body.innerHTML = "";
+    // 四态规范（§7.9）：显式标记 loading，巡检与 wait_blocks 才能等到收口
+    body.setAttribute("data-state", "loading");
     body.appendChild(el("div", "pg-state", t("state.loading")));
     var recipe = RECIPES[entry.id];
     if (!recipe) {
@@ -504,6 +506,8 @@
         hint.appendChild(el("div", "pg-state-hint", "接口：" + meta.api.join("、") + "（该组件暂无内置渲染器）"));
       }
       body.appendChild(hint);
+      // 无内置渲染器的组件属「如实说明」而非加载中，收口为默认态
+      body.setAttribute("data-state", "default");
       return;
     }
     fetchJson(recipe.path, recipe.params)

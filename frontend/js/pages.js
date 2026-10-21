@@ -1071,7 +1071,9 @@
     // 港股美股无 F10/财报通道，按 D3 如实空态，不发无效请求
     var tasks = [
       api("/api/stock/realtime-panel", { symbol: symbol, market: market }),
-      api("/api/stock/profile", { symbol: symbol, market: market })
+      api("/api/stock/profile", { symbol: symbol, market: market }),
+      // 一致预期（F-027）：港美股由后端返回 available=false 空态，前端统一渲染
+      api("/api/stock/estimates", { symbol: symbol, market: market })
     ];
     if (market === "a") {
       tasks.push(api("/api/stock/holders", { symbol: symbol }));
@@ -1085,13 +1087,14 @@
 
     Promise.all(tasks)
       .then(function (result) {
-        stockCache = { key: key, panel: result[0] };
+        stockCache = { key: key, panel: result[0], estimates: result[2] };
         paintStock({
           panel: result[0],
           profile: result[1],
-          holders: result[2],
-          summary: result[3],
-          trend: result[4]
+          estimates: result[2],
+          holders: result[3],
+          summary: result[4],
+          trend: result[5]
         });
       })
       .catch(function (error) {
@@ -1408,15 +1411,70 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染机构预测（ST-06）。 */
-  function paintForecast(panel) {
+  /** 渲染分年度一致预期表（F-027：年度/机构数/EPS 均值与区间/净利均值/行业平均）。 */
+  function paintEstimates(body, estimates) {
+    var block = el("div", "pg-est-block");
+    block.appendChild(el("div", "pg-card-sub", t("stock.est.title") + " · " + t("stock.est.sub")));
+    var eps = (estimates && estimates.eps) || [];
+    if (!estimates || !estimates.available || eps.length === 0) {
+      // 空态如实展示原因（港美股无通道 / 该标的无机构覆盖），不编造数值
+      var hint = el("div", "pg-state-hint", (estimates && estimates.note) || t("stock.est.empty"));
+      block.appendChild(hint);
+      body.appendChild(block);
+      return;
+    }
+    var profitByYear = {};
+    (estimates.profit || []).forEach(function (row) {
+      profitByYear[String(row["年度"])] = row;
+    });
+    var table = el("table", "pg-table pg-est-table");
+    var thead = el("thead");
+    var headRow = el("tr");
+    [t("stock.est.year"), t("stock.est.orgs"), t("stock.est.epsAvg"),
+     t("stock.est.epsRange"), t("stock.est.profitAvg"), t("stock.est.industry")].forEach(function (text) {
+      headRow.appendChild(el("th", "", text));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    eps.forEach(function (row) {
+      var tr = el("tr");
+      var year = String(row["年度"] || "");
+      var profit = profitByYear[year] || {};
+      tr.appendChild(el("td", "", year));
+      tr.appendChild(el("td", "", String(row["预测机构数"] || 0)));
+      tr.appendChild(el("td", "", fmt(row["均值"], 2)));
+      var range = (row["最小值"] === null || row["最大值"] === null)
+        ? "无数据"
+        : fmt(row["最小值"], 2) + " ~ " + fmt(row["最大值"], 2);
+      tr.appendChild(el("td", "", range));
+      tr.appendChild(el("td", "", profit["均值"] === null || profit["均值"] === undefined
+        ? "无数据" : fmt(profit["均值"], 2)));
+      tr.appendChild(el("td", "", fmt(row["行业平均数"], 2)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    block.appendChild(table);
+    body.appendChild(block);
+  }
+
+  /** 渲染机构预测（ST-06）：评级分布 + 目标价 + 分年度一致预期。 */
+  function paintForecast(panel, estimates) {
     var body = document.getElementById("st06-body");
     var card = document.getElementById("ST-06");
     if (!body) {
       return;
     }
-    var forecast = panel.forecast;
+    var forecast = panel && panel.forecast;
     if (!forecast) {
+      // 评级通道不可用时，仍尝试展示一致预期（两者数据源不同表，互不阻塞）
+      if (estimates && estimates.available) {
+        setBadges(card, "同花顺", estimates.caliber_note || "一致预期", false);
+        body.innerHTML = "";
+        paintEstimates(body, estimates);
+        body.setAttribute("data-state", "default");
+        return;
+      }
       setEmpty(body, "机构预测暂无", function () {
         loadStock(true);
       });
@@ -1442,6 +1500,7 @@
       row.appendChild(label);
       body.appendChild(row);
     });
+    paintEstimates(body, estimates);
     body.setAttribute("data-state", "default");
   }
 
@@ -1759,7 +1818,7 @@
     paintFundDist(payload.panel);
     paintNews(payload.panel);
     paintSentiment(payload.panel);
-    paintForecast(payload.panel);
+    paintForecast(payload.panel, payload.estimates);
     paintProfile(payload.profile, payload.holders, payload.summary);
     paintFinancial({ summary: payload.summary, trend: payload.trend });
     paintHolders(payload.holders);
