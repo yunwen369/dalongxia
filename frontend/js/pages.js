@@ -22,7 +22,11 @@
   var COLOR_WARN = "#b77f3d";
   var COLOR_ERR = "#ff5a5a";
 
-  /** 取语言包文本（阶段 6 交接口径：页面文案统一走 I18N，缺 key 时返回 key 本身便于排查）。 */
+  /** 取语言包文本（阶段 6 交接口径：页面文案统一走 I18N，缺 key 时返回 key 本身便于排查）。
+   * @param {string} key 键名 / i18n key
+   * @param {Object} vars 占位符变量表
+   * @returns {*} 处理结果
+   */
   function t(key, vars) {
     return window.I18N ? window.I18N.t(key, vars) : key;
   }
@@ -59,7 +63,12 @@
   // =============================================================
   // 一、通用工具
   // =============================================================
-  /** 创建元素：cls 为类名，text 为文本（一律用 textContent，避免注入）。 */
+  /** 创建元素：cls 为类名，text 为文本（一律用 textContent，避免注入）。
+   * @param {string} tag HTML 标签名
+   * @param {string} cls CSS 类名
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) {
@@ -71,7 +80,11 @@
     return node;
   }
 
-  /** 数字格式化：空值返回「无数据」，其余保留指定小数并加千分位（统一走 L10N.num）。 */
+  /** 数字格式化：空值返回「无数据」，其余保留指定小数并加千分位（统一走 L10N.num）。
+   * @param {*} value 待格式化或处理的值
+   * @param {number} digits 小数位数
+   * @returns {*} 处理结果
+   */
   function fmt(value, digits) {
     if (window.L10N) {
       return window.L10N.num(value, digits);
@@ -89,7 +102,10 @@
     return parts.join(".");
   }
 
-  /** 百分比格式化：带正负号与 %，空值「无数据」（统一走 L10N.pct）。 */
+  /** 百分比格式化：带正负号与 %，空值「无数据」（统一走 L10N.pct）。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function fmtPct(value) {
     if (window.L10N) {
       return window.L10N.pct(value);
@@ -104,7 +120,10 @@
     return (num > 0 ? "+" : "") + num.toFixed(2) + "%";
   }
 
-  /** 涨跌样式类：正红、负绿、零灰。 */
+  /** 涨跌样式类：正红、负绿、零灰。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function pctClass(value) {
     if (value === null || value === undefined || Number(value) === 0) {
       return "flat";
@@ -112,7 +131,10 @@
     return Number(value) > 0 ? "up" : "down";
   }
 
-  /** 亿/万元换算：接口返回元时转亿元展示。 */
+  /** 亿/万元换算：接口返回元时转亿元展示。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function yi(value) {
     if (value === null || value === undefined) {
       return null;
@@ -120,7 +142,10 @@
     return Number(value) / 1e8;
   }
 
-  /** 相对时间：把 YYYY-MM-DD HH:MM:SS 转成「x 分钟前 / x 小时前 / 日期」。 */
+  /** 相对时间：把 YYYY-MM-DD HH:MM:SS 转成「x 分钟前 / x 小时前 / 日期」。
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function relativeTime(text) {
     if (!text) {
       return "";
@@ -142,7 +167,11 @@
     return String(text).slice(0, 10);
   }
 
-  /** 统一请求：返回 data；失败抛出带中文文案的错误。 */
+  /** 统一请求：返回 data；失败抛出带中文文案的错误。
+   * @param {string} path 接口路径
+   * @param {Object} params 查询参数对象
+   * @returns {*} 处理结果
+   */
   function api(path, params) {
     var query = new URLSearchParams();
     Object.keys(params || {}).forEach(function (key) {
@@ -173,7 +202,9 @@
       });
   }
 
-  /** 轻提示（复用页面底部 #toast 元素）。 */
+  /** 轻提示（复用页面底部 #toast 元素）。
+   * @param {string} message 提示文案（中文）
+   */
   function toast(message) {
     var node = document.getElementById("toast");
     if (!node) {
@@ -190,7 +221,9 @@
   // =============================================================
   // 二、四态与徽章
   // =============================================================
-  /** 加载态：组件级骨架屏，区块内禁点。 */
+  /** 加载态：组件级骨架屏，区块内禁点。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   */
   function setLoading(body) {
     body.innerHTML = "";
     var box = el("div", "pg-skeleton");
@@ -201,7 +234,11 @@
     body.setAttribute("data-state", "loading");
   }
 
-  /** 空态：就地替换内容区，提供刷新按钮（§7 空态规范）。 */
+  /** 空态：就地替换内容区，提供刷新按钮（§7 空态规范）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {string} message 提示文案（中文）
+   * @param {*} onRetry 重试回调
+   */
   function setEmpty(body, message, onRetry) {
     body.innerHTML = "";
     var box = el("div", "pg-state");
@@ -218,7 +255,11 @@
     body.setAttribute("data-state", "empty");
   }
 
-  /** 错误态：中文原因 + 重试；与空态严格区分（§7）。 */
+  /** 错误态：中文原因 + 重试；与空态严格区分（§7）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {string} message 提示文案（中文）
+   * @param {*} onRetry 重试回调
+   */
   function setError(body, message, onRetry) {
     body.innerHTML = "";
     var box = el("div", "pg-state");
@@ -238,7 +279,12 @@
     body.setAttribute("data-state", "error");
   }
 
-  /** 双徽章：数据源 + 口径；降级命中时徽章显示实际源（§8）。 */
+  /** 双徽章：数据源 + 口径；降级命中时徽章显示实际源（§8）。
+   * @param {HTMLElement} card 卡片 DOM 节点
+   * @param {*} source 数据源名称
+   * @param {*} caliber 口径说明文案（展示在口径徽章）
+   * @param {*} degrade 是否降级命中（决定徽章样式）
+   */
   function setBadges(card, source, caliber, degrade) {
     var head = card.querySelector(".pg-card-head");
     if (!head) {
@@ -260,7 +306,13 @@
     }
   }
 
-  /** 统一占位卡结构：标题 + 双徽章位 + 内容区。 */
+  /** 统一占位卡结构：标题 + 双徽章位 + 内容区。
+   * @param {string} id 元素 id / 组件 id
+   * @param {*} title 标题
+   * @param {*} gridClass 栅格类名
+   * @param {*} extra 附加配置项
+   * @returns {Object} 处理结果
+   */
   function buildCard(id, title, gridClass, extra) {
     var card = el("section", "pg-card " + gridClass);
     card.id = id;
@@ -276,7 +328,10 @@
     return { card: card, body: body };
   }
 
-  /** 释放并重建图表实例（避免路由切换后残留旧图）。 */
+  /** 释放并重建图表实例（避免路由切换后残留旧图）。
+   * @param {HTMLElement} node DOM 节点
+   * @returns {*} 处理结果
+   */
   function mountChart(node) {
     if (!window.echarts || !node) {
       return null;
@@ -286,7 +341,9 @@
     return instance;
   }
 
-  /** 统一图表配色（跟随主题变量）。 */
+  /** 统一图表配色（跟随主题变量）。
+   * @returns {Object} 处理结果
+   */
   function chartTheme() {
     var styles = window.getComputedStyle(document.documentElement);
     return {
@@ -303,6 +360,11 @@
    * 渲染表格。
    * columns: [{title, key, cls, render}]
    * rows: 数据数组；onRowClick(row) 提供整行点击（跳转闭环）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {Array} columns 列定义（字段名数组）
+   * @param {Array} rows 记录行列表
+   * @param {*} onRowClick 行点击回调
+   * @param {*} maxHeightClass 最大高度类名
    */
   function renderTable(body, columns, rows, onRowClick, maxHeightClass) {
     body.innerHTML = "";
@@ -346,7 +408,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 生成带涨跌色的文本节点。 */
+  /** 生成带涨跌色的文本节点。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function pctNode(value) {
     var span = el("span", pctClass(value), fmtPct(value));
     return span;
@@ -355,7 +420,9 @@
   // =============================================================
   // 四、路由
   // =============================================================
-  /** 解析 #/view?k=v 形式的 hash。 */
+  /** 解析 #/view?k=v 形式的 hash。
+   * @returns {Object} 处理结果
+   */
   function parseHash() {
     var raw = window.location.hash || "#/home";
     var question = raw.indexOf("?");
@@ -368,7 +435,9 @@
     return { path: path.replace(/^#\/?/, ""), params: params };
   }
 
-  /** 切换视图显隐（只显示目标视图，其余隐藏，避免旧数据残留）。 */
+  /** 切换视图显隐（只显示目标视图，其余隐藏，避免旧数据残留）。
+   * @param {string} name 名称
+   */
   function showView(name) {
     Object.keys(VIEW_IDS).forEach(function (key) {
       var node = document.getElementById(VIEW_IDS[key]);
@@ -489,7 +558,9 @@
   // =============================================================
   var sectorsCache = {}; // key=market|kind → 数据，避免 Tab 来回切换重复请求
 
-  /** 构建板块页骨架（只建一次，之后仅更新内容）。 */
+  /** 构建板块页骨架（只建一次，之后仅更新内容）。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildSectorsShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -589,7 +660,9 @@
     });
   }
 
-  /** 渲染板块页。 */
+  /** 渲染板块页。
+   * @param {Object} params 查询参数对象
+   */
   function renderSectors(params) {
     var container = document.getElementById(VIEW_IDS.sectors);
     if (params.market) {
@@ -605,7 +678,9 @@
     loadSectors();
   }
 
-  /** 拉取并渲染板块页全部区块。 */
+  /** 拉取并渲染板块页全部区块。
+   * @param {boolean} force 是否强制刷新（true 时跳过本地缓存）
+   */
   function loadSectors(force) {
     var market = state.sectors.market;
     var kind = state.sectors.kind;
@@ -679,7 +754,10 @@
       });
   }
 
-  /** 渲染板块页（默认态）。 */
+  /** 渲染板块页（默认态）。
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   * @returns {*} 处理结果
+   */
   function paintSectors(payload) {
     var market = payload.market;
     var bodies = {
@@ -730,6 +808,10 @@
         chart.setOption({
           backgroundColor: "transparent",
           tooltip: {
+            /** 热力图悬浮说明：名称 + 涨跌幅 + 成交额（亿元）+ 领涨股。
+             * @param {*} info 信息对象
+             * @returns {*} 处理结果
+             */
             formatter: function (info) {
               var source = info.data || {};
               return (
@@ -754,6 +836,10 @@
                 color: "#fff",
                 overflow: "truncate",
                 lineHeight: 12,
+                /** 热力图块内标签：板块名换行 + 涨跌幅百分比（缺值显示「无数据」）。
+                 * @param {*} info 信息对象
+                 * @returns {*} 处理结果
+                 */
                 formatter: function (info) {
                   var pctText = info.data.pct === null ? "无数据" : Number(info.data.pct).toFixed(2) + "%";
                   return info.name + "\n" + pctText;
@@ -820,6 +906,7 @@
           { title: "流入(亿元)", cls: "num", render: function (row) { return fmt(row.inflow); } },
           { title: "流出(亿元)", cls: "num", render: function (row) { return fmt(row.outflow); } },
           // 源不提供分项：显示「无数据」而不是补 0（§9）
+ // @param {*} row 单行记录
           { title: "超大单(亿元)", cls: "num", render: function (row) { return fmt(row.super_big); } },
           { title: "大单(亿元)", cls: "num", render: function (row) { return fmt(row.big); } }
         ],
@@ -830,7 +917,10 @@
     }
   }
 
-  /** 摘要卡：领涨/领跌/净流入 Top3 + 集中度。 */
+  /** 摘要卡：领涨/领跌/净流入 Top3 + 集中度。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {*} summary 摘要数据
+   */
   function paintSummary(body, summary) {
     body.innerHTML = "";
     if (!summary || (!summary.gainers.length && !summary.losers.length)) {
@@ -839,6 +929,11 @@
       });
       return;
     }
+    /** 板块摘要分组：按 title 输出小标题，并逐条渲染 items 的 valueKey 指标。
+     * @param {*} title 标题
+     * @param {Array} items 记录列表
+     * @param {*} valueKey 取值字段名
+     */
     function group(title, items, valueKey) {
       var wrap = el("div", "pg-summary-row");
       var label = el("div", "pg-card-sub", title);
@@ -864,7 +959,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 跳转 #1/#9：板块 → 单板块估值。 */
+  /** 跳转 #1/#9：板块 → 单板块估值。
+   * @param {*} board 板块名称
+   * @param {*} market 市场标识：a/hk/us
+   */
   function jumpToSectorVal(board, market) {
     window.location.hash =
       "#/sector-val?board=" + encodeURIComponent(board) + "&market=" + (market || "cn");
@@ -873,7 +971,9 @@
   // =============================================================
   // 六、#/stock 个股详情（ST-01~ST-10）
   // =============================================================
-  /** 构建个股页骨架。 */
+  /** 构建个股页骨架。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildStockShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -1031,7 +1131,9 @@
 
   var stockCache = { key: "", panel: null };
 
-  /** 渲染个股页。 */
+  /** 渲染个股页。
+   * @param {Object} params 查询参数对象
+   */
   function renderStock(params) {
     var container = document.getElementById(VIEW_IDS.stock);
     state.stock.symbol = params.symbol || state.stock.symbol;
@@ -1051,7 +1153,10 @@
     loadStock();
   }
 
-  /** 拉取并渲染个股页（面板 + 概况 + 股东 + 财务摘要/趋势）。 */
+  /** 拉取并渲染个股页（面板 + 概况 + 股东 + 财务摘要/趋势）。
+   * @param {boolean} force 是否强制刷新（true 时跳过本地缓存）
+   * @returns {*} 处理结果
+   */
   function loadStock(force) {
     var symbol = state.stock.symbol;
     var market = state.stock.market;
@@ -1108,7 +1213,9 @@
       });
   }
 
-  /** 渲染报价大卡（ST-01）。 */
+  /** 渲染报价大卡（ST-01）。
+   * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
+   */
   function paintQuote(panel) {
     var body = document.getElementById("st01-body");
     var card = document.getElementById("ST-01");
@@ -1150,7 +1257,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染 K 线或分时（ST-02 / ST-03 互斥）。 */
+  /** 渲染 K 线或分时（ST-02 / ST-03 互斥）。
+   * @returns {*} 处理结果
+   */
   function paintStockChart() {
     var body = document.getElementById("st02-body");
     if (!body || !stockCache.panel) {
@@ -1269,7 +1378,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染资金分布环形图（ST-04）。 */
+  /** 渲染资金分布环形图（ST-04）。
+   * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
+   * @returns {*} 处理结果
+   */
   function paintFundDist(panel) {
     var body = document.getElementById("st04-body");
     var card = document.getElementById("ST-04");
@@ -1296,6 +1408,10 @@
       chart.setOption({
         backgroundColor: "transparent",
         tooltip: {
+          /** 四档资金流悬浮说明：档位 + 净额（亿元，4 位小数）+ 占比%。
+           * @param {*} info 信息对象
+           * @returns {*} 处理结果
+           */
           formatter: function (info) {
             var item = tiers[info.dataIndex] || {};
             return item.name + "<br/>净额：" + fmt(item.net, 4) + " 亿元<br/>占比：" + fmt(item.ratio, 2) + "%";
@@ -1312,6 +1428,10 @@
             label: {
               color: chartTheme().text,
               fontSize: 11,
+              /** 四档柱状图标签：档位换行 + 占比%（金额只进 tooltip）。
+               * @param {*} info 信息对象
+               * @returns {*} 处理结果
+               */
               formatter: function (info) {
                 var item = tiers[info.dataIndex] || {};
                 var ratioText = item.ratio === null || item.ratio === undefined ? "无数据" : fmt(item.ratio, 1) + "%";
@@ -1339,7 +1459,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染相关新闻（ST-05）。 */
+  /** 渲染相关新闻（ST-05）。
+   * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
+   */
   function paintNews(panel) {
     var body = document.getElementById("st05-body");
     if (!body) {
@@ -1372,7 +1494,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染舆情面板（ST-07）：由新闻情绪标签聚合，确定性规则非 AI。 */
+  /** 渲染舆情面板（ST-07）：由新闻情绪标签聚合，确定性规则非 AI。
+   * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
+   */
   function paintSentiment(panel) {
     var body = document.getElementById("st07-body");
     if (!body) {
@@ -1411,7 +1535,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染分年度一致预期表（F-027：年度/机构数/EPS 均值与区间/净利均值/行业平均）。 */
+  /** 渲染分年度一致预期表（F-027：年度/机构数/EPS 均值与区间/净利均值/行业平均）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {*} estimates 一致预期数据（eps/profit/institutions/detail）
+   */
   function paintEstimates(body, estimates) {
     var block = el("div", "pg-est-block");
     block.appendChild(el("div", "pg-card-sub", t("stock.est.title") + " · " + t("stock.est.sub")));
@@ -1458,7 +1585,10 @@
     body.appendChild(block);
   }
 
-  /** 渲染机构预测（ST-06）：评级分布 + 目标价 + 分年度一致预期。 */
+  /** 渲染机构预测（ST-06）：评级分布 + 目标价 + 分年度一致预期。
+   * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
+   * @param {*} estimates 一致预期数据（eps/profit/institutions/detail）
+   */
   function paintForecast(panel, estimates) {
     var body = document.getElementById("st06-body");
     var card = document.getElementById("ST-06");
@@ -1504,7 +1634,12 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染公司概况（ST-08）：基本信息 / 股本市值 / 机构与基金持有 / 最新财报摘要 四组。 */
+  /** 渲染公司概况（ST-08）：基本信息 / 股本市值 / 机构与基金持有 / 最新财报摘要 四组。
+   * @param {*} profile 公司概况数据
+   * @param {*} holders 股东数据（十大股东/十大流通股东）
+   * @param {*} summary 摘要数据
+   * @returns {*} 处理结果
+   */
   function paintProfile(profile, holders, summary) {
     var body = document.getElementById("st08-body");
     var card = document.getElementById("ST-08");
@@ -1590,7 +1725,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染财务页签区（ST-09）：关键指标 / 趋势 / 三表 / 指标明细。 */
+  /** 渲染财务页签区（ST-09）：关键指标 / 趋势 / 三表 / 指标明细。
+   * @param {*} fin 财务数据块（摘要 + 趋势）
+   */
   function paintFinancial(fin) {
     var body = document.getElementById("st09-body");
     var card = document.getElementById("ST-09");
@@ -1635,7 +1772,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染财务页签内容。 */
+  /** 渲染财务页签内容。
+   * @param {*} fin 财务数据块（摘要 + 趋势）
+   * @returns {*} 处理结果
+   */
   function paintFinPane(fin) {
     var pane = document.getElementById("st09-pane");
     if (!pane) {
@@ -1651,6 +1791,10 @@
           return {
             title: period,
             cls: "num",
+            /** 财务摘要单元格：按报告期列取值，缺失显示「无数据」（单位随接口口径）。
+             * @param {*} row 单行记录
+             * @returns {*} 处理结果
+             */
             render: function (row) {
               var value = row.values[index];
               if (value === null || value === undefined) {
@@ -1754,7 +1898,11 @@
     }
   }
 
-  /** 渲染财务表（期数横向）。 */
+  /** 渲染财务表（期数横向）。
+   * @param {*} pane 指标面板索引
+   * @param {Object} data 数据主体（接口 data 段）
+   * @returns {*} 处理结果
+   */
   function renderFinTable(pane, data) {
     var holder = el("div", "");
     var columns = [{ title: "项目", key: "name", cls: "name" }].concat(
@@ -1762,6 +1910,10 @@
         return {
           title: period,
           cls: "num",
+          /** 财务趋势单元格：元 → 亿元（÷1e8，两位小数），缺失显示「无数据」。
+           * @param {*} row 单行记录
+           * @returns {*} 处理结果
+           */
           render: function (row) {
             var value = row.values[index];
             return value === null || value === undefined ? "无数据" : fmt(value / 1e8, 2) + " 亿";
@@ -1773,7 +1925,10 @@
     renderTable(holder, columns, data.metrics || [], null, "short");
   }
 
-  /** 渲染十大股东（ST-10）。 */
+  /** 渲染十大股东（ST-10）。
+   * @param {*} holders 股东数据（十大股东/十大流通股东）
+   * @returns {*} 处理结果
+   */
   function paintHolders(holders) {
     var body = document.getElementById("st10-body");
     var card = document.getElementById("ST-10");
@@ -1796,6 +1951,10 @@
         {
           title: "本期变动",
           cls: "num",
+          /** 股东表「本期变动」：优先用源站文本，缺省回落到数值格式化。
+           * @param {*} row 单行记录
+           * @returns {*} 处理结果
+           */
           render: function (row) {
             if (row.change_text) {
               return row.change_text;
@@ -1810,7 +1969,9 @@
     );
   }
 
-  /** 渲染整页个股数据。 */
+  /** 渲染整页个股数据。
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   */
   function paintStock(payload) {
     paintQuote(payload.panel);
     syncStockTabs();
@@ -1827,7 +1988,9 @@
   // =============================================================
   // 七、#/sector-val 单板块估值（V-01~V-04）
   // =============================================================
-  /** 构建估值页骨架。 */
+  /** 构建估值页骨架。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildValShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -1880,7 +2043,9 @@
     container.appendChild(grid);
   }
 
-  /** 渲染估值页。 */
+  /** 渲染估值页。
+   * @param {Object} params 查询参数对象
+   */
   function renderSectorVal(params) {
     var container = document.getElementById(VIEW_IDS["sector-val"]);
     state.sectorVal.board = params.board || state.sectorVal.board;
@@ -1895,7 +2060,10 @@
     loadSectorVal();
   }
 
-  /** 拉取并渲染估值页。 */
+  /** 拉取并渲染估值页。
+   * @param {boolean} force 是否强制刷新（true 时跳过本地缓存）
+   * @returns {*} 处理结果
+   */
   function loadSectorVal(force) {
     var board = state.sectorVal.board;
     var market = state.sectorVal.market;
@@ -1938,7 +2106,9 @@
       });
   }
 
-  /** 渲染估值页数据。 */
+  /** 渲染估值页数据。
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   */
   function paintSectorVal(payload) {
     var kline = payload.kline;
     var cons = payload.cons;
@@ -2059,7 +2229,10 @@
     updateValPlaceholder(board, market);
   }
 
-  /** 更新 V-04 占位卡的参数提示（不做任何数据请求）。 */
+  /** 更新 V-04 占位卡的参数提示（不做任何数据请求）。
+   * @param {*} board 板块名称
+   * @param {*} market 市场标识：a/hk/us
+   */
   function updateValPlaceholder(board, market) {
     var hint = document.getElementById("v04-hint");
     if (hint) {
@@ -2082,7 +2255,11 @@
     expanded: {}
   };
 
-  /** POST 请求：用于 AI 复核（返回 data，失败抛中文错误）。 */
+  /** POST 请求：用于 AI 复核（返回 data，失败抛中文错误）。
+   * @param {string} path 接口路径
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @returns {*} 处理结果
+   */
   function apiPost(path, body) {
     return fetch(path, {
       method: "POST",
@@ -2103,7 +2280,9 @@
       });
   }
 
-  /** 构建新闻页骨架。 */
+  /** 构建新闻页骨架。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildNewsShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -2229,7 +2408,9 @@
     }
   }
 
-  /** 渲染新闻页。 */
+  /** 渲染新闻页。
+   * @param {Object} params 查询参数对象
+   */
   function renderNews(params) {
     var container = document.getElementById(VIEW_IDS.news);
     if (params.symbol) {
@@ -2243,7 +2424,10 @@
     loadNews();
   }
 
-  /** 拉取并渲染：板块树 + 资讯流 + 情绪温度。 */
+  /** 拉取并渲染：板块树 + 资讯流 + 情绪温度。
+   * @param {boolean} force 是否强制刷新（true 时跳过本地缓存）
+   * @returns {Object} 处理结果
+   */
   function loadNews(force) {
     var body = document.getElementById("n02-body");
     var sentiBody = document.getElementById("n03-body");
@@ -2296,7 +2480,10 @@
       });
   }
 
-  /** 渲染三级板块树（一级/二级可折叠，末级可选中）。 */
+  /** 渲染三级板块树（一级/二级可折叠，末级可选中）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {*} tree 树形结构（板块树）
+   */
   function paintBoardTree(body, tree) {
     if (!body) {
       return;
@@ -2372,7 +2559,10 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染资讯流：每条含情绪标签、事件、板块、AI 复核按钮。 */
+  /** 渲染资讯流：每条含情绪标签、事件、板块、AI 复核按钮。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   */
   function paintNewsFeed(body, payload) {
     var card = document.getElementById("N-02");
     if (!body) {
@@ -2465,7 +2655,11 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染情绪温度卡（N-03）。 */
+  /** 渲染情绪温度卡（N-03）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   * @returns {*} 处理结果
+   */
   function paintNewsSentiment(body, payload) {
     if (!body) {
       return;
@@ -2520,7 +2714,12 @@
   // =============================================================
   var fundState = { code: "017811" };
 
-  /** 通用写请求：method = PUT/DELETE/POST，统一中文异常。 */
+  /** 通用写请求：method = PUT/DELETE/POST，统一中文异常。
+   * @param {*} method 事件名或 HTTP 方法
+   * @param {string} path 接口路径
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @returns {*} 处理结果
+   */
   function apiSend(method, path, body) {
     var options = { method: method, headers: { "Content-Type": "application/json" } };
     if (body !== undefined) {
@@ -2544,7 +2743,9 @@
       });
   }
 
-  /** 构建基金页骨架。 */
+  /** 构建基金页骨架。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildFundShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -2627,7 +2828,9 @@
     window.location.hash = "#/fund?code=" + encodeURIComponent(code);
   }
 
-  /** 渲染基金页。 */
+  /** 渲染基金页。
+   * @param {Object} params 查询参数对象
+   */
   function renderFund(params) {
     var container = document.getElementById(VIEW_IDS.fund);
     fundState.code = params.code || fundState.code;
@@ -2669,7 +2872,9 @@
     });
   }
 
-  /** 渲染基金页各区块。 */
+  /** 渲染基金页各区块。
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   */
   function paintFund(payload) {
     var info = payload.info;
     var realtime = payload.realtime;
@@ -2861,7 +3066,10 @@
   // 十、#/portfolio 持仓管理（批次 5.3）
   // 结构：P-01 汇总 / P-02 新增表单 / P-03 持仓表 / P-04 市场分布
   // =============================================================
-  /** 构建持仓页骨架。 */
+  /** 构建持仓页骨架。
+   * @param {HTMLElement} container DOM 容器节点
+   * @returns {*} 处理结果
+   */
   function buildPortfolioShell(container) {
     container.innerHTML = "";
     var form = el("div", "page-toolbar");
@@ -2878,6 +3086,12 @@
     });
     form.appendChild(market);
 
+    /** 构造一个带 id/占位文案/宽度的输入框（估值页查询表单用）。
+     * @param {string} id 元素 id / 组件 id
+     * @param {*} placeholder 占位文案
+     * @param {*} width 宽度（栅格列数）
+     * @returns {*} 处理结果
+     */
     function field(id, placeholder, width) {
       var input = document.createElement("input");
       input.id = id;
@@ -2956,7 +3170,9 @@
     loadPortfolio();
   }
 
-  /** 拉取持仓与分析。 */
+  /** 拉取持仓与分析。
+   * @returns {*} 处理结果
+   */
   function loadPortfolio() {
     var bodies = ["p01-body", "p03-body", "p04-body"].map(function (id) {
       return document.getElementById(id);
@@ -2974,7 +3190,10 @@
     });
   }
 
-  /** 渲染持仓汇总 / 明细 / 分布。 */
+  /** 渲染持仓汇总 / 明细 / 分布。
+   * @param {*} payload 渲染载荷（聚合后的数据）
+   * @returns {*} 处理结果
+   */
   function paintPortfolio(payload) {
     var listing = payload.listing || {};
     var analysis = payload.analysis || {};
@@ -3026,6 +3245,10 @@
           chart.setOption({
             backgroundColor: "transparent",
             tooltip: {
+              /** 持仓分布饼图悬浮说明：名称 + 市值（元）+ 占比%。
+               * @param {*} info 信息对象
+               * @returns {*} 处理结果
+               */
               formatter: function (info) {
                 return info.name + "<br/>" + fmt(info.value, 2) + " 元（" + fmt(info.percent, 2) + "%）";
               }
@@ -3072,6 +3295,10 @@
             { title: "盈亏%", cls: "num", render: function (row) { return pctNode(row.pnl_pct); } },
             {
               title: "操作",
+              /** 持仓表「操作」列：渲染删除按钮，点击后调用 DELETE 并重载。
+               * @param {*} row 单行记录
+               * @returns {*} 处理结果
+               */
               render: function (row) {
                 var button = el("button", "pg-btn", "删除");
                 button.type = "button";
@@ -3102,7 +3329,9 @@
   // 十一、#/connectors 数据连接器（批次 5.4）
   // 展示：数据源开关 + 三市场能力矩阵 + D3 缺口（如实标注不可用）
   // =============================================================
-  /** 渲染连接器页。 */
+  /** 渲染连接器页。
+   * @returns {*} 处理结果
+   */
   function renderConnectors() {
     var container = document.getElementById(VIEW_IDS.connectors);
     container.innerHTML = "";
@@ -3232,7 +3461,9 @@
       });
   }
 
-  /** 告知书 + 确认按钮。 */
+  /** 告知书 + 确认按钮。
+   * @param {Object} data 数据主体（接口 data 段）
+   */
   function paintYjbConsent(data) {
     var body = document.getElementById("y01-body");
     body.innerHTML = "";
@@ -3260,7 +3491,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 状态 + 增强开关 + 解绑。 */
+  /** 状态 + 增强开关 + 解绑。
+   * @param {Object} data 数据主体（接口 data 段）
+   */
   function paintYjbStatus(data) {
     var body = document.getElementById("y02-body");
     body.innerHTML = "";
@@ -3298,7 +3531,9 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 二维码与轮询。 */
+  /** 二维码与轮询。
+   * @param {Object} data 数据主体（接口 data 段）
+   */
   function paintYjbBind(data) {
     var body = document.getElementById("y03-body");
     body.innerHTML = "";
@@ -3381,7 +3616,11 @@
   // =============================================================
   // 十二之二、#/charting 图表分析（阶段 8 补齐，OB-V02/F006-F010）
   // =============================================================
-  /** 计算 N 日简单移动平均（数据不足处补 null，前端本地计算不造假）。 */
+  /** 计算 N 日简单移动平均（数据不足处补 null，前端本地计算不造假）。
+   * @param {Array} values 数值列表
+   * @param {*} window 时间窗口（如 30 日）
+   * @returns {*} 处理结果
+   */
   function movingAverage(values, window) {
     var out = [];
     for (var i = 0; i < values.length; i += 1) {
@@ -3398,7 +3637,11 @@
     return out;
   }
 
-  /** 计算指数移动平均序列（MACD 基础）。 */
+  /** 计算指数移动平均序列（MACD 基础）。
+   * @param {Array} values 数值列表
+   * @param {*} window 时间窗口（如 30 日）
+   * @returns {*} 处理结果
+   */
   function exponentialMovingAverage(values, window) {
     var out = [];
     var k = 2 / (window + 1);
@@ -3414,7 +3657,10 @@
     return out;
   }
 
-  /** 计算 MACD（12,26,9）：返回 {dif, dea, macd} 三组同长序列。 */
+  /** 计算 MACD（12,26,9）：返回 {dif, dea, macd} 三组同长序列。
+   * @param {*} closes 收盘价序列
+   * @returns {*} 处理结果
+   */
   function computeMACD(closes) {
     var ema12 = exponentialMovingAverage(closes, 12);
     var ema26 = exponentialMovingAverage(closes, 26);
@@ -3428,7 +3674,10 @@
     return { dif: dif, dea: dea, macd: macd };
   }
 
-  /** 计算 KDJ（9,3,3）：RSV→K→D→J，数据不足处补 null。 */
+  /** 计算 KDJ（9,3,3）：RSV→K→D→J，数据不足处补 null。
+   * @param {Array} items 记录列表
+   * @returns {Object} 处理结果
+   */
   function computeKDJ(items) {
     var k = [];
     var d = [];
@@ -3457,7 +3706,9 @@
     return { k: k, d: d, j: j };
   }
 
-  /** 构建图表分析页骨架（工具栏 + K线/分时 Tab + 四区块）。 */
+  /** 构建图表分析页骨架（工具栏 + K线/分时 Tab + 四区块）。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildChartingShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -3591,7 +3842,9 @@
 
   var chartingCache = { kline: null, minute: null, quote: null, lines: [] };
 
-  /** 渲染图表分析页（入口：同步表单 → 拉数）。 */
+  /** 渲染图表分析页（入口：同步表单 → 拉数）。
+   * @param {Object} params 查询参数对象
+   */
   function renderCharting(params) {
     var container = document.getElementById(VIEW_IDS.charting);
     if (params && params.symbol) {
@@ -3645,7 +3898,9 @@
       });
   }
 
-  /** 渲染报价概览卡（CH-01）：价格/涨跌/最高/最低/成交额 + 双徽章。 */
+  /** 渲染报价概览卡（CH-01）：价格/涨跌/最高/最低/成交额 + 双徽章。
+   * @param {*} quote 报价数据
+   */
   function paintChartingQuote(quote) {
     var body = document.getElementById("ch01-body");
     var card = document.getElementById("CH-01");
@@ -3679,7 +3934,11 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染主图（CH-02）：K线四 pane（K+MA/VOL/MACD/KDJ）或分时（午休断裂）。 */
+  /** 渲染主图（CH-02）：K线四 pane（K+MA/VOL/MACD/KDJ）或分时（午休断裂）。
+   * @param {*} kline K 线数据列表
+   * @param {*} minute 分时数据列表
+   * @returns {*} 处理结果
+   */
   function paintChartingChart(kline, minute) {
     var body = document.getElementById("ch02-body");
     var card = document.getElementById("CH-02");
@@ -3792,7 +4051,12 @@
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染分时图（午休断裂 + 均价线 + 昨收参考线）。 */
+  /** 渲染分时图（午休断裂 + 均价线 + 昨收参考线）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {HTMLElement} card 卡片 DOM 节点
+   * @param {*} minute 分时数据列表
+   * @returns {*} 处理结果
+   */
   function paintChartingMinute(body, card, minute) {
     var items = (minute && minute.items) || [];
     if (items.length === 0) {
@@ -3874,7 +4138,9 @@
   // =============================================================
   // 十二之三、#/settings 设置（阶段 8 补齐，OB-V11/F069-F072）
   // =============================================================
-  /** 构建设置页骨架（AI 配置 / 主题与缓存 / 关于）。 */
+  /** 构建设置页骨架（AI 配置 / 主题与缓存 / 关于）。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function buildSettingsShell(container) {
     container.innerHTML = "";
     var grid = el("div", "pg-grid");
@@ -3897,7 +4163,13 @@
     container.appendChild(grid);
   }
 
-  /** AI 配置表单字段构造（输入框样式与持仓页表单一致）。 */
+  /** AI 配置表单字段构造（输入框样式与持仓页表单一致）。
+   * @param {string} id 元素 id / 组件 id
+   * @param {*} placeholder 占位文案
+   * @param {*} width 宽度（栅格列数）
+   * @param {*} secret 签名密钥（敏感信息）
+   * @returns {*} 处理结果
+   */
   function settingsField(id, placeholder, width, secret) {
     var input = document.createElement("input");
     input.id = id;

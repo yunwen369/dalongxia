@@ -15,17 +15,28 @@
 
   var state = { dashboards: [], activeId: "", registry: null };
 
-  /** i18n 取词（未加载时回退）。 */
+  /** i18n 取词（未加载时回退）。
+   * @param {string} key 键名 / i18n key
+   * @param {Object} vars 占位符变量表
+   * @returns {*} 处理结果
+   */
   function t(key, vars) {
     return window.I18N ? window.I18N.t(key, vars) : key;
   }
 
-  /** 本地化格式。 */
+  /** 本地化格式。
+   * @returns {*} 处理结果
+   */
   function L() {
     return window.L10N;
   }
 
-  /** 创建元素。 */
+  /** 创建元素。
+   * @param {string} tag HTML 标签名
+   * @param {string} cls CSS 类名
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) {
@@ -37,7 +48,9 @@
     return node;
   }
 
-  /** 轻提示。 */
+  /** 轻提示。
+   * @param {string} message 提示文案（中文）
+   */
   function toast(message) {
     if (window.UI) {
       window.UI.toast(message);
@@ -68,7 +81,9 @@
     state.activeId = state.dashboards[0].id;
   }
 
-  /** 保存布局到 localStorage（刷新后仍生效）。 */
+  /** 保存布局到 localStorage（刷新后仍生效）。
+   * @param {*} silent 是否静默（true 时不弹提示）
+   */
   function saveState(silent) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -83,7 +98,9 @@
     }
   }
 
-  /** 默认仪表板（全部使用真实接口，无演示数据）。 */
+  /** 默认仪表板（全部使用真实接口，无演示数据）。
+   * @returns {Object} 处理结果
+   */
   function buildDefaultDashboard() {
     return {
       id: "dash-" + Date.now(),
@@ -99,7 +116,9 @@
     };
   }
 
-  /** 当前仪表板。 */
+  /** 当前仪表板。
+   * @returns {*} 处理结果
+   */
   function activeDashboard() {
     for (var i = 0; i < state.dashboards.length; i += 1) {
       if (state.dashboards[i].id === state.activeId) {
@@ -110,7 +129,9 @@
     return state.dashboards[0];
   }
 
-  /** 拉取注册表（35 个组件元数据）。 */
+  /** 拉取注册表（35 个组件元数据）。
+   * @returns {*} 处理结果
+   */
   function loadRegistry() {
     if (state.registry) {
       return Promise.resolve(state.registry);
@@ -157,7 +178,11 @@
     pnl_pct: "th.pnlPct", market_label: "th.market", time: "th.time", title: "新闻标题"
   };
 
-  /** 取单元格显示值（数值走本地化）。 */
+  /** 取单元格显示值（数值走本地化）。
+   * @param {*} value 待格式化或处理的值
+   * @param {string} field 字段名
+   * @returns {*} 处理结果
+   */
   function cellText(value, field) {
     if (value === null || value === undefined) {
       return t("value.none");
@@ -171,7 +196,11 @@
     return String(value);
   }
 
-  /** 带涨跌色的单元格。 */
+  /** 带涨跌色的单元格。
+   * @param {*} value 待格式化或处理的值
+   * @param {string} field 字段名
+   * @returns {*} 处理结果
+   */
   function cellNode(value, field) {
     var node = el("td", "num", cellText(value, field));
     if (typeof value === "number" && (field.indexOf("pct") >= 0 || field === "pnl" || field === "growth" || field === "net_inflow")) {
@@ -180,7 +209,11 @@
     return node;
   }
 
-  /** 统一请求（中文错误）。 */
+  /** 统一请求（中文错误）。
+   * @param {string} path 接口路径
+   * @param {Object} params 查询参数对象
+   * @returns {*} 处理结果
+   */
   function fetchJson(path, params) {
     var query = new URLSearchParams();
     Object.keys(params || {}).forEach(function (key) {
@@ -202,7 +235,13 @@
       });
   }
 
-  /** 渲染表格（可排序 + 可导出 CSV）。 */
+  /** 渲染表格（可排序 + 可导出 CSV）。
+   * @param {HTMLElement} container DOM 容器节点
+   * @param {Array} rows 记录行列表
+   * @param {*} cols 列定义（字段名数组）
+   * @param {Object} widget 组件元数据（id/title/span）
+   * @returns {*} 处理结果
+   */
   function renderTable(container, rows, cols, widget) {
     if (!rows.length) {
       container.appendChild(el("div", "pg-state", t("state.empty")));
@@ -240,7 +279,11 @@
     table.appendChild(thead);
     var tbody = el("tbody");
 
-    /** 生成一行 tr：按列顺序取值并交给 cellNode 做类型化渲染。 */
+    /** 生成一行 tr：按列顺序取值并交给 cellNode 做类型化渲染。
+     * @param {*} row 单行记录
+     * @param {Array} columns 列定义（字段名数组）
+     * @returns {*} 处理结果
+     */
     function buildRow(row, columns) {
       var tr = el("tr");
       columns.forEach(function (field) {
@@ -280,7 +323,11 @@
     container.appendChild(exportButton);
   }
 
-  /** 渲染指标卡。 */
+  /** 渲染指标卡。
+   * @param {HTMLElement} container DOM 容器节点
+   * @param {Object} data 数据主体（接口 data 段）
+   * @param {Object} widget 组件元数据（id/title/span）
+   */
   function renderMetrics(container, data, widget) {
     var entries = [];
     if (Array.isArray(data)) {
@@ -311,7 +358,12 @@
     container.appendChild(grid);
   }
 
-  /** 渲染折线/柱状图（ECharts 本地库）。 */
+  /** 渲染折线/柱状图（ECharts 本地库）。
+   * @param {HTMLElement} container DOM 容器节点
+   * @param {Array} items 记录列表
+   * @param {Object} recipe 渲染配方（kind/path/cols）
+   * @returns {Object} 处理结果
+   */
   function renderChart(container, items, recipe) {
     if (!items || !items.length) {
       container.appendChild(el("div", "pg-state", t("state.empty")));
@@ -357,7 +409,10 @@
     window.addEventListener("resize", function () { chart.resize(); });
   }
 
-  /** 渲染资讯流（真实新闻 + 本地情绪标签）。 */
+  /** 渲染资讯流（真实新闻 + 本地情绪标签）。
+   * @param {HTMLElement} container DOM 容器节点
+   * @param {Array} items 记录列表
+   */
   function renderNews(container, items) {
     if (!items || !items.length) {
       container.appendChild(el("div", "pg-state", t("state.empty")));
@@ -380,7 +435,12 @@
     container.appendChild(list);
   }
 
-  /** 分组渲染：表格 / 图表 / 指标 / 资讯 / 面板。 */
+  /** 分组渲染：表格 / 图表 / 指标 / 资讯 / 面板。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {Object} data 数据主体（接口 data 段）
+   * @param {Object} recipe 渲染配方（kind/path/cols）
+   * @param {Object} widget 组件元数据（id/title/span）
+   */
   function renderWidgetBody(body, data, recipe, widget) {
     body.innerHTML = "";
     if (recipe.kind === "table") {
@@ -422,7 +482,11 @@
   // =============================================================
   var draggedIndex = null;
 
-  /** 构建一张组件卡（含拖拽、宽度调整、移除、CSV）。 */
+  /** 构建一张组件卡（含拖拽、宽度调整、移除、CSV）。
+   * @param {*} entry 列表项 / 组件条目
+   * @param {number} index 序号（从 0 开始）
+   * @returns {*} 处理结果
+   */
   function buildWidgetCard(entry, index) {
     var meta = (state.registry && state.registry[entry.id]) || { id: entry.id, title: entry.id, desc: "" };
     var card = el("section", "pg-card dash-widget");
@@ -491,7 +555,12 @@
     return card;
   }
 
-  /** 加载单个组件数据（失败就地显示错误 + 重试）。 */
+  /** 加载单个组件数据（失败就地显示错误 + 重试）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {HTMLElement} card 卡片 DOM 节点
+   * @param {*} entry 列表项 / 组件条目
+   * @param {Object} meta 元数据对象
+   */
   function loadWidget(body, card, entry, meta) {
     body.innerHTML = "";
     // 四态规范（§7.9）：显式标记 loading，巡检与 wait_blocks 才能等到收口
@@ -577,7 +646,9 @@
           title: t("dashboard.new"),
           input: true,
           defaultValue: t("dashboard.defaultName"),
-          /** 新建仪表板确认：空名回落默认名，创建后切为当前并重绘。 */
+          /** 新建仪表板确认：空名回落默认名，创建后切为当前并重绘。
+           * @param {*} value 待格式化或处理的值
+           */
           onConfirm: function (value) {
             var name = value || t("dashboard.defaultName");
             var dash = { id: "dash-" + Date.now(), name: name, widgets: [] };
@@ -673,7 +744,9 @@
     document.body.appendChild(overlay);
   }
 
-  /** 模板库：三个预设布局（全部真实接口组件）。 */
+  /** 模板库：三个预设布局（全部真实接口组件）。
+   * @returns {Object} 处理结果
+   */
   function openTemplates() {
     if (!window.UI) {
       return;
@@ -711,7 +784,9 @@
     document.body.appendChild(overlay);
   }
 
-  /** 按 id 添加组件（供命令面板与组件库调用）。 */
+  /** 按 id 添加组件（供命令面板与组件库调用）。
+   * @param {*} widgetId 组件 id
+   */
   function addWidgetById(widgetId) {
     var dash = activeDashboard();
     if (dash.widgets.some(function (entry) { return entry.id === widgetId; })) {
@@ -729,8 +804,8 @@
   window.Dashboard = {
     render: render,
     addWidgetById: addWidgetById,
+    /** 重新读本地存储并整体重绘（供外部在数据变更后调用）。 */
     reload: function () {
-      /** 重新读本地存储并整体重绘（供外部在数据变更后调用）。 */
       loadState(); render();
     }
   };

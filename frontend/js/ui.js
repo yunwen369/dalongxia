@@ -8,12 +8,18 @@
 (function () {
   "use strict";
 
-  /** 取翻译（I18N 未加载时兜底返回原文 key）。 */
+  /** 取翻译（I18N 未加载时兜底返回原文 key）。
+   * @param {string} key 键名 / i18n key
+   * @param {Object} vars 占位符变量表
+   * @returns {*} 处理结果
+   */
   function t(key, vars) {
     return window.I18N ? window.I18N.t(key, vars) : key;
   }
 
-  /** 轻提示：复用页面底部 #toast。 */
+  /** 轻提示：复用页面底部 #toast。
+   * @param {string} message 提示文案（中文）
+   */
   function toast(message) {
     var node = document.getElementById("toast");
     if (!node) {
@@ -27,7 +33,12 @@
     }, 2600);
   }
 
-  /** 创建元素。 */
+  /** 创建元素。
+   * @param {string} tag HTML 标签名
+   * @param {string} cls CSS 类名
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) {
@@ -42,6 +53,7 @@
   /**
    * 模态框。
    * options: {title, message, input:bool, defaultValue, confirmText, onConfirm(value), onCancel}
+   * @param {*} options 可选项集合
    */
   function modal(options) {
     var overlay = el("div", "ui-overlay");
@@ -77,7 +89,9 @@
       overlay.remove();
       document.removeEventListener("keydown", onKey);
     }
-    /** Esc 关闭浮层（与全局快捷键互不干扰）。 */
+    /** Esc 关闭浮层（与全局快捷键互不干扰）。
+     * @param {Event} event 事件对象
+     */
     function onKey(event) {
       if (event.key === "Escape") {
         close();
@@ -111,7 +125,9 @@
   // =============================================================
   var widgetCache = null;
 
-  /** 视图命令（含快捷键说明）。 */
+  /** 视图命令（含快捷键说明）。
+   * @returns {Array} 处理结果
+   */
   function viewCommands() {
     return [
       { id: "view:home", group: "palette.views", label: t("nav.home"), run: function () { location.hash = "#/home"; } },
@@ -127,11 +143,14 @@
     ];
   }
 
-  /** 操作命令。 */
+  /** 操作命令。
+   * @returns {Array} 处理结果
+   */
   function actionCommands() {
     return [
       {
         id: "action:cache", group: "palette.actions", label: t("palette.clearCache"),
+        /** 执行清缓存：POST /api/cache/clear，成功/失败均给出中文提示。 */
         run: function () {
           fetch("/api/cache/clear", { method: "POST" })
             .then(function (response) { return response.json(); })
@@ -143,6 +162,7 @@
       },
       {
         id: "action:theme", group: "palette.actions", label: "切换主题（Ctrl+M）",
+        /** 执行主题切换：dark ↔ light，并写入 localStorage 持久化。 */
         run: function () {
           var current = document.documentElement.getAttribute("data-theme") || "dark";
           var next = current === "dark" ? "light" : "dark";
@@ -154,7 +174,9 @@
     ];
   }
 
-  /** 组件命令：按 /api/widgets 注册表动态生成。 */
+  /** 组件命令：按 /api/widgets 注册表动态生成。
+   * @param {*} callback 回调函数
+   */
   function widgetCommands(callback) {
     if (widgetCache) {
       callback(buildWidgetCommands(widgetCache));
@@ -169,13 +191,17 @@
       .catch(function () { callback([]); });
   }
 
-  /** 把注册表项转成命令。 */
+  /** 把注册表项转成命令。
+   * @param {Array} items 记录列表
+   * @returns {*} 处理结果
+   */
   function buildWidgetCommands(items) {
     return items.map(function (item) {
       return {
         id: "widget:" + item.id,
         group: "palette.widgets",
         label: item.id + " " + item.title,
+        /** 执行添加组件：调用仪表板 API 并跳转到 #/dashboard。 */
         run: function () {
           if (window.Dashboard && window.Dashboard.addWidgetById) {
             window.Dashboard.addWidgetById(item.id);
@@ -192,7 +218,10 @@
   var paletteNode = null;
   var paletteState = { items: [], index: 0 };
 
-  /** 渲染候选列表。 */
+  /** 渲染候选列表。
+   * @param {*} input 输入框节点
+   * @returns {*} 处理结果
+   */
   function renderPaletteList(input) {
     if (!paletteNode) {
       return;

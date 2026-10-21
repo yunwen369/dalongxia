@@ -19,7 +19,12 @@
   var history = []; // [{role, content}]
   var configured = false;
 
-  /** 创建元素（textContent 防注入）。 */
+  /** 创建元素（textContent 防注入）。
+   * @param {string} tag HTML 标签名
+   * @param {string} cls CSS 类名
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) {
@@ -37,7 +42,9 @@
     showToast("设置页将在阶段 6 后续接入，可先通过 .env 或 data/ai_config.json 配置");
   }
 
-  /** 轻提示（复用全局 #toast）。 */
+  /** 轻提示（复用全局 #toast）。
+   * @param {string} message 提示文案（中文）
+   */
   function showToast(message) {
     var node = document.getElementById("toast");
     if (!node) {
@@ -51,7 +58,12 @@
     }, 2600);
   }
 
-  /** 构造一条消息气泡。 */
+  /** 构造一条消息气泡。
+   * @param {*} role 消息角色（user/assistant）
+   * @param {string} text 文本内容
+   * @param {*} extraClass 附加 CSS 类名
+   * @returns {*} 处理结果
+   */
   function bubble(role, text, extraClass) {
     var item = el("div", "copilot-msg " + (role === "user" ? "user" : "assistant") + (extraClass ? " " + extraClass : ""));
     item.appendChild(el("div", "copilot-msg-role", role === "user" ? "我" : "Copilot"));
@@ -59,7 +71,9 @@
     return item;
   }
 
-  /** 渲染消息列表。 */
+  /** 渲染消息列表。
+   * @param {HTMLElement} container DOM 容器节点
+   */
   function renderMessages(container) {
     var list = container.querySelector(".copilot-messages");
     if (!list) {
@@ -86,7 +100,10 @@
     list.scrollTop = list.scrollHeight;
   }
 
-  /** 发送消息并渲染回复。 */
+  /** 发送消息并渲染回复。
+   * @param {string} text 文本内容
+   * @returns {*} 处理结果
+   */
   function send(text) {
     var container = document.getElementById("copilot");
     if (!container) {
@@ -162,7 +179,9 @@
       });
   }
 
-  /** 初始化抽屉：替换占位内容为完整对话界面。 */
+  /** 初始化抽屉：替换占位内容为完整对话界面。
+   * @returns {*} 处理结果
+   */
   function init() {
     var drawer = document.getElementById("copilot");
     if (!drawer) {

@@ -10,7 +10,11 @@
 
   const $ = (id) => document.getElementById(id);
 
-  /** 数字格式化：空值统一显示“—”，不补 0。 */
+  /** 数字格式化：空值统一显示“—”，不补 0。
+   * @param {*} value 待格式化或处理的值
+   * @param {number} digits 小数位数
+   * @returns {*} 处理结果
+   */
   function fmt(value, digits) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
       return "—";
@@ -21,7 +25,10 @@
     });
   }
 
-  /** 涨跌幅格式化：显式带正负号。 */
+  /** 涨跌幅格式化：显式带正负号。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function fmtPct(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
       return "—";
@@ -30,7 +37,10 @@
     return (number > 0 ? "+" : "") + number.toFixed(2) + "%";
   }
 
-  /** 金额格式化：元 → 万/亿/万亿。 */
+  /** 金额格式化：元 → 万/亿/万亿。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function fmtAmount(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
       return "—";
@@ -42,7 +52,10 @@
     return number.toFixed(2);
   }
 
-  /** 成交量格式化：手 → 万手。 */
+  /** 成交量格式化：手 → 万手。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function fmtVolume(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
       return "—";
@@ -52,7 +65,10 @@
     return number.toFixed(0) + " 手";
   }
 
-  /** 根据数值返回涨跌样式类。 */
+  /** 根据数值返回涨跌样式类。
+   * @param {*} value 待格式化或处理的值
+   * @returns {string} 处理结果
+   */
   function trendClass(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return "flat";
     if (Number(value) > 0) return "up";
@@ -60,7 +76,11 @@
     return "flat";
   }
 
-  /** 设置徽章文案与状态。 */
+  /** 设置徽章文案与状态。
+   * @param {string} id 元素 id / 组件 id
+   * @param {string} text 文本内容
+   * @param {Object} state 状态对象
+   */
   function setBadge(id, text, state) {
     const el = $(id);
     if (!el) return;
@@ -69,7 +89,9 @@
     if (state) el.classList.add(state);
   }
 
-  /** 设置全局数据源/口径/状态/时间徽章。 */
+  /** 设置全局数据源/口径/状态/时间徽章。
+   * @param {Object} data 数据主体（接口 data 段）
+   */
   function setGlobalBadges(data) {
     if (!data) return;
     setBadge("mk-source", "数据源：" + (data.source || "—"), "accent");
@@ -83,7 +105,11 @@
     setBadge("mk-asof", "时间：" + (data.as_of || "—"));
   }
 
-  /** 统一 fetch：把 {data,error} 转成 data 或抛出中文错误。 */
+ /** 统一 fetch：把 {data,error} 转成 data 或抛出中文错误。
+  * @param {string} path 接口路径
+  * @param {Object} params 查询参数对象
+  * @returns {*} 处理结果
+  */
   async function api(path, params) {
     const url = new URL(path, window.location.origin);
     Object.entries(params || {}).forEach(([key, value]) => {
@@ -104,7 +130,11 @@
     return body.data;
   }
 
-  /** 渲染普通表格。 */
+  /** 渲染普通表格。
+   * @param {*} containerId 容器元素 id
+   * @param {Array} columns 列定义（字段名数组）
+   * @param {Array} rows 记录行列表
+   */
   function renderTable(containerId, columns, rows) {
     const container = $(containerId);
     if (!container) return;
@@ -143,7 +173,10 @@
     container.appendChild(table);
   }
 
-  /** 渲染 key-value 表（报价/概况）。 */
+  /** 渲染 key-value 表（报价/概况）。
+   * @param {*} containerId 容器元素 id
+   * @param {*} pairs 键值对列表
+   */
   function renderKV(containerId, pairs) {
     const container = $(containerId);
     if (!container) return;
@@ -167,7 +200,9 @@
     container.appendChild(table);
   }
 
-  /** 获取当前主题色。 */
+  /** 获取当前主题色。
+   * @returns {Object} 处理结果
+   */
   function themeColors() {
     const styles = getComputedStyle(document.documentElement);
     return {
@@ -181,7 +216,10 @@
     };
   }
 
-  /** 获取或初始化图表实例。 */
+  /** 获取或初始化图表实例。
+   * @param {string} id 元素 id / 组件 id
+   * @returns {*} 处理结果
+   */
   function chartOf(id) {
     const element = $(id);
     if (!element || typeof echarts === "undefined") return null;
@@ -189,7 +227,12 @@
     return existing || echarts.init(element);
   }
 
-  /** 渲染折线图（指数/分时共用）。 */
+  /** 渲染折线图（指数/分时共用）。
+   * @param {string} id 元素 id / 组件 id
+   * @param {*} labels 标签列表
+   * @param {Array} values 数值列表
+   * @param {*} color 颜色值（CSS 色值）
+   */
   function renderLineChart(id, labels, values, color) {
     const chart = chartOf(id);
     if (!chart) return;
@@ -231,7 +274,9 @@
     chart.resize();
   }
 
-  /** 渲染 K 线图。 */
+  /** 渲染 K 线图。
+   * @param {Array} items 记录列表
+   */
   function renderKlineChart(items) {
     const chart = chartOf("mk-kline-chart");
     if (!chart) return;
@@ -279,7 +324,9 @@
     chart.resize();
   }
 
-  /** 渲染指数表。 */
+  /** 渲染指数表。
+   * @param {Array} items 记录列表
+   */
   function renderIndexTable(items) {
     renderTable(
       "mk-index-table",
@@ -295,7 +342,9 @@
     );
   }
 
-  /** 渲染报价详情。 */
+  /** 渲染报价详情。
+   * @param {*} quote 报价数据
+   */
   function renderQuote(quote) {
     renderKV("mk-quote-table", [
       ["名称 / 代码", (quote.name || "—") + " / " + (quote.symbol || "—")],
@@ -315,7 +364,9 @@
     ]);
   }
 
-  /** 渲染个股概况。 */
+  /** 渲染个股概况。
+   * @param {*} profile 公司概况数据
+   */
   function renderProfile(profile) {
     renderKV("mk-profile-table", [
       ["公司名称", profile.company_name || profile.name || "—"],
@@ -335,7 +386,9 @@
     ]);
   }
 
-  /** 渲染搜索结果。 */
+  /** 渲染搜索结果。
+   * @param {Array} items 记录列表
+   */
   function renderSearch(items) {
     const container = $("mk-search-list");
     if (!container) return;

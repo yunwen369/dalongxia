@@ -26,7 +26,9 @@
 
   let toastTimer = null;
 
-  /** 显示 3 秒自动消失的 Toast 提示。 */
+  /** 显示 3 秒自动消失的 Toast 提示。
+   * @param {string} message 提示文案（中文）
+   */
   function showToast(message) {
     const toast = document.getElementById("toast");
     if (!toast) {
@@ -40,7 +42,9 @@
     }, 3000);
   }
 
-  /** 应用主题并持久化到 localStorage。 */
+  /** 应用主题并持久化到 localStorage。
+   * @param {Object} theme 主题色对象
+   */
   function applyTheme(theme) {
     const nextTheme = theme === "light" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", nextTheme);
@@ -77,7 +81,9 @@
     drawer.setAttribute("aria-hidden", "true");
   }
 
-  /** 渲染数据源状态列表（只使用 textContent，避免 HTML 注入）。 */
+  /** 渲染数据源状态列表（只使用 textContent，避免 HTML 注入）。
+   * @param {*} sources 数据源列表
+   */
   function renderSources(sources) {
     const list = document.getElementById("source-list");
     if (!list) {
@@ -112,7 +118,9 @@
     });
   }
 
-  /** 渲染运行环境信息。 */
+  /** 渲染运行环境信息。
+   * @param {Object} data 数据主体（接口 data 段）
+   */
   function renderSystemInfo(data) {
     const container = document.getElementById("system-info");
     if (!container) {
@@ -134,7 +142,10 @@
     container.style.whiteSpace = "pre-line";
   }
 
-  /** 设置健康徽章状态。 */
+  /** 设置健康徽章状态。
+   * @param {string} text 文本内容
+   * @param {Object} state 状态对象
+   */
   function setHealthBadge(text, state) {
     const badge = document.getElementById("health-badge");
     if (!badge) {

@@ -238,7 +238,11 @@
 
   var locale = "zh-CN";
 
-  /** 取翻译文本，支持 {name} 占位符。 */
+  /** 取翻译文本，支持 {name} 占位符。
+   * @param {string} key 键名 / i18n key
+   * @param {Object} vars 占位符变量表
+   * @returns {*} 处理结果
+   */
   function t(key, vars) {
     var text = dict[key];
     if (text === undefined) {
@@ -253,7 +257,9 @@
     return text;
   }
 
-  /** 批量套用 data-i18n / data-i18n-title / data-i18n-placeholder。 */
+  /** 批量套用 data-i18n / data-i18n-title / data-i18n-placeholder。
+   * @param {*} root 根节点
+   */
   function apply(root) {
     var scope = root || document;
     scope.querySelectorAll("[data-i18n]").forEach(function (node) {
@@ -274,7 +280,11 @@
   var MARKET_DIGITS = { a: 2, hk: 3, us: 2, fund: 4, index: 2 };
   var CURRENCY_SYMBOL = { CNY: "¥", HKD: "HK$", USD: "$" };
 
-  /** 数值格式化：空值返回「无数据」，千分位 + 指定位数。 */
+  /** 数值格式化：空值返回「无数据」，千分位 + 指定位数。
+   * @param {*} value 待格式化或处理的值
+   * @param {number} digits 小数位数
+   * @returns {*} 处理结果
+   */
   function num(value, digits) {
     if (value === null || value === undefined || value === "") {
       return t("value.none");
@@ -289,13 +299,21 @@
     return parts.join(".");
   }
 
-  /** 价格：A股 2 位、港股 3 位、美股 2 位、基金净值 4 位。 */
+  /** 价格：A股 2 位、港股 3 位、美股 2 位、基金净值 4 位。
+   * @param {*} value 待格式化或处理的值
+   * @param {*} market 市场标识：a/hk/us
+   * @returns {*} 处理结果
+   */
   function price(value, market) {
     var digits = MARKET_DIGITS[market || "a"];
     return num(value, digits === undefined ? 2 : digits);
   }
 
-  /** 百分比：带符号，默认 2 位。 */
+  /** 百分比：带符号，默认 2 位。
+   * @param {*} value 待格式化或处理的值
+   * @param {number} digits 小数位数
+   * @returns {*} 处理结果
+   */
   function pct(value, digits) {
     if (value === null || value === undefined) {
       return t("value.none");
@@ -307,7 +325,12 @@
     return (n > 0 ? "+" : "") + n.toFixed(digits === undefined ? 2 : digits) + "%";
   }
 
-  /** 金额：带币种符号，千分位。 */
+  /** 金额：带币种符号，千分位。
+   * @param {*} value 待格式化或处理的值
+   * @param {*} currency 币种（CNY/HKD/USD）
+   * @param {number} digits 小数位数
+   * @returns {*} 处理结果
+   */
   function money(value, currency, digits) {
     if (value === null || value === undefined) {
       return t("value.none");
@@ -316,7 +339,10 @@
     return symbol + num(value, digits === undefined ? 2 : digits);
   }
 
-  /** 日期时间：统一 Asia/Shanghai（YYYY-MM-DD HH:mm）。 */
+  /** 日期时间：统一 Asia/Shanghai（YYYY-MM-DD HH:mm）。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function datetime(value) {
     if (!value) {
       return t("value.none");
@@ -332,12 +358,18 @@
     return formatter.format(stamp).replace(/\//g, "-");
   }
 
-  /** 日期：YYYY-MM-DD（Asia/Shanghai）。 */
+  /** 日期：YYYY-MM-DD（Asia/Shanghai）。
+   * @param {*} value 待格式化或处理的值
+   * @returns {*} 处理结果
+   */
   function date(value) {
     return datetime(value).slice(0, 10);
   }
 
-  /** 导出文件名：OpenBB导出_前缀_YYYYMMDD-HHmm.csv（不含非法字符）。 */
+  /** 导出文件名：OpenBB导出_前缀_YYYYMMDD-HHmm.csv（不含非法字符）。
+   * @param {*} prefix 代码前缀（如 sh/sz）
+   * @returns {*} 处理结果
+   */
   function csvFilename(prefix) {
     var now = new Date();
     var pad = function (n) { return n < 10 ? "0" + n : String(n); };
@@ -347,7 +379,11 @@
     return t("export.prefix") + "_" + clean + "_" + stamp + "." + t("export.suffix");
   }
 
-  /** CSV 文本：加 UTF-8 BOM，Excel 打开不乱码。 */
+  /** CSV 文本：加 UTF-8 BOM，Excel 打开不乱码。
+   * @param {Array} headers 表头列表
+   * @param {Array} rows 记录行列表
+   * @returns {string} 处理结果
+   */
   function csvText(headers, rows) {
     var escape = function (cell) {
       var text = cell === null || cell === undefined ? "" : String(cell);
