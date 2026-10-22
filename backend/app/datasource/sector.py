@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +43,9 @@ from backend.app.datasource.sw_board_map import SW_INDEX_CODE
 import akshare as ak  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# 板块名负缓存：{板块名: 失效时间戳}，避免重复为「查无此板块」付出两次名录抓取
+_BOARD_MISS: Dict[str, float] = {}
 
 # 港美股「境外简化建模」的代表个股：无免费板块专项通道（D3 / 设计基准附录 B-1），
 # 用「主要指数 + 代表个股」建模，前端徽章标注「境外简化建模」，不得冒充真实板块。
@@ -862,11 +866,14 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
     _ensure_enabled()
 
     def build() -> Dict[str, str]:
-        """构建 {申万行业名: 行业代码} 映射。
+        """构建 {申万行业名: 行业代码} 映射（只取一级+二级，三级按需加载）。
 
         申万三个层级的 HTML 页面偶发返回空文档（akshare 解析抛 AttributeError），
-        因此按「一级→二级→三级」顺序合并，且必须拿到一级名录才允许缓存，
+        因此按「一级→二级」顺序合并，且必须拿到一级名录才允许缓存，
         避免把残缺映射写进进程缓存导致后续请求持续失败。
+
+        三级名录单独缓存（P1-04）：三级页最慢且多数板块名在一/二级即可命中，
+        默认不拉取可将成分股首次加载从 15 秒级降到 6 秒级。
 
         Returns:
             dict: Dict[str, str] 结构的结果。
@@ -879,7 +886,6 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         for loader, level in (
             (ak.sw_index_first_info, "一级"),
             (ak.sw_index_second_info, "二级"),
-            (ak.sw_index_third_info, "三级"),
         ):
             try:
                 info = _clean_records(_call(loader))
@@ -897,9 +903,47 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
             raise ValueError("申万行业名录暂不可用（一级名录未取到）")
         return mapping
 
-    mapping = _lookup("sw:industry-map", 3600, build)
-    target = mapping.get(board)
+    def build_third() -> Dict[str, str]:
+        """按需构建三级行业映射（仅在名称未命中一/二级时才拉取）。
+
+        Returns:
+            dict: Dict[str, str] 结构的结果。
+
+        Raises:
+            ValueError: 三级名录暂时不可用（页面偶发空表）。
+        """
+        mapping: Dict[str, str] = {}
+        try:
+            info = _clean_records(_call(ak.sw_index_third_info))
+        except Exception as exc:  # noqa: BLE001 - 统一转为可降级异常
+            raise ValueError(f"申万三级名录暂不可用：{type(exc).__name__}") from exc
+        for row in info or []:
+            name = str(row.get("行业名称") or "").strip()
+            code = str(row.get("行业代码") or "").strip()
+            if name and code:
+                mapping[name] = code
+        if not mapping:
+            raise ValueError("申万三级名录为空")
+        return mapping
+
+    # 负缓存（P1-03）：确认查不到的板块名 10 分钟内直接失败，
+    # 不再重复抓「一/二级 + 三级」两轮 HTML 名录（单轮约 5 秒）。
+    miss_until = _BOARD_MISS.get(board, 0.0)
+    if miss_until > time.time():
+        raise ValueError(f"申万行业未找到：{board}")
+    # 静态名录优先（497 个申万一/二/三级行业名）：命中即免去名录抓取（P1-04）
+    target = SW_INDEX_CODE.get(board)
     if not target:
+        target = _lookup("sw:industry-map", 3600, build).get(board)
+    if not target:
+        # 一/二级未命中时才拉三级名录（懒加载，避免每次冷启动都多等一个慢页面）
+        try:
+            target = _lookup("sw:industry-map:l3", 3600, build_third).get(board)
+        except ValueError as exc:
+            logger.info("申万三级名录不可用：%s", exc)
+            target = None
+    if not target:
+        _BOARD_MISS[board] = time.time() + 600
         raise ValueError(f"申万行业未找到：{board}")
 
     # 申万成分页对连续请求敏感（返回空表），按规范要求串行+退避，禁止高频重试

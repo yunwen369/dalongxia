@@ -22,10 +22,23 @@ from backend.app.core.errors import (
     ERROR_MESSAGES,
     ErrorCode,
     NonRetryableError,
+    NotFoundError,
     UpstreamTimeoutError,
 )
 
 logger = logging.getLogger(__name__)
+
+# 确定性异常：同一入参重试结果必然相同，重试只会白等退避时间（P1-03 快速失败）。
+# 实测修复前「不存在的代码」在 3 个源上各重试 3 次（1+2+4 秒退避），累计 9–24 秒。
+DETERMINISTIC_ERRORS = (
+    NonRetryableError,  # 含 NotFoundError（源禁用 / 标的不存在）
+    ValueError,  # 返回格式异常、字段不足、上游返回空
+    KeyError,  # 响应结构缺键
+    TypeError,  # 结构类型不符
+    AttributeError,  # akshare 解析空文档时的典型异常
+    IndexError,  # 字段越界
+    NameError,  # 代码级错误（未定义名），重试只会掩盖缺陷
+)
 
 Candidate = Union[
     Tuple[str, Callable[[], Any]],
@@ -79,8 +92,8 @@ def retry_call(
     for attempt in range(retries + 1):
         try:
             return func()
-        except NonRetryableError:
-            # 确定性错误（参数错误、源被禁用、404）重试无意义
+        except DETERMINISTIC_ERRORS:
+            # 确定性错误（参数错误、源被禁用、404、解析异常、标的不存在）重试无意义
             raise
         except Exception as exc:  # noqa: BLE001 - 单源异常需转为重试/失败
             last_error = exc
@@ -143,12 +156,36 @@ def _classify_failure(
     return ErrorCode.UPSTREAM_ERROR
 
 
+def _is_transport_error(exc: BaseException) -> bool:
+    """判断异常是否属于传输层失败（用于触发熔断）。
+
+    Args:
+        exc: 单源取数抛出的异常。
+
+    Returns:
+        bool: 超时/连接失败/requests 或 urllib3 异常返回 True。
+
+    Note:
+        解析类异常（ValueError/KeyError 等）不触发熔断：它们随「标的」或
+        「上游返回形态」变化，熔断整条源会误伤其他正常标的。
+    """
+    if isinstance(exc, (UpstreamTimeoutError, ConnectionError, OSError)):
+        return True
+    module = type(exc).__module__ or ""
+    return module.startswith(("requests", "urllib3"))
+
+
+# 备源优先级记忆：{降级链键: 上次命中的源名}（P1-04）
+_PREFERRED: Dict[str, str] = {}
+
+
 def with_fallback(
     candidates: Sequence[Candidate],
     *,
     need_rows: bool = True,
     validator: Optional[Callable[[Any], bool]] = None,
     empty_value: Any = None,
+    key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """按优先级逐源尝试，返回首个有效结果。
 
@@ -157,18 +194,41 @@ def with_fallback(
         need_rows: 是否要求返回值非空。
         validator: 可选的业务校验函数，返回 True 才算有效。
         empty_value: 全部失败时返回的空结构（list 接口传 []，dict 接口传 {}）。
+        key: 可选降级链键（如 ``market:kline:us``）。传入后启用两项进程级记忆：
+            ① 备源优先级记忆——上次命中的源下次排到最前，避免每次冷启动
+               都先撞已知失效的源（P1-04）；
+            ② 熔断跳过——传输层失败过的源在冷却期内直接跳过并留痕。
 
     Returns:
         Dict[str, Any]: 成功时
             {"data": 载荷, "source": 命中源, "caliber": 口径, "error": None,
              "error_code": None, "attempts": [...]}；
             全部失败时 data=empty_value、source=None、error 为中文文案、
-            error_code 为 ErrorCode 字符串。
+            error_code 为 ErrorCode 字符串（标的不存在为 NOT_FOUND）。
     """
     attempts: List[Dict[str, Any]] = []
     normalized = [_normalize_candidate(item) for item in candidates]
 
+    # 备源优先级记忆：把上次命中的源稳定提到最前，其余源保持声明顺序
+    if key:
+        preferred = _PREFERRED.get(key)
+        if preferred:
+            normalized.sort(key=lambda item: 0 if item[0] == preferred else 1)
+
     for index, (name, caliber, func) in enumerate(normalized):
+        # 熔断跳过：传输层失败的源在冷却期内不再消耗超时（P1-04）
+        if key and circuit_open(f"{key}:{name}"):
+            attempts.append(
+                {
+                    "source": name,
+                    "caliber": caliber,
+                    "error": "熔断冷却中，已跳过",
+                    "error_code": ErrorCode.UPSTREAM_ERROR.value,
+                    "retries": 0,
+                }
+            )
+            logger.info("数据源 %s 处于熔断期，跳过（键 %s）", name, key)
+            continue
         if index > 0:
             polite_sleep()  # 只在源之间限频，避免首次请求无谓等待
         try:
@@ -177,6 +237,10 @@ def with_fallback(
             if valid and validator is not None:
                 valid = bool(validator(value))
             if valid:
+                if key:
+                    # 记住本次生效源，并清除其熔断标记
+                    _PREFERRED[key] = name
+                    reset_circuit(f"{key}:{name}")
                 return {
                     "data": value,
                     "source": name,
@@ -195,6 +259,19 @@ def with_fallback(
                 }
             )
             logger.warning("数据源 %s 返回空数据，尝试下一源", name)
+        except NotFoundError as exc:
+            # 标的不存在：继续降级毫无意义，立即终止整条链（P1-03 快速失败）
+            attempts.append(
+                {
+                    "source": name,
+                    "caliber": caliber,
+                    "error": str(exc) or "标的不存在",
+                    "error_code": ErrorCode.NOT_FOUND.value,
+                    "retries": 0,
+                }
+            )
+            logger.warning("数据源 %s 判定标的不存在，终止降级链：%s", name, exc)
+            break
         except NonRetryableError as exc:
             attempts.append(
                 {
@@ -217,6 +294,8 @@ def with_fallback(
                 }
             )
             logger.warning("数据源 %s 超时，尝试下一源", name)
+            if key:
+                trip_circuit(f"{key}:{name}", config.CIRCUIT_COOLDOWN)
         except Exception as exc:  # noqa: BLE001 - 单源失败不应中断降级链
             attempts.append(
                 {
@@ -228,8 +307,15 @@ def with_fallback(
                 }
             )
             logger.warning("数据源 %s 调用失败，尝试下一源：%s", name, type(exc).__name__)
+            if key and _is_transport_error(exc):
+                # 传输层失败才熔断，避免把「某标的解析异常」误判成整源失效
+                trip_circuit(f"{key}:{name}", config.CIRCUIT_COOLDOWN)
 
-    error_code = _classify_failure(attempts, total=len(normalized))
+    # 标的不存在优先于其他分类：不能把「查无此物」报成「源暂不可用」
+    if any(item.get("error_code") == ErrorCode.NOT_FOUND.value for item in attempts):
+        error_code = ErrorCode.NOT_FOUND
+    else:
+        error_code = _classify_failure(attempts, total=len(normalized))
     logger.error("全部数据源均失败，候选数：%d，错误码：%s", len(normalized), error_code.value)
     return {
         "data": empty_value,
@@ -279,3 +365,28 @@ def trip_circuit(key: str, cooldown: float = 300.0) -> None:
     with _CIRCUIT_LOCK:
         _CIRCUIT_UNTIL[key] = time.time() + cooldown
     logger.warning("数据源进入熔断：%s（冷却 %.0f 秒）", key, cooldown)
+
+
+def reset_circuit(key: str) -> None:
+    """清除某源的熔断标记（源恢复后立即解除，不必等冷却到期）。
+
+    Args:
+        key: 熔断键。
+
+    Returns:
+        None: 仅更新进程内状态。
+    """
+    with _CIRCUIT_LOCK:
+        _CIRCUIT_UNTIL.pop(key, None)
+
+
+def preferred_source(key: str) -> Optional[str]:
+    """读取某降级链记住的优先源（供自检/测试断言）。
+
+    Args:
+        key: 降级链键。
+
+    Returns:
+        Optional[str]: 记住的源名；未命中过返回 None。
+    """
+    return _PREFERRED.get(key)

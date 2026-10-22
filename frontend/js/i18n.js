@@ -116,6 +116,8 @@
     "dashboard.resize": "调整宽度",
     "dashboard.dragHint": "拖拽标题可排序，点击宽度按钮调整占列",
     "dashboard.removeWidget": "移除组件",
+    "dashboard.stockEmptyTitle": "请选择要关注的股票",
+    "dashboard.stockEmptyHint": "在个股页或图表页通过命令面板（Ctrl+K）添加，自动带入当前标的。",
 
     // ---------- 命令面板 ----------
     "palette.placeholder": "输入视图名、组件名或「清缓存」",
@@ -123,6 +125,8 @@
     "palette.widgets": "添加组件",
     "palette.actions": "操作",
     "palette.clearCache": "清空缓存",
+    "palette.search": "搜索",
+    "palette.searchStock": "搜索「{q}」并打开个股",
     "palette.noResult": "无匹配项",
     "palette.hint": "↑↓ 选择 · Enter 执行 · Esc 关闭",
 

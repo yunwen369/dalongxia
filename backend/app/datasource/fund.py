@@ -33,7 +33,7 @@ import pandas as pd
 
 from backend.app import config
 from backend.app.core import netfix
-from backend.app.core.errors import NonRetryableError
+from backend.app.core.errors import NonRetryableError, NotFoundError
 from backend.app.datasource import utils
 
 netfix.apply_netfix()
@@ -43,9 +43,10 @@ logger = logging.getLogger(__name__)
 
 DANJUAN_BASE = "https://danjuanfunds.com"
 DANJUAN_REFERER = "https://danjuanfunds.com/"
-EM_LSJZ_URL = "https://api.fund.eastmoney.com/f10/lsjz"
-EM_FHSP_URL = "https://fundf10.eastmoney.com/fhsp_{code}.html"
-EM_FHSP_REFERER = "https://fundf10.eastmoney.com/"
+# 东财基金接口统一从 config 读（P2-08：不在 provider 内硬编码 URL）
+EM_LSJZ_URL = config.EASTMONEY_FUND_LSJZ_URL
+EM_FHSP_URL = config.EASTMONEY_FUND_FHSP_URL
+EM_FHSP_REFERER = config.EASTMONEY_FUND_FHSP_REFERER
 
 
 def _num(value: Any) -> Optional[float]:
@@ -378,8 +379,9 @@ def _batch_pct(codes: list) -> Dict[str, float]:
         else:
             symbols.append("bj" + code)
     text = utils.http_get_text(
-        "https://qt.gtimg.cn/q=" + ",".join(symbols),
-        referer="https://gu.qq.com/",
+        # P2-08：腾讯报价基址/Referer 收口到 config，禁止 provider 内硬编码
+        config.TENCENT_QUOTE_BASE + "/q=" + ",".join(symbols),
+        referer=config.TENCENT_REFERER,
         encoding="gbk",
         timeout=config.DATASOURCE_TIMEOUT,
     )
@@ -470,6 +472,7 @@ def get_realtime(code: str) -> Dict[str, Any]:
 
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
+        NotFoundError: 全部净值通道均无有效净值（代码不存在或已清盘），P1-02。
     """
     attempts: List[Dict[str, Any]] = []
 
@@ -522,7 +525,11 @@ def get_realtime(code: str) -> Dict[str, Any]:
     try:
         derived = get_derived(code)
         nav = derived.get("unit_nav")
-        if nav is not None:
+        # 空值冒充成功（P1-02）：不存在的代码（如 999999）蛋卷返回 unit_nav=0.0
+        # 且无净值日期。原实现只判 `is not None`，于是 0.0 被当成"查到净值"，
+        # 前端渲染成「净值 0.0 的真基金」。此处要求净值 > 0 且日期存在，
+        # 否则视为「查到但净值缺失」，继续降级；全部通道都拿不到 → NOT_FOUND。
+        if nav is not None and nav > 0 and derived.get("end_date"):
             attempts.append({"channel": "蛋卷 derived", "ok": True})
             return {
                 "code": code,
@@ -534,6 +541,8 @@ def get_realtime(code: str) -> Dict[str, Any]:
                 "is_estimate": False,
                 "attempts": attempts,
             }
+        attempts.append({"channel": "蛋卷 derived", "ok": False,
+                         "reason": "净值为 0 或净值日期缺失"})
     except Exception as exc:  # noqa: BLE001 - 继续降级
         attempts.append({"channel": "蛋卷 derived", "ok": False, "reason": type(exc).__name__})
 
@@ -545,8 +554,11 @@ def get_realtime(code: str) -> Dict[str, Any]:
         timeout=config.DATASOURCE_TIMEOUT,
     )
     rows = (payload.get("Data") or {}).get("LSJZList") or []
-    if not rows:
-        raise ValueError(f"基金净值通道均失败：{code}")
+    nav = _num((rows[0] or {}).get("DWJZ")) if rows else None
+    if not rows or nav is None or nav <= 0:
+        # 三通道全无有效净值 → 该代码不存在（或已清盘），返回 NOT_FOUND 而非空数据成功
+        attempts.append({"channel": "东财 lsjz", "ok": False, "reason": "无有效净值"})
+        raise NotFoundError(f"未找到基金代码 {code} 的有效净值")
     row = rows[0]
     attempts.append({"channel": "东财 lsjz", "ok": True})
     return {

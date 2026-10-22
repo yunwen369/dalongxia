@@ -36,10 +36,10 @@
     return node;
   }
 
-  /** 打开设置页（设置视图尚未实现时给轻提示，不报错）。 */
+  /** 打开设置页（AI 配置在「设置 → AI 设置」中维护）。 */
   function gotoSetting() {
     window.location.hash = "#/settings";
-    showToast("设置页将在阶段 6 后续接入，可先通过 .env 或 data/ai_config.json 配置");
+    showToast("已打开设置页，可在「AI 设置」中填写接口地址、模型与密钥。");
   }
 
   /** 轻提示（复用全局 #toast）。

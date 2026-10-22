@@ -55,7 +55,8 @@
           class="global-search"
           id="global-search"
           type="search"
-          placeholder="搜索股票 / 基金 / 板块（Ctrl+K）"
+          placeholder="搜索代码或名称"
+          title="全局搜索：股票 / 基金 / 板块（Ctrl+K）"
           autocomplete="off"
           aria-label="全局搜索"
         >
@@ -70,30 +71,26 @@
         <div class="sidebar-title">仪表板</div>
         <div class="sidebar-heading">市场总览</div>
         <ul class="sidebar-list">
-          <li class="sidebar-item active">市场总览（当前）</li>
-          <li class="sidebar-item">我的自选</li>
-          <li class="sidebar-item">新建仪表板</li>
-          <li class="sidebar-item">组件库</li>
+          <li class="sidebar-item active" data-action="dashboard" data-dashboard="overview">市场总览（当前）</li>
+          <li class="sidebar-item" data-action="dashboard" data-dashboard="new">新建仪表板</li>
+          <li class="sidebar-item" data-action="dashboard" data-dashboard="library">组件库</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading">系统</div>
         <ul class="sidebar-list">
-          <li class="sidebar-item">数据连接器</li>
-          <li class="sidebar-item">设置</li>
+          <li class="sidebar-item" data-action="view" data-view-target="connectors">数据连接器</li>
+          <li class="sidebar-item" data-action="view" data-view-target="settings">设置</li>
         </ul>
-        <div class="sidebar-divider"></div>
-        <div class="notice">真实数据 · 红涨绿跌 · 数据源与口径双徽章 · Ctrl+K 命令面板 · Ctrl+M 切换主题</div>
       </aside>
 
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
       <main class="workspace" role="main">
         <div class="toolbar">
           <span class="page-title" id="page-title">首页 · 市场总览</span>
-          <span class="badge accent">阶段 4 · 行情数据</span>
           <span class="badge" id="build-badge">构建标识加载中</span>
           <span class="badge" id="health-badge">健康检查中</span>
           <span class="toolbar-spacer"></span>
-          <button class="icon-button" id="refresh-button" type="button" title="刷新健康检查（F5）">刷新</button>
+          <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）">刷新</button>
         </div>
 
         <section class="viewport" id="viewport">
@@ -109,22 +106,8 @@
               <label>代码
                 <input id="mk-symbol" value="600519" autocomplete="off" aria-label="股票代码">
               </label>
-              <label>周期
-                <select id="mk-period">
-                  <option value="日k">日K</option>
-                  <option value="周k">周K</option>
-                  <option value="月k">月K</option>
-                </select>
-              </label>
-              <label>复权
-                <select id="mk-adjust">
-                  <option value="qfq">前复权</option>
-                  <option value="hfq">后复权</option>
-                  <option value="">不复权</option>
-                </select>
-              </label>
-              <button class="icon-button" id="mk-load" type="button">加载行情</button>
               <button class="icon-button" id="mk-refresh" type="button">刷新</button>
+              <button class="icon-button" id="mk-chart-link" type="button">图表分析 ↗</button>
               <span class="toolbar-spacer"></span>
               <span class="badge" id="mk-source">数据源：—</span>
               <span class="badge" id="mk-caliber">口径：—</span>
@@ -161,21 +144,15 @@
 
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">K线</span>
-                  <span class="badge" id="mk-kline-badge">加载中</span>
+                  <span class="card-title">K线 / 分时</span>
+                  <span class="badge">图表分析页提供</span>
                 </div>
                 <div class="card-body">
-                  <div class="market-chart" id="mk-kline-chart"></div>
-                </div>
-              </article>
-
-              <article class="card market-card">
-                <div class="card-header">
-                  <span class="card-title">分时</span>
-                  <span class="badge" id="mk-minute-badge">加载中</span>
-                </div>
-                <div class="card-body">
-                  <div class="market-chart" id="mk-minute-chart"></div>
+                  <div class="pg-state" id="mk-chart-hint">
+                    <div class="pg-state-title">K 线与分时统一在「图表分析」页提供</div>
+                    <div class="pg-state-hint">功能唯一：周期、复权、指标与画线都在图表页操作，避免两处重复渲染同一数据。</div>
+                    <button class="pg-btn" id="mk-chart-hint-link" type="button">前往图表分析</button>
+                  </div>
                 </div>
               </article>
 
@@ -243,8 +220,7 @@
       <button class="icon-button" id="copilot-close" type="button" title="关闭抽屉（Esc）">关闭</button>
     </div>
     <div class="copilot-body">
-      <p>Copilot 将在阶段 6 接入，使用用户自备的 OpenAI 兼容接口。</p>
-      <p>当前未配置 AI 密钥。请通过项目根目录 <code>.env</code> 或后续「设置 → AI 设置」填写，密钥不会回显、不会写入日志。</p>
+      <p>AI 助手正在初始化…</p>
     </div>
     <div class="copilot-footer">非投资建议 · 数据以真实接口为准</div>
   </aside>

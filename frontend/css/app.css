@@ -463,6 +463,17 @@ body {
     padding: 0 8px;
   }
 
+  /* 1024×640：搜索框收窄，避免占位文字被截断（P1-09） */
+  .global-search {
+    width: 148px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .topbar-actions {
+    flex-shrink: 0;
+  }
+
   /* 最小窗口下只保留 OB 标识，避免挤压主菜单 */
   .logo {
     min-width: auto;

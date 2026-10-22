@@ -63,6 +63,24 @@ def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
     return api_error(code, result.get("error"), data=empty_value)
 
 
+def _symbol_missing(code: str, market: str) -> bool:
+    """存在性闸门：判断代码在源站是否确实查无此物（P1-03）。
+
+    腾讯单只报价是本项目最快的存在性探针（实测 0.1~0.3 秒）。明确「不存在」时
+    直接返回 NOT_FOUND，避免降级链在每个源上重试退避（修复前 9~24 秒）。
+
+    Args:
+        code: 归一化后的证券代码。
+        market: a/hk/us。
+
+    Returns:
+        bool: True=确认不存在；False=存在或无法判定（继续正常取数）。
+    """
+    if not config.PROVIDER_SWITCHES.get("tencent", True):
+        return False  # 探测源被禁用时不做闸门，交由正常降级链
+    return tencent.symbol_exists(code, market) is False
+
+
 def _cached(key: str, ttl: int, loader) -> Dict[str, Any]:
     """缓存优先执行；缓存层已处理空值防污染与磁盘兜底。
 
@@ -158,7 +176,8 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
             candidates.append(
                 ("新浪", "新浪/指数快照（仅A股；腾讯不可用时的部分降级）", ashare.get_index_quotes_sina)
             )
-        return with_fallback(candidates, empty_value=[])
+        # key：记住上次命中的源并隔离失效源（P1-04）
+        return with_fallback(candidates, empty_value=[], key="market:index")
 
     result = _cached(cache_key, config.TTL["index_quote"], loader)
     if result.get("error"):
@@ -212,7 +231,8 @@ def market_index_kline(
             candidates = [tencent_candidate]
             if normalized_code in ("000001", "399001", "399006", "000300"):
                 candidates.append(sina_candidate)
-        return with_fallback(candidates, empty_value=[])
+        # key：指数 K 线冷启动避免反复先撞失效源（P1-04）
+        return with_fallback(candidates, empty_value=[], key=f"market:index-kline:{normalized_code}")
 
     result = _cached(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
@@ -242,6 +262,9 @@ def market_quote(
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
@@ -250,6 +273,13 @@ def market_quote(
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
         return _bad_request(str(exc))
+    # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
+    if _symbol_missing(code, normalized_market):
+        return api_error(
+            ErrorCode.NOT_FOUND,
+            f"未找到代码 {code} 的报价，请检查代码或市场后重试。",
+            data={"quote": {}, "symbol": code, "market": normalized_market},
+        )
     cache_key = f"market:quote:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
@@ -257,6 +287,9 @@ def market_quote(
 
         Returns:
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+        Raises:
+            NonRetryableError: 由内层东财快照在熔断期抛出，最终由 with_fallback 捕获。
         """
         candidates: List[Any] = [
             ("腾讯", "腾讯/实时快照（收盘后为最后成交快照）", lambda: tencent.get_quote(code, normalized_market))
@@ -268,7 +301,14 @@ def market_quote(
             # 东财快照需拉全市场（数千行），失效时单次要等 60 秒；加进程级熔断，
             # 冷却期内直接跳过（§6.5），避免每轮 TTL 过期都卡一分钟。
             def _eastmoney_quote() -> Dict[str, Any]:
-                """东财港美股快照（带熔断）。"""
+                """东财港美股快照（带熔断）。
+
+                Returns:
+                    Dict[str, Any]: 东财快照报价字段（price/prev_close/amount 等）。
+
+                Raises:
+                    NonRetryableError: 熔断冷却期内直接跳过，或本次取数失败（同时触发熔断）。
+                """
                 circuit_key = f"eastmoney:quote:{normalized_market}"
                 if circuit_open(circuit_key):
                     raise NonRetryableError("东财港美股快照处于熔断期，已跳过")
@@ -287,7 +327,8 @@ def market_quote(
         # 完整性校验：涨跌幅依赖前收，缺 prev_close 的快照（实测东财 AAPL 偶发只给价格）
         # 视为不可用并降级到下一源，避免把残缺报价渲染成“涨跌 0/空”。
         return with_fallback(candidates, need_rows=False, empty_value={},
-                             validator=lambda q: bool(q.get("price")) and bool(q.get("prev_close")))
+                             validator=lambda q: bool(q.get("price")) and bool(q.get("prev_close")),
+                             key=f"market:quote:{normalized_market}")
 
     result = _cached(cache_key, config.TTL["realtime_quote"], loader)
     if result.get("error"):
@@ -320,6 +361,9 @@ def market_kline(
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
@@ -330,6 +374,13 @@ def market_kline(
         adjust_value = utils.normalize_adjust(adjust)
     except ValueError as exc:
         return _bad_request(str(exc))
+    # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
+    if _symbol_missing(code, normalized_market):
+        return api_error(
+            ErrorCode.NOT_FOUND,
+            f"未找到代码 {code} 的 K 线数据，请检查代码或市场后重试。",
+            data={"items": [], "symbol": code, "market": normalized_market},
+        )
     cache_key = f"market:kline:{normalized_market}:{code}:{period}:{adjust_value}"
 
     def loader() -> Dict[str, Any]:
@@ -355,7 +406,8 @@ def market_kline(
                 ("腾讯", f"腾讯/{period}{'不复权' if not adjust_value else '前复权' if adjust_value == 'qfq' else '后复权'}",
                  lambda: tencent.get_kline(code, normalized_market, period, adjust_value)),
             ]
-        return with_fallback(candidates, empty_value=[])
+        # key：A 股东财 push2 本机被重置，记住上次命中源避免每次冷启动先等失效源（P1-04）
+        return with_fallback(candidates, empty_value=[], key=f"market:kline:{normalized_market}")
 
     result = _cached(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
@@ -404,6 +456,13 @@ def market_minute(
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
         return _bad_request(str(exc))
+    # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
+    if _symbol_missing(code, normalized_market):
+        return api_error(
+            ErrorCode.NOT_FOUND,
+            f"未找到代码 {code} 的分时数据，请检查代码或市场后重试。",
+            data={"items": [], "symbol": code, "market": normalized_market},
+        )
     cache_key = f"market:minute:{normalized_market}:{code}:{period_value}"
 
     def loader() -> Dict[str, Any]:
@@ -424,7 +483,8 @@ def market_minute(
                 ("腾讯", "腾讯/1分钟（港美股唯一可用免费通道）",
                  lambda: overseas.get_minute(code, normalized_market))
             ]
-        return with_fallback(candidates, empty_value=[])
+        # key：分时冷启动同样走备源优先级记忆（P1-04）
+        return with_fallback(candidates, empty_value=[], key=f"market:minute:{normalized_market}")
 
     result = _cached(cache_key, config.TTL["minute"], loader)
     if result.get("error"):
@@ -518,6 +578,9 @@ def market_profile(
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Raises:
+        NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
     normalized_market = (market or "a").lower()
     if normalized_market not in _ALLOWED_MARKETS:
@@ -526,6 +589,13 @@ def market_profile(
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
         return _bad_request(str(exc))
+    # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
+    if _symbol_missing(code, normalized_market):
+        return api_error(
+            ErrorCode.NOT_FOUND,
+            f"未找到代码 {code} 的概况数据，请检查代码或市场后重试。",
+            data={"profile": {}, "symbol": code, "market": normalized_market},
+        )
     cache_key = f"market:profile:{normalized_market}:{code}"
 
     def loader() -> Dict[str, Any]:
@@ -563,7 +633,9 @@ def market_profile(
                     "is_realtime": quote.get("is_realtime"),
                 }
             candidates = [("腾讯", "腾讯/基础概况（港美股暂无 F10 行业字段）", basic_profile)]
-        return with_fallback(candidates, need_rows=False, empty_value={}, validator=lambda p: bool(p.get("name")))
+        return with_fallback(candidates, need_rows=False, empty_value={},
+                             validator=lambda p: bool(p.get("name")),
+                             key=f"market:profile:{normalized_market}")
 
     result = _cached(cache_key, config.TTL["profile"], loader)
     if result.get("error"):

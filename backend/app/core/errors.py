@@ -45,6 +45,16 @@ class NonRetryableError(Exception):
     """确定性失效（如 404、无效参数），不允许重试。"""
 
 
+class NotFoundError(NonRetryableError):
+    """标的不存在（P1-03）：如代码/板块名在源站查无此物。
+
+    与普通 ``NonRetryableError`` 的区别在于**语义**：源被禁用、通道失效这类
+    确定性错误应继续尝试下一源，而「标的本身不存在」继续降级毫无意义，
+    必须立即终止整条降级链并返回 ``NOT_FOUND``，避免逐个源等满超时
+    （实测修复前 /api/market/quote 不存在代码耗时 24 秒）。
+    """
+
+
 def ok(data: Any) -> Dict[str, Any]:
     """构造成功响应。
 

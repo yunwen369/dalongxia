@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from backend.app import config
-from backend.app.core.errors import NonRetryableError
+from backend.app.core.errors import NonRetryableError, NotFoundError
 from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,11 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
 
     parts = _split_quote_body(line)
     quote_time = utils.parse_datetime(parts[30]) if len(parts) > 30 else None
+    # 时区口径（P1-01）：腾讯美股时间戳为**美东当地时间**，A股/港股为北京时间。
+    # 若不换算，北京 00:30（美东前一日 12:30 盘中）会因 as_of 日期早一天被判
+    # 「收盘快照」+ is_realtime=False，把盘中数据伪装成收盘快照。
+    if market == "us":
+        quote_time = utils.us_eastern_to_beijing(quote_time)
     status, is_realtime = utils.classify_market_status(quote_time, market)
 
     def number(index: int) -> Optional[float]:
@@ -104,7 +110,16 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
         if price and price > 0:
             asks.append({"price": price, "volume": volume or 0})
 
-    amount_raw = number(37)  # 腾讯成交额单位为万元
+    # 成交额口径（P0-01）：腾讯 parts[37] 的单位随市场不同。
+    # A 股 parts[37] 为万元，×10000 换算为元；港股/美股 parts[37] 已是本币原值
+    # （USD/HKD）不应再 ×10000，否则成交额虚高约 1 万倍（独立验收 P0-01）。
+    amount_raw = number(37)
+    if amount_raw is None:
+        amount = None
+    elif market == "a":
+        amount = amount_raw * 10000  # A 股：万元 → 元（口径不变）
+    else:
+        amount = amount_raw  # 港股/美股：本币原值（HKD/USD），不乘换算
     return {
         "symbol": parts[2],
         "name": parts[1],
@@ -118,7 +133,7 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
         "change": number(31),
         "pct": number(32),
         "volume": number(36),  # 手
-        "amount": amount_raw * 10000 if amount_raw is not None else None,  # 元
+        "amount": amount,  # 元（A 股） | 本币原值（港/美）
         "turnover": number(38),  # %
         "pe_ttm": number(39),
         "pb": number(46),
@@ -143,6 +158,9 @@ def get_quote(symbol: str, market: str = "a") -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: 报价字段，含 quote_time / market_status / is_realtime。
+
+    Raises:
+        NotFoundError: 腾讯返回空体或无有效价格（代码不存在，P1-03 快速失败）。
     """
     _ensure_enabled()
     code, normalized_market, tencent_code = utils.normalize_symbol(symbol, market)
@@ -152,11 +170,73 @@ def get_quote(symbol: str, market: str = "a") -> Dict[str, Any]:
         referer=config.TENCENT_REFERER,
         encoding="gbk",
     )
-    quote = _parse_quote_line(text.strip(), normalized_market)
+    body = (text or "").strip()
+    # 腾讯对不存在的代码返回 `v_sh999999=""`（空体）：属「查无此物」，
+    # 立即终止降级链，不再逐源等满超时（修复前该路径耗时 24 秒）。
+    if not body or '=""' in body or "~" not in body:
+        raise NotFoundError(f"未找到代码 {code} 的报价")
+    quote = _parse_quote_line(body, normalized_market)
+    # 腾讯对未知美股代码会返回「幽灵行」：200~ZZZZ~ZZZZ.N~0.000~…（价格为 0、日期陈旧），
+    # 因此存在性判据必须是「价格 > 0」，只判非 None 会把幽灵行当成真实标的。
+    price = quote.get("price")
+    if not price or price <= 0:
+        raise NotFoundError(f"未找到代码 {code} 的报价")
     quote["symbol"] = code
     quote["tencent_code"] = tencent_code
     logger.info("腾讯报价命中：%s %s", normalized_market, code)
     return quote
+
+
+# 存在性探测的进程内结果缓存：{缓存键: (expire_ts, 是否存在)}，TTL 60 秒
+_EXISTS_CACHE: Dict[str, Any] = {}
+
+
+def symbol_exists(symbol: str, market: str = "a") -> Optional[bool]:
+    """快速探测代码是否存在（P1-03）。
+
+    用腾讯单只报价做「存在性闸门」：有效价格 → True；空体/无价格 → False；
+    网络异常或超时 → None（未知，交由正常降级链处理，不阻断业务）。
+
+    Args:
+        symbol: 股票代码。
+        market: a/hk/us。
+
+    Returns:
+        Optional[bool]: True=存在；False=不存在；None=无法判定。
+    """
+    try:
+        code, normalized_market, tencent_code = utils.normalize_symbol(symbol, market)
+    except ValueError:
+        return False  # 代码格式本身不合法，等价于不存在
+    cache_key = f"{normalized_market}:{tencent_code}"
+    now = time.time()
+    cached = _EXISTS_CACHE.get(cache_key)
+    if cached and cached[0] > now:
+        return bool(cached[1])
+    url = f"{config.TENCENT_QUOTE_BASE}/q={tencent_code}"
+    try:
+        # 探测用短超时：宁可判「未知」也不让边界请求被探测拖慢
+        text = utils.http_get_text(
+            url,
+            referer=config.TENCENT_REFERER,
+            encoding="gbk",
+            timeout=config.EXISTS_PROBE_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 - 探测失败不阻断业务
+        logger.info("存在性探测失败（%s %s）：%s", normalized_market, code, type(exc).__name__)
+        return None
+    body = (text or "").strip()
+    exists = bool(body) and '=""' not in body and "~" in body
+    if exists:
+        # 有报价行还需有有效价格 > 0：腾讯对未知美股代码返回 0 价「幽灵行」，须排除
+        try:
+            quote = _parse_quote_line(body, normalized_market)
+            price = quote.get("price")
+            exists = bool(price and price > 0)
+        except (ValueError, IndexError):
+            exists = False
+    _EXISTS_CACHE[cache_key] = (now + 60, exists)
+    return exists
 
 
 def get_index_quotes(market: str = "all") -> List[Dict[str, Any]]:

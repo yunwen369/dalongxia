@@ -440,8 +440,11 @@ class TestRoutersContract:
             {"date": "2026-10-19", "open": 10.2, "close": 10.9, "low": 10.1, "high": 11.0, "volume": 1200},
         ]
         monkeypatch.setattr(overseas, "get_kline_em", lambda code, market, period, adjust: [dict(r) for r in rows])
+        # 代码须为真实标的：P1-03 起路由增加「存在性闸门」（腾讯探针），
+        # 占位代码 TESTUS 会被判不存在并直接返回 NOT_FOUND，本用例只校验契约与归一化，
+        # 因此改用真实美股代码（provider 已被补丁替换，仍不触网取行情）。
         body = self._client().get("/api/market/kline",
-                                  params={"symbol": "TESTUS", "market": "us"}).json()
+                                  params={"symbol": "AAPL", "market": "us"}).json()
         assert body["error"] is None
         assert len(body["data"]["items"]) == 2
         assert body["data"]["market"] == "us"
@@ -745,3 +748,95 @@ class TestFrontendViews:
         """图表容器 .pg-chart.tall 样式存在（含 1024 断点降高）。"""
         css = self._read("css/pages.css")
         assert ".pg-chart.tall" in css
+
+
+# =============================================================
+# 十六、P1 批次：时区换算 / 快速失败 / 备源记忆（纯单元，无网络）
+# =============================================================
+class TestP1Resilience:
+    """P1-01/P1-03/P1-04 的确定性单元断言（真实网络断言见 test_qa_verify.py）。"""
+
+    def test_us_eastern_to_beijing_夏令时(self):
+        """美东 12:24:40（EDT）→ 北京次日 00:24:40（P1-01 核心换算）。"""
+        from backend.app.datasource import utils as ds_utils
+
+        got = ds_utils.us_eastern_to_beijing(datetime(2026, 10, 22, 12, 24, 40))
+        assert got == datetime(2026, 10, 23, 0, 24, 40)
+
+    def test_us_eastern_to_beijing_冬令时(self):
+        """美东 12:00:00（EST）→ 北京次日 01:00:00（时差比夏令时多 1 小时）。"""
+        from backend.app.datasource import utils as ds_utils
+
+        got = ds_utils.us_eastern_to_beijing(datetime(2026, 1, 15, 12, 0, 0))
+        assert got == datetime(2026, 1, 16, 1, 0, 0)
+
+    def test_retry_call_不重试确定性异常(self):
+        """P1-03：解析/格式类异常属确定性失效，只调用一次、不再退避重试。"""
+        from backend.app.core import resilient
+
+        calls = []
+
+        def boom():
+            calls.append(1)
+            raise ValueError("返回格式异常")
+
+        with pytest.raises(ValueError):
+            resilient.retry_call(boom)
+        assert len(calls) == 1, f"确定性异常被重试了 {len(calls)} 次"
+
+    def test_with_fallback_标的不存在立即终止(self):
+        """P1-03：NotFoundError 必须终止整条降级链，不再尝试后续源。"""
+        from backend.app.core import resilient
+        from backend.app.core.errors import NotFoundError
+
+        calls = []
+
+        def missing():
+            calls.append("甲")
+            raise NotFoundError("未找到代码")
+
+        def never_called():
+            calls.append("乙")
+            return [1, 2, 3]
+
+        result = resilient.with_fallback(
+            [("甲", missing), ("乙", never_called)], empty_value=[]
+        )
+        assert result["error_code"] == "NOT_FOUND"
+        assert calls == ["甲"], f"降级链未终止：{calls}"
+
+    def test_with_fallback_记住优先源(self):
+        """P1-04：上次命中的源在下一次调用中被优先尝试（备源优先级记忆）。"""
+        from backend.app.core import resilient
+
+        key = "unit:test:preferred"
+        resilient._PREFERRED.pop(key, None)
+
+        first_calls = []
+
+        def bad():
+            first_calls.append("甲")
+            raise ValueError("该源本机不可用")
+
+        def good():
+            first_calls.append("乙")
+            return ["row"]
+
+        result = resilient.with_fallback([("甲", bad), ("乙", good)], key=key)
+        assert result["source"] == "乙"
+        assert resilient.preferred_source(key) == "乙"
+
+        second_calls = []
+
+        def bad2():
+            second_calls.append("甲")
+            raise ValueError("该源本机不可用")
+
+        def good2():
+            second_calls.append("乙")
+            return ["row"]
+
+        resilient.with_fallback([("甲", bad2), ("乙", good2)], key=key)
+        # 第二次：记住的「乙」被排到最前，失效的「甲」不再被白试
+        assert second_calls == ["乙"], f"优先源记忆未生效：{second_calls}"
+        resilient._PREFERRED.pop(key, None)

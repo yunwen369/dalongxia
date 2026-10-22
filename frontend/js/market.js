@@ -442,12 +442,10 @@
     }
   }
 
-  /** 加载当前标的的报价、K线、分时、概况。 */
+  /** 加载当前标的的报价与概况（K线/分时统一由图表页负责，P2-02 功能唯一）。 */
   async function loadSymbol() {
     const market = $("mk-market").value;
     const symbol = $("mk-symbol").value.trim();
-    const period = $("mk-period").value;
-    const adjust = $("mk-adjust").value;
     if (!symbol) {
       $("mk-notice").textContent = "请输入股票代码。";
       $("mk-notice").classList.add("error");
@@ -455,14 +453,10 @@
     }
     $("mk-notice").classList.remove("error");
     $("mk-notice").textContent = "正在请求真实接口：" + symbol + "（" + market + "）...";
-    ["mk-quote-badge", "mk-kline-badge", "mk-minute-badge", "mk-profile-badge"].forEach((id) =>
-      setBadge(id, "加载中")
-    );
+    ["mk-quote-badge", "mk-profile-badge"].forEach((id) => setBadge(id, "加载中"));
 
-    const [quoteResult, klineResult, minuteResult, profileResult] = await Promise.allSettled([
+    const [quoteResult, profileResult] = await Promise.allSettled([
       api("/api/market/quote", { symbol, market }),
-      api("/api/market/kline", { symbol, market, period, adjust }),
-      api("/api/market/minute", { symbol, market, period: "1min" }),
       api("/api/market/profile", { symbol, market })
     ]);
 
@@ -476,27 +470,6 @@
       setBadge("mk-quote-badge", "失败", "error");
     }
 
-    if (klineResult.status === "fulfilled") {
-      const data = klineResult.value;
-      renderKlineChart(data.items);
-      setBadge("mk-kline-badge", data.source + " · " + data.caliber, "");
-    } else {
-      setBadge("mk-kline-badge", "失败", "error");
-    }
-
-    if (minuteResult.status === "fulfilled") {
-      const data = minuteResult.value;
-      renderLineChart(
-        "mk-minute-chart",
-        data.items.map((item) => item.time),
-        data.items.map((item) => item.price),
-        themeColors().accent
-      );
-      setBadge("mk-minute-badge", data.source + " · " + data.caliber, "");
-    } else {
-      setBadge("mk-minute-badge", "失败", "error");
-    }
-
     if (profileResult.status === "fulfilled") {
       const data = profileResult.value;
       renderProfile(data.profile);
@@ -506,9 +479,7 @@
       setBadge("mk-profile-badge", "失败", "error");
     }
 
-    const failures = [quoteResult, klineResult, minuteResult, profileResult].filter(
-      (item) => item.status === "rejected"
-    );
+    const failures = [quoteResult, profileResult].filter((item) => item.status === "rejected");
     if (failures.length === 0) {
       $("mk-notice").textContent =
         "真实数据已加载：报价 " + symbol + "；数据源/口径以各卡片徽章为准；休市显示收盘快照，不伪装实时。";
@@ -546,12 +517,21 @@
     await Promise.all([loadIndex(), loadSymbol()]);
   }
 
+  /** 跳转图表分析页（携带当前市场/标的，功能唯一，P2-02）。 */
+  function gotoCharting() {
+    const market = $("mk-market").value;
+    const symbol = $("mk-symbol").value.trim() || "600519";
+    window.location.hash = "#/charting?symbol=" + encodeURIComponent(symbol) + "&market=" + encodeURIComponent(market);
+  }
+
   /** 初始化控件。 */
   function init() {
-    const loadButton = $("mk-load");
-    if (!loadButton) return; // 非行情页
-    loadButton.addEventListener("click", loadSymbol);
+    if (!$("mk-symbol")) return; // 非行情页
     $("mk-refresh").addEventListener("click", refreshAll);
+    const chartLink = $("mk-chart-link");
+    if (chartLink) chartLink.addEventListener("click", gotoCharting);
+    const chartHintLink = $("mk-chart-hint-link");
+    if (chartHintLink) chartHintLink.addEventListener("click", gotoCharting);
     $("mk-search-button").addEventListener("click", doSearch);
     $("mk-search-input").addEventListener("keydown", (event) => {
       if (event.key === "Enter") doSearch();
@@ -560,7 +540,7 @@
       if (event.key === "Enter") loadSymbol();
     });
     window.addEventListener("resize", () => {
-      ["mk-index-chart", "mk-kline-chart", "mk-minute-chart"].forEach((id) => {
+      ["mk-index-chart"].forEach((id) => {
         const chart = chartOf(id);
         if (chart) chart.resize();
       });
@@ -568,6 +548,9 @@
     loadIndex();
     loadSymbol();
   }
+
+  // 供工具栏「刷新当前视图」调用（P2-03）
+  window.Market = { reload: refreshAll };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

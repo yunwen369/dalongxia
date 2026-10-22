@@ -34,9 +34,10 @@ PORTFOLIO_FILE = config.DATA_DIR / "portfolio.json"
 CURRENCY_BY_MARKET = {"a": "CNY", "hk": "HKD", "us": "USD", "fund": "CNY"}
 MARKET_LABEL = {"a": "A股", "hk": "港股", "us": "美股", "fund": "场外基金"}
 
-# 新浪外汇代码：fx_susdcny = 美元兑人民币，fx_shkdcny = 港币兑人民币
-FX_URL = "https://hq.sinajs.cn/list=fx_susdcny,fx_shkdcny"
-FX_REFERER = "https://finance.sina.com.cn/"
+# 新浪外汇代码：fx_susdcny = 美元兑人民币，fx_shkdcny = 港币兑人民币；
+# URL 收口到 config（P2-08：禁止 provider 内硬编码）
+FX_URL = config.SINA_FX_URL
+FX_REFERER = config.SINA_REFERER
 
 
 def _empty_store() -> Dict[str, Any]:

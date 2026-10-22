@@ -210,17 +210,66 @@
       if (title) {
         title.textContent = VIEW_TITLES[view] || button.textContent;
       }
-      if (view !== "home") {
-        showToast("「" + button.textContent + "」视图将在后续阶段接入。");
-      }
+      // 视图切换由 pages.js 的 hash 路由接管，此处只维护选中态与标题
     });
   }
 
-  /** 绑定侧栏占位项点击。 */
+  /** 刷新当前视图（P2-03）：按 hash 交给对应视图重取数据，同时刷新健康徽章。 */
+  function refreshCurrentView() {
+    const view = (window.location.hash.replace(/^#\/?/, "").split("?")[0]) || "home";
+    if (view === "home") {
+      if (window.Market && typeof window.Market.reload === "function") {
+        window.Market.reload();
+      }
+    } else if (view === "dashboard") {
+      if (window.renderDashboard) {
+        window.renderDashboard();
+      }
+    } else if (window.Pages && typeof window.Pages.reload === "function") {
+      window.Pages.reload();
+    }
+    loadHealth();
+    showToast("已刷新当前视图（" + (VIEW_TITLES[view] || view) + "）。");
+  }
+
+  /** 绑定侧栏项点击：仪表板能力直连，系统项走 hash 路由（P1-07）。 */
   function bindSidebar() {
     document.querySelectorAll(".sidebar-item").forEach(function (item) {
       item.addEventListener("click", function () {
-        showToast("该功能将在后续阶段接入。");
+        const action = item.getAttribute("data-action");
+        if (action === "view") {
+          const target = item.getAttribute("data-view-target");
+          if (target) {
+            window.location.hash = "#/" + target;
+          }
+          return;
+        }
+        if (action === "dashboard") {
+          const sub = item.getAttribute("data-dashboard");
+          document.querySelectorAll(".sidebar-item").forEach(function (node) {
+            node.classList.toggle("active", node === item);
+          });
+          // 先确保仪表板已渲染，再执行新建/打开组件库
+          const run = function () {
+            if (!window.Dashboard) {
+              showToast("仪表板尚未就绪，请稍后重试。");
+              return;
+            }
+            if (sub === "new" && window.Dashboard.createDashboard) {
+              window.Dashboard.createDashboard();
+            } else if (sub === "library" && window.Dashboard.openLibrary) {
+              window.Dashboard.openLibrary();
+            } else if (window.renderDashboard) {
+              window.renderDashboard();
+            }
+          };
+          if (window.location.hash.indexOf("#/dashboard") === 0) {
+            run();
+          } else {
+            window.location.hash = "#/dashboard";
+            window.setTimeout(run, 260);
+          }
+        }
       });
     });
   }
@@ -246,10 +295,9 @@
         return;
       }
       if (event.key === "F5") {
-        // 拦截浏览器刷新，改为刷新当前数据（本阶段只有健康检查）
+        // 拦截浏览器刷新，改为刷新当前视图数据（P2-03）
         event.preventDefault();
-        loadHealth();
-        showToast("已刷新健康检查。");
+        refreshCurrentView();
       }
     });
   }
@@ -285,14 +333,25 @@
 
     const refreshButton = document.getElementById("refresh-button");
     if (refreshButton) {
-      refreshButton.addEventListener("click", loadHealth);
+      refreshButton.addEventListener("click", refreshCurrentView);
     }
 
     const search = document.getElementById("global-search");
     if (search) {
       search.addEventListener("keydown", function (event) {
-        if (event.key === "Enter") {
-          showToast("全局搜索将在阶段 2 接入。");
+        if (event.key !== "Enter") {
+          return;
+        }
+        const keyword = search.value.trim();
+        if (!keyword) {
+          showToast("请输入股票代码、名称或板块关键词。");
+          return;
+        }
+        if (window.UI && typeof window.UI.openPalette === "function") {
+          // 复用命令面板的同一套过滤与键盘导航，并带上关键词（P1-08）
+          window.UI.openPalette(keyword);
+        } else {
+          showToast("命令面板尚未就绪，请稍后重试。");
         }
       });
     }

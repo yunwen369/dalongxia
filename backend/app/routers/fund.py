@@ -143,9 +143,19 @@ def fund_realtime(code: str = Query(..., description="6 位基金代码")) -> Di
     result = _run(f"fund:realtime:{symbol}", config.TTL["fund_nav"],
                   lambda: fund_provider.get_realtime(symbol))
     if result["error"]:
+        # P1-02：标的不存在必须与「通道故障」分离——前者 NOT_FOUND（不该重试/不该显示为 0 净值）
+        if result.get("error_type") == "NotFoundError":
+            return _not_found("未找到该基金代码的净值数据，请检查代码后重试。",
+                              data={"code": symbol, "items": []})
         return api_error(ErrorCode.UPSTREAM_ERROR, "基金净值暂不可用，请稍后点击刷新重试。",
                          data={"code": symbol})
-    data = result["data"]
+    data = result["data"] or {}
+    # 兜底校验（P1-02）：磁盘缓存可能带回修复前的历史错误载荷（nav=0.0 且无净值日期），
+    # 这类载荷不得当成功返回，否则前端仍会渲染「净值 0 的真基金」。
+    nav_value = data.get("nav")
+    if data.get("is_estimate") is not True and not (nav_value and nav_value > 0):
+        return _not_found("未找到该基金代码的净值数据，请检查代码后重试。",
+                          data={"code": symbol, "items": []})
     return _pack(data, data.get("source") or "蛋卷", data.get("caliber") or "T+1 公布净值",
                  data.get("nav_date"))
 

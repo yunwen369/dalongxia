@@ -134,7 +134,9 @@ def _run_chain(
         Returns:
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
-        return with_fallback(candidates, empty_value=empty_value)
+        # key：按业务域记住上次命中源，并让熔断失效源在冷却期内被跳过（P1-04）
+        return with_fallback(candidates, empty_value=empty_value,
+                             key=":".join(cache_key.split(":")[:2]))
 
     return cache.get_or_load(cache_key, ttl, loader)
 
@@ -361,6 +363,7 @@ def sector_kline(
             candidates,
             empty_value={"items": [], "board": board, "period": period},
             validator=lambda value: bool(value.get("items")),
+            key="sector:kline",
         )
 
     result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
@@ -441,9 +444,10 @@ def sector_cons(
             ],
             empty_value={"items": [], "board": board},
             validator=lambda value: bool(value.get("items")),
+            key="sector:cons",
         )
 
-    result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
+    result = cache.get_or_load(cache_key, config.TTL["cons"], loader)
     if result.get("error"):
         return _failure(result, {"items": [], "board": board})
     data = result["data"] or {}

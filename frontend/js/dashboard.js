@@ -99,6 +99,8 @@
   }
 
   /** 默认仪表板（全部使用真实接口，无演示数据）。
+   * P2-01：不再硬编码 688012 等个股标的；默认为市场总览类组件，
+   * 用户可从「组件库」按需添加个股组件（自动带入当前标的）。
    * @returns {Object} 处理结果
    */
   function buildDefaultDashboard() {
@@ -106,7 +108,6 @@
       id: "dash-" + Date.now(),
       name: t("dashboard.defaultName"),
       widgets: [
-        { id: "ST-01", span: 48 },
         { id: "S-03", span: 28 },
         { id: "S-06", span: 20 },
         { id: "S-04", span: 28 },
@@ -151,9 +152,10 @@
   // 组件取数与渲染配方（按组件 id 映射到真实接口）
   // =============================================================
   var RECIPES = {
-    "ST-01": { kind: "panel", path: "/api/stock/realtime-panel", params: { symbol: "688012", market: "a" }, pick: "quote" },
-    "ST-02": { kind: "chart", path: "/api/stock/realtime-panel", params: { symbol: "688012", market: "a" }, pick: "kline", x: "date", y: "close" },
-    "ST-04": { kind: "metrics", path: "/api/stock/realtime-panel", params: { symbol: "688012", market: "a" }, pick: "fund_dist" },
+    // P2-01：ST 系列不再硬编码 symbol，改为由 addWidgetById 透传当前标的（个股页/Ctrl+K）
+    "ST-01": { kind: "panel", path: "/api/stock/realtime-panel", params: {}, pick: "quote" },
+    "ST-02": { kind: "chart", path: "/api/stock/realtime-panel", params: {}, pick: "kline", x: "date", y: "close" },
+    "ST-04": { kind: "metrics", path: "/api/stock/realtime-panel", params: {}, pick: "fund_dist" },
     "S-03": { kind: "chart", path: "/api/sector/heatmap", params: { market: "cn", kind: "industry" }, pick: "nodes", x: "name", y: "pct", bar: true },
     "S-04": { kind: "table", path: "/api/sector/industry", params: { market: "cn" }, cols: ["name", "pct", "amount", "lead_stock"] },
     "S-05": { kind: "table", path: "/api/sector/concept", params: { market: "cn" }, cols: ["name", "pct", "amount", "lead_stock"] },
@@ -579,7 +581,24 @@
       body.setAttribute("data-state", "default");
       return;
     }
-    fetchJson(recipe.path, recipe.params)
+    // P2-01：合并配方默认参数与用户传入参数（ST 系列不再硬编码 symbol）
+    var params = Object.assign({}, recipe.params || {}, entry.params || {});
+    // 股票类组件需 symbol 参数，否则进入空态引导（由命令面板或组件库带入当前标的）
+    if (recipe.path.indexOf("/api/stock/realtime-panel") === 0 && !params.symbol) {
+      body.innerHTML = "";
+      var hint = el("div", "pg-state");
+      hint.appendChild(el("div", "pg-state-title", t("dashboard.stockEmptyTitle")));
+      hint.appendChild(el("div", "pg-state-hint", t("dashboard.stockEmptyHint")));
+      var libBtn = el("button", "pg-btn", t("dashboard.library"));
+      libBtn.type = "button";
+      libBtn.addEventListener("click", function () { openLibrary(); });
+      hint.appendChild(libBtn);
+      body.appendChild(hint);
+      // 无数据非加载中，收口为默认态
+      body.setAttribute("data-state", "default");
+      return;
+    }
+    fetchJson(recipe.path, params)
       .then(function (data) {
         body.innerHTML = "";
         renderWidgetBody(body, data, recipe, meta);
@@ -755,7 +774,7 @@
     var box = el("div", "ui-modal");
     box.appendChild(el("div", "ui-modal-title", t("dashboard.templates")));
     var presets = [
-      { name: t("dashboard.template.overview"), widgets: ["ST-01", "S-03", "S-06", "S-04", "S-07"] },
+      { name: t("dashboard.template.overview"), widgets: ["S-05", "S-03", "S-06", "S-04", "S-07"] },
       { name: t("dashboard.template.news"), widgets: ["N-02", "N-03", "S-03", "S-06"] },
       { name: t("dashboard.template.portfolio"), widgets: ["P-01", "P-03", "F-04", "F-03"] }
     ];
@@ -786,15 +805,16 @@
 
   /** 按 id 添加组件（供命令面板与组件库调用）。
    * @param {*} widgetId 组件 id
+   * @param {Object} params 用户传入参数（如 symbol/market，P2-01 透传当前标的）
    */
-  function addWidgetById(widgetId) {
+  function addWidgetById(widgetId, params) {
     var dash = activeDashboard();
     if (dash.widgets.some(function (entry) { return entry.id === widgetId; })) {
       toast("该组件已在仪表板中");
       return;
     }
     var meta = (state.registry && state.registry[widgetId]) || {};
-    dash.widgets.push({ id: widgetId, span: meta.span || 24 });
+    dash.widgets.push({ id: widgetId, span: meta.span || 24, params: params || {} });
     saveState(true);
     if (location.hash === "#/dashboard") {
       render();

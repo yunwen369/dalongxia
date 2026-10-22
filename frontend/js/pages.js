@@ -1585,6 +1585,37 @@
     body.appendChild(block);
   }
 
+  /** 计算回撤序列的最低点，供 ECharts markPoint 在绘图窗内标注（P1-10）。
+   * @param {Array} series 回撤序列 [{date, drawdown}]
+   * @returns {Object} markPoint 配置；无数据时返回 undefined
+   */
+  function troughPoint(series) {
+    var trough = null;
+    (series || []).forEach(function (item) {
+      if (item && item.drawdown !== null && item.drawdown !== undefined) {
+        if (!trough || item.drawdown < trough.drawdown) {
+          trough = item;
+        }
+      }
+    });
+    if (!trough) {
+      return undefined;
+    }
+    return {
+      symbol: "circle",
+      symbolSize: 7,
+      itemStyle: { color: COLOR_DOWN },
+      label: {
+        show: true,
+        position: "bottom",
+        fontSize: 10,
+        color: COLOR_DOWN,
+        formatter: "最大回撤 " + trough.date + " " + Number(trough.drawdown).toFixed(2) + "%"
+      },
+      data: [{ coord: [trough.date, trough.drawdown], value: trough.drawdown }]
+    };
+  }
+
   /** 渲染机构预测（ST-06）：评级分布 + 目标价 + 分年度一致预期。
    * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
    * @param {*} estimates 一致预期数据（eps/profit/institutions/detail）
@@ -1612,10 +1643,16 @@
     }
     setBadges(card, "同花顺", forecast.caliber_note || "评级分布+目标价", false);
     body.innerHTML = "";
-    var targetText =
-      forecast.target_low === null
-        ? "无数据"
-        : fmt(forecast.target_low, 2) + " ~ " + fmt(forecast.target_high, 2) + " 元（均值 " + fmt(forecast.target_avg, 2) + "）";
+    var hasTarget = forecast.target_low !== null && forecast.target_low !== undefined;
+    var targetText;
+    if (hasTarget) {
+      targetText = fmt(forecast.target_low, 2) + " ~ " + fmt(forecast.target_high, 2) +
+        " 元（均值 " + fmt(forecast.target_avg, 2) + "，样本 " + (forecast.target_samples || 0) + " 篇）";
+    } else {
+      // 明确空态（P1-11）：说清为什么没有、评级覆盖多少、可以去哪里找替代信息
+      targetText = "目标价暂无（" + (forecast.caliber_note || "该通道不提供目标价") + "）" +
+        "；评级仍覆盖 " + (forecast.org_count || 0) + " 家，可参考下方一致预期 EPS / 净利";
+    }
     var lines = [
       ["目标价区间", targetText],
       ["覆盖机构", (forecast.org_count || 0) + " 家"],
@@ -2937,26 +2974,34 @@
             tooltip: { trigger: "axis" },
             legend: { textStyle: { color: theme.text }, top: 0 },
             grid: [
-              { left: 56, right: 16, top: 28, height: "48%" },
-              { left: 56, right: 16, top: "64%", height: "22%" }
+              // 主图与回撤子图留出足够间距，避免回撤纵轴标签压住净值横轴日期（P1-10）
+              { left: 62, right: 18, top: 34, height: "40%" },
+              { left: 62, right: 18, top: "72%", height: "16%" }
             ],
             xAxis: [
               { type: "category", data: ordered.map(function (i) { return i.date; }),
-                axisLabel: { color: theme.text, interval: Math.floor(ordered.length / 6) },
+                axisLabel: { color: theme.text, fontSize: 10, margin: 8,
+                  interval: Math.max(1, Math.floor(ordered.length / 6)) },
                 axisLine: { lineStyle: { color: theme.border } } },
               { type: "category", gridIndex: 1, data: ddSeries.map(function (i) { return i.date; }),
-                axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } }
+                axisLabel: { color: theme.text, fontSize: 10, margin: 6,
+                  interval: Math.max(1, Math.floor(ddSeries.length / 5)) },
+                axisLine: { lineStyle: { color: theme.border } } }
             ],
             yAxis: [
-              { scale: true, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
-              { gridIndex: 1, axisLabel: { color: theme.text, formatter: "{value}%" }, splitLine: { show: false } }
+              { scale: true, axisLabel: { color: theme.text, fontSize: 10 },
+                splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
+              { gridIndex: 1, axisLabel: { color: theme.text, fontSize: 10, margin: 8, formatter: "{value}%" },
+                splitLine: { show: false } }
             ],
             series: [
               { name: "单位净值", type: "line", data: ordered.map(function (i) { return i.nav; }),
                 showSymbol: false, color: "#b47da0", lineStyle: { width: 1.6 } },
               { name: "回撤%", type: "line", xAxisIndex: 1, yAxisIndex: 1,
                 data: ddSeries.map(function (i) { return i.drawdown; }),
-                showSymbol: false, areaStyle: { opacity: 0.25 }, color: COLOR_DOWN }
+                showSymbol: false, areaStyle: { opacity: 0.25 }, color: COLOR_DOWN,
+                // 最大回撤点直接标在绘图窗内（与坐标对齐），替代图外文字标注
+                markPoint: troughPoint(ddSeries) }
             ]
           });
         }
@@ -4368,6 +4413,9 @@
       }, 120);
     });
   }
+
+  // 供工具栏「刷新当前视图」调用：按当前 hash 重新走一遍路由（P2-03）
+  window.Pages = { reload: route };
 
   /** 入口：绑定路由与尺寸监听。 */
   function init() {

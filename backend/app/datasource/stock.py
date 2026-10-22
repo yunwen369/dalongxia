@@ -30,7 +30,6 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import requests
 
 from backend.app import config
 from backend.app.core import netfix
@@ -42,8 +41,8 @@ import akshare as ak  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# 东财 datacenter 公共入口（非 push2 域，本机实测可用）
-EM_DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+# 东财 datacenter 公共入口（非 push2 域，本机实测可用）；URL 收口到 config（P2-08）
+EM_DATACENTER_URL = config.EASTMONEY_DATACENTER_URL
 
 # 本地确定性情绪词典（±0.1 三档口径的极简版，仅用于 ST-05 新闻标签，
 # 不是 AI 判读、不接大模型，符合「严禁把 LLM 当数据源」红线）
@@ -207,8 +206,13 @@ def _em_report(report_name: str, filter_text: str, *, sort: str = "", size: int 
         params["sortColumns"] = sort
         params["sortTypes"] = "-1"
     try:
-        response = requests.get(EM_DATACENTER_URL, params=params, timeout=config.DATASOURCE_TIMEOUT)
-        payload = response.json()
+        # P2-07：不再裸 requests.get，统一走 utils 会话（浏览器 UA / Referer / trust_env=False）
+        payload = utils.http_get_json(
+            EM_DATACENTER_URL,
+            params=params,
+            referer=config.EASTMONEY_REFERER,
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
     except Exception as exc:  # noqa: BLE001 - 统一转译为可降级异常
         raise NonRetryableError(f"东财 datacenter 不可用：{type(exc).__name__}") from exc
     result = payload.get("result") or {}

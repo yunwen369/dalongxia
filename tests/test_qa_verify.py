@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import time as _time
 from datetime import datetime, timedelta
 
 import pytest
@@ -964,6 +965,45 @@ def test_hk_kline_and_quote_real() -> None:
     assert quote["price"] > 0
 
 
+# P0-01 复测：港美股（及指数）成交额不受 ×10000 虚高；A 股仍按万元→元换算。
+# 腾讯 parts[37] 单位随市场不同：A 股为万元（×10000→元）；港美为本币原值（USD/HKD）。
+# 验证量级 + 量价关系 amount ≈ volume*price：港美 ratio≈1，A 股因手×100 故 ratio≈100；
+# ×10000 病态令 HK/US 比率飙升 10000，被量级与比率双重拦截。
+@pytest.mark.parametrize(
+    "symbol,market,low,high",
+    [
+        ("AAPL", "us", 1e7, 1e11),   # 美股≈5e9，病态×10000≈5e13 远超上界
+        ("00700", "hk", 1e7, 1e11),  # 港股≈2e10，病态≈2e14 远超上界
+        ("600519", "a", 1e6, 1e11),  # A 股×10000，量级百万~百亿元
+        ("000001", "a", 1e6, 1e11),  # 回归：A 股仍×10000，不得意外取消
+    ],
+)
+def test_p001_amount_unit(symbol: str, market: str, low: float, high: float) -> None:
+    """P0-01 成交额口径复测（真实网络）：港美股不 ×10000，A 股不被改坏。
+
+    走真实腾讯报价（东财/新浪降级亦合格），不使用 mock/写死行情；量级与量价关系
+    共同断定：病态 ×10000 会让 HK/US 成交额跳到 1e13–1e14 量级且 ratio=10000。
+
+    Args:
+        symbol: 股票代码。
+        market: a/hk/us。
+        low: 允许最小成交额（元 / 本币）。
+        high: 允许最大成交额（元 / 本币）；病态 ×10000 远超本界。
+    """
+    # 命中真实报价，error 必须为空（契约 §6.3）
+    quote = _success("/api/market/quote", {"symbol": symbol, "market": market})["quote"]
+    amount = quote["amount"]  # 成交额：A 股为元，港美为本币原值
+    price = quote["price"]    # 最新价
+    volume = quote["volume"]  # 成交量（A 股=手，港美=股）
+    assert amount is not None and amount > 0, f"{symbol} 成交额为空（P0-01 复发？）"
+    # 量级断言：×10000 病态必定跌出 [low, high]
+    assert low <= amount <= high, f"{symbol} amount 量级异常：{amount}（预期 [{low},{high}]）"
+    # 数量关系：成交额不得远高于量价积（HK/US≈1，A 股≈100；×10000 病态=10000）
+    assert volume and volume > 0 and price and price > 0, f"{symbol} 缺少 volume/price"
+    ratio = amount / (volume * price)
+    assert 0.1 <= ratio <= 500, f"{symbol} amount/量价不匹配：ratio={ratio}（×10000 病态=10000）"
+
+
 def test_us_minute_unavailable() -> None:
     """美股分时：免费通道不可用时返回空 + 说明，不得用单点伪造分时。"""
     data = _success("/api/market/minute", {"symbol": "AAPL", "market": "us"})
@@ -1052,3 +1092,73 @@ def test_ai_chat_not_configured(monkeypatch: _pytest.MonkeyPatch) -> None:
     assert body["data"]["configured"] is False
     empty = client.post("/api/ai/chat", json={"message": "   "}).json()
     assert empty["error_code"] == "INVALID_PARAM"
+
+
+# =============================================================
+# P1 批次（2026-10-23）：时区判定 / 基金不存在 / 快速失败 / 备源记忆
+# 全部为真实网络断言，不使用 mock 或写死行情。
+# =============================================================
+def test_p101_us_quote_time_is_beijing() -> None:
+    """P1-01/P2-15：美股 quote_time 必须是**北京时间**，且北京夜间应判「盘中」。
+
+    回归点：腾讯美股 parts[30] 原样为美东当地时间，未换算时 quote_time 会比
+    北京时间晚 12~13 小时（跨日），并因日期早一天被判「收盘快照」+ is_realtime=False。
+    """
+    quote = _success("/api/market/quote", {"symbol": "AAPL", "market": "us"})["quote"]
+    assert quote["quote_time"], "美股报价缺少 quote_time"
+    as_of = datetime.strptime(quote["quote_time"], "%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    # 口径断言（与交易时段无关）：数据时间必须贴近北京时间，容差 1 小时（覆盖盘中停牌等）
+    delta = abs((now - as_of).total_seconds())
+    assert delta < 3600, f"美股 quote_time 未换算为北京时间：{quote['quote_time']}（北京现在 {now:%Y-%m-%d %H:%M:%S}）"
+    # 时段断言：北京时间 21:30–04:00 为美股常规时段（夏令时近似）
+    clock = now.hour * 60 + now.minute
+    in_session = clock >= 21 * 60 + 30 or clock <= 4 * 60
+    if in_session:
+        assert quote["market_status"] == "盘中", f"北京夜间应判盘中，实际 {quote['market_status']}"
+        assert quote["is_realtime"] is True, "北京夜间美股盘中数据 is_realtime 必须为 True"
+    else:
+        assert quote["is_realtime"] is False
+        assert quote["market_status"] in {"休市", "盘前", "盘后", "收盘快照", "时间未知"}
+
+
+def test_p102_fund_not_found_contract() -> None:
+    """P1-02：不存在的基金必须返回 NOT_FOUND，且不得返回 nav=0.0 的「成功」。"""
+    body = _body("/api/fund/realtime", {"code": "999999"})
+    assert body["error_code"] == "NOT_FOUND", f"实际 {body['error_code']}（{body.get('error')}）"
+    assert body["error"] and "未找到" in body["error"]
+    nav = (body["data"] or {}).get("nav")
+    assert not nav, f"不存在基金不得返回净值，实际 nav={nav}"
+    # 对照：真实基金仍正常出数（防止把闸门做成全局误杀）
+    good = _success("/api/fund/realtime", {"code": "110022"})
+    assert good["nav"] and good["nav"] > 0
+
+
+def test_p103_missing_symbol_fast_fail() -> None:
+    """P1-03：不存在的标的必须快速失败（NOT_FOUND），不得逐源等满超时。"""
+    for symbol, market in (("999999", "a"), ("ZZZZ", "us")):
+        started = _time.time()
+        body = _body("/api/market/quote", {"symbol": symbol, "market": market})
+        elapsed = _time.time() - started
+        assert body["error_code"] == "NOT_FOUND", f"{symbol} 实际 {body['error_code']}"
+        assert elapsed < 3.0, f"{symbol} 错误路径耗时 {elapsed:.2f}s，超过 3 秒快速失败门槛"
+    # K 线与分时同样走存在性闸门
+    started = _time.time()
+    assert _body("/api/market/kline", {"symbol": "999999", "market": "a", "period": "日k"})["error_code"] == "NOT_FOUND"
+    assert _time.time() - started < 3.0
+
+
+def test_p104_kline_preferred_source_memory() -> None:
+    """P1-04：K 线冷启动命中可用源且耗时收敛；备源优先级被记住（进程级）。"""
+    from backend.app.core import resilient
+
+    started = _time.time()
+    data = _success("/api/market/kline",
+                    {"symbol": "AAPL", "market": "us", "period": "月k", "adjust": "qfq"})
+    elapsed = _time.time() - started
+    assert data["source"] in {"腾讯", "东财"}, f"未预期源 {data['source']}"
+    assert len(data["items"]) >= 20
+    # 修复前：东财 push2 失效时每源重试 3 次退避，冷启动 10.76s；阈值按修复后留足余量
+    assert elapsed < 6.0, f"美股 K 线冷启动 {elapsed:.2f}s，未收敛"
+    # 备源优先级记忆：本次成功源必须被记住，下次同链路优先尝试
+    assert resilient.preferred_source("market:kline:us") == data["source"]

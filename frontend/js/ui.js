@@ -174,6 +174,39 @@
     ];
   }
 
+  /** 搜索命令：把顶栏关键词交给真实智能联想，命中则跳个股页（P1-08）。
+   * @param {string} keyword 顶栏搜索框关键词
+   * @returns {Array} 命令列表（关键词为空时返回空数组）
+   */
+  function searchCommand(keyword) {
+    var query = (keyword || "").trim();
+    if (!query) {
+      return [];
+    }
+    return [{
+      id: "search:" + query,
+      group: "palette.search",
+      label: t("palette.searchStock", { q: query }),
+      /** 执行搜索：取联想首条结果跳转个股详情；无结果给中文提示。 */
+      run: function () {
+        fetch("/api/market/search?limit=5&q=" + encodeURIComponent(query), { cache: "no-store" })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            var items = (body.data && body.data.items) || [];
+            if (!items.length) {
+              toast("未找到匹配的股票，请换关键词重试。");
+              return;
+            }
+            var first = items[0];
+            var market = first.market || "a";
+            var symbol = first.symbol || first.code || "";
+            location.hash = "#/stock?symbol=" + encodeURIComponent(symbol) + "&market=" + encodeURIComponent(market);
+          })
+          .catch(function () { toast("搜索失败，请稍后重试。"); });
+      }
+    }];
+  }
+
   /** 组件命令：按 /api/widgets 注册表动态生成。
    * @param {*} callback 回调函数
    */
@@ -204,7 +237,15 @@
         /** 执行添加组件：调用仪表板 API 并跳转到 #/dashboard。 */
         run: function () {
           if (window.Dashboard && window.Dashboard.addWidgetById) {
-            window.Dashboard.addWidgetById(item.id);
+            // 当前在个股页时自动带上该标的（用户自选，避免硬编码默认标的）
+            var symbolMatch = /symbol=([^&]+)/.exec(location.hash || "");
+            var marketMatch = /market=([^&]+)/.exec(location.hash || "");
+            var params = {};
+            if (symbolMatch) {
+              params.symbol = decodeURIComponent(symbolMatch[1]);
+              params.market = marketMatch ? decodeURIComponent(marketMatch[1]) : "a";
+            }
+            window.Dashboard.addWidgetById(item.id, params);
             location.hash = "#/dashboard";
             toast("已添加：" + item.title);
           } else {
@@ -258,8 +299,10 @@
     }
   }
 
-  /** 打开命令面板。 */
-  function openPalette() {
+  /** 打开命令面板。
+   * @param {string} initialQuery 可选的初始关键词（顶栏搜索回车时传入）
+   */
+  function openPalette(initialQuery) {
     if (paletteNode) {
       closePalette();
       return;
@@ -276,9 +319,13 @@
     paletteNode.appendChild(box);
     document.body.appendChild(paletteNode);
 
-    paletteState.items = viewCommands().concat(actionCommands());
+    var keyword = typeof initialQuery === "string" ? initialQuery.trim() : "";
+    if (keyword) {
+      input.value = keyword;
+    }
+    paletteState.items = viewCommands().concat(actionCommands()).concat(searchCommand(keyword));
     paletteState.index = 0;
-    renderPaletteList("");
+    renderPaletteList(input.value);
     widgetCommands(function (commands) {
       paletteState.items = paletteState.items.concat(commands);
       renderPaletteList(input.value);

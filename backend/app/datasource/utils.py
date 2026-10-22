@@ -168,6 +168,62 @@ def parse_datetime(value: str) -> Optional[datetime]:
     return None
 
 
+def _us_dst_offset_hours(value: datetime) -> int:
+    """按美国夏令时规则计算美东→北京的时差小时数（无 tzdata 时的回退实现）。
+
+    规则：3 月第 2 个周日 02:00 起为 EDT（UTC-4，北京 +12h），
+    11 月第 1 个周日 02:00 起回到 EST（UTC-5，北京 +13h）。
+
+    Args:
+        value: 美东本地时间（naive）。
+
+    Returns:
+        int: 12（夏令时）或 13（冬令时）。
+    """
+    import calendar
+
+    # 3 月第 2 个周日：monthcalendar 每行一周，周一为 0，周日为 6
+    march = calendar.monthcalendar(value.year, 3)
+    second_sunday = [week[calendar.SUNDAY] for week in march if week[calendar.SUNDAY]][1]
+    # 11 月第 1 个周日
+    november = calendar.monthcalendar(value.year, 11)
+    first_sunday = [week[calendar.SUNDAY] for week in november if week[calendar.SUNDAY]][0]
+    dst_start = datetime(value.year, 3, second_sunday, 2, 0, 0)
+    dst_end = datetime(value.year, 11, first_sunday, 2, 0, 0)
+    return 12 if dst_start <= value < dst_end else 13
+
+
+def us_eastern_to_beijing(value: Optional[datetime]) -> Optional[datetime]:
+    """把美东本地时间换算为北京时间（UTC+8）。
+
+    腾讯美股行情取回的时间戳是**美东当地时间**（如 ``2026-10-22 12:24:40``
+    表示 EDT 盘中）。若直接当北京时间判时段，会因日期比北京时间早一天而
+    命中「收盘快照」分支，把盘中实时数据标成 ``is_realtime=False``
+    （独立验收 P1-01）。
+
+    Args:
+        value: 美东本地时间（naive，无时区信息）。
+
+    Returns:
+        Optional[datetime]: 换算后的北京时间（naive）；入参为空返回 None。
+
+    Note:
+        优先用 zoneinfo + IANA 时区（自动处理夏令时）；冻结包缺少 tzdata 时
+        退回 ``_us_dst_offset_hours`` 的规则计算，两种路径结果一致。
+    """
+    if value is None:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        eastern = value.replace(tzinfo=ZoneInfo("America/New_York"))
+        return eastern.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    except Exception:  # noqa: BLE001 - 缺 tzdata 时按夏令时规则回退
+        from datetime import timedelta
+
+        return value + timedelta(hours=_us_dst_offset_hours(value))
+
+
 def classify_market_status(
     as_of: Optional[datetime],
     market: str,

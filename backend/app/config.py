@@ -68,6 +68,8 @@ DATASOURCE_TIMEOUT = 15  # 单数据源全链路超时（秒）
 RETRY_BACKOFF = (1.0, 2.0, 4.0)  # 指数退避间隔（秒）
 RATE_LIMIT_MIN_DELAY = 0.3  # 串行调用最小随机延时（秒）
 RATE_LIMIT_MAX_DELAY = 1.0  # 串行调用最大随机延时（秒）
+CIRCUIT_COOLDOWN = 300.0  # 传输层失败源的熔断冷却秒数（P1-04，5 分钟后自动重试）
+EXISTS_PROBE_TIMEOUT = 5  # 存在性探测超时（秒，P1-03 快速失败，>5s 视为未知）
 BROWSER_USER_AGENT = (  # 统一浏览器 UA，降低被源站风控概率
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -83,6 +85,32 @@ TENCENT_SEARCH_BASE = os.environ.get(
     "OPENBB_TENCENT_SEARCH_BASE", "https://smartbox.gtimg.cn"
 )
 SINA_QUOTE_BASE = os.environ.get("OPENBB_SINA_QUOTE_BASE", "https://hq.sinajs.cn")
+
+# 其余直连接口统一收口在此（P2-08：禁止在 provider 内硬编码 URL）
+# 东财 datacenter（F10 概况/股东，与 push2 行情通道分离，本机可用）
+EASTMONEY_DATACENTER_URL = os.environ.get(
+    "OPENBB_EASTMONEY_DATACENTER_URL",
+    "https://datacenter-web.eastmoney.com/api/data/v1/get",
+)
+# 东财基金历史净值（pageSize 硬上限 20）
+EASTMONEY_FUND_LSJZ_URL = os.environ.get(
+    "OPENBB_EASTMONEY_FUND_LSJZ_URL",
+    "https://api.fund.eastmoney.com/f10/lsjz",
+)
+# 东财基金分红页（HTML 表格，无记录时页面含「暂无分红信息!」）
+EASTMONEY_FUND_FHSP_URL = os.environ.get(
+    "OPENBB_EASTMONEY_FUND_FHSP_URL",
+    "https://fundf10.eastmoney.com/fhsp_{code}.html",
+)
+EASTMONEY_FUND_FHSP_REFERER = os.environ.get(
+    "OPENBB_EASTMONEY_FUND_FHSP_REFERER",
+    "https://fundf10.eastmoney.com/",
+)
+# 新浪外汇（美元兑人民币 fx_susdcny、港币兑人民币 fx_shkdcny）
+SINA_FX_URL = os.environ.get(
+    "OPENBB_SINA_FX_URL",
+    "https://hq.sinajs.cn/list=fx_susdcny,fx_shkdcny",
+)
 
 # 站点 Referer（部分源站缺 Referer 会返回 403）
 TENCENT_REFERER = "https://gu.qq.com/"
@@ -162,6 +190,9 @@ TTL: Dict[str, int] = {
     "search": 600,  # 搜索联想列表
     "yjb_status": 300,  # 养基宝绑定状态
     "fund_performance": 3600,  # 基金阶段业绩 / 分红
+    # 板块成分股属低频数据（申万/新浪按季报与月度维护），
+    # 原按 kline 的 60 秒缓存导致每分钟都要重走一次 15 秒级冷启动（P1-04）
+    "cons": 3600,  # 板块成分股
 }
 
 # =============================================================
