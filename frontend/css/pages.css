@@ -434,6 +434,8 @@
 
 .chip.up { color: var(--up); border-color: var(--up); }
 .chip.down { color: var(--down); border-color: var(--down); }
+/* 降级/待联调中间态（R3-13 连接器状态 pill） */
+.chip.warn { color: var(--warn, #e8a33d); border-color: var(--warn, #e8a33d); }
 
 /* ---------- 财务页签 ---------- */
 .pg-fin-tabs {
@@ -774,3 +776,146 @@
   color: var(--text-dim);
   font-weight: 500;
 }
+
+/* =============================================================
+ * 新增功能 ⑥：财报 / 公告搜索（FS-*，2026-10-26）
+ * 来源：验收方《新功能_财报搜索/原型_HTML/css/app.css》FS 段，逐字复用现网变量，
+ *       仅把原型未在现网定义的 --bg-widget-2 换成现网既有的 --bg-panel。
+ * 约束：不新增第二套配色 / 栅格，全部取自 theme.css 变量。
+ * ============================================================= */
+/* N-05 入口卡：虚线强调边框 + 品牌微透底 */
+.fs-entry {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px dashed var(--accent-strong);
+  border-radius: var(--radius);
+  background: rgba(180, 125, 160, .06);
+  cursor: pointer;
+}
+.fs-entry:hover { background: rgba(180, 125, 160, .12); }
+.fs-entry .ic {
+  width: 38px; height: 38px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--accent-deep); color: #fff; font-size: 18px;
+}
+.fs-entry .t { font-size: var(--fs-body); font-weight: 600; }
+.fs-entry .d { font-size: var(--fs-aux); color: var(--text-muted); margin-top: 3px; }
+.fs-entry .go { margin-left: auto; color: var(--accent); font-size: var(--fs-aux); white-space: nowrap; }
+
+/* FS-09 返回按钮 */
+.fs-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text);
+  font-size: var(--fs-body); cursor: pointer;
+}
+.fs-back:hover { border-color: var(--accent); color: var(--accent); }
+
+/* FS-01 条件区 */
+.fs-searchbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fs-search-input {
+  flex: 1 1 260px; height: 34px; padding: 0 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-app); color: var(--text);
+  font-size: var(--fs-body); outline: none;
+}
+.fs-search-input:focus { border-color: var(--accent); }
+.fs-search-input::placeholder { color: var(--text-muted); }
+.fs-select {
+  height: 34px; padding: 0 8px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-app); color: var(--text);
+  font-size: var(--fs-aux); outline: none;
+}
+.fs-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.fs-chip {
+  font-size: 12px; padding: 3px 11px; border-radius: 12px;
+  border: 1px solid var(--border-strong); color: var(--text-dim);
+  background: transparent; cursor: pointer;
+}
+.fs-chip:hover { color: var(--text); border-color: var(--accent); }
+.fs-chip.on { color: var(--accent); border-color: var(--accent-strong); background: rgba(180, 125, 160, .12); }
+
+/* FS-02 结果列表：行式（长标题换行），非表格 */
+.fs-list { display: flex; flex-direction: column; }
+.fs-item { padding: 11px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.fs-item:hover .fs-item-title { color: var(--accent); }
+.fs-item-title { flex: 1 1 320px; font-size: var(--fs-body); color: var(--text); line-height: 1.5; }
+.fs-item-title mark { background: rgba(232, 163, 61, .35); color: var(--text); border-radius: 2px; padding: 0 1px; }
+.fs-item-sub {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 5px; font-size: 12px; color: var(--text-muted);
+}
+.fs-item-sub .co { color: var(--text-dim); }
+.fs-item-sub .code { font-family: var(--font-mono); color: var(--text-dim); }
+.fs-tag {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px;
+  border: 1px solid var(--border-strong); color: var(--text-dim); white-space: nowrap;
+}
+.fs-tag.ann { color: var(--info); border-color: rgba(75, 158, 255, .5); }
+.fs-tag.fr { color: var(--accent); border-color: var(--accent-strong); }
+.fs-tag.mkt-a { color: var(--down); border-color: rgba(0, 176, 97, .45); }
+.fs-tag.mkt-hk { color: var(--warn); border-color: rgba(232, 163, 61, .45); }
+.fs-tag.mkt-us { color: var(--info); border-color: rgba(75, 158, 255, .45); }
+.fs-time { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.fs-time .tz { color: var(--text-muted); }
+.fs-more { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0 4px; }
+.fs-count { font-size: 12px; color: var(--text-muted); }
+
+/* FS-08 详情弹窗（640px，与原型一致） */
+.fs-modal-mask {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .55);
+}
+.fs-modal {
+  width: 640px; max-width: calc(100vw - 40px); max-height: calc(100vh - 80px);
+  overflow: auto; padding: 18px 20px;
+  background: var(--bg-widget); border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.fs-modal h3 { font-size: var(--fs-section); margin-bottom: 12px; line-height: 1.5; color: var(--text); }
+.fs-modal .m-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fs-modal .m-sec { font-size: 12px; color: var(--text-muted); margin: 10px 0 4px; }
+.fs-modal .m-body { font-size: var(--fs-body); color: var(--text-dim); line-height: 1.8; }
+.fs-modal .m-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.fs-modal .m-link { color: var(--accent); font-size: var(--fs-aux); word-break: break-all; }
+
+/* 1024 断点：搜索框整行（与原型 @media 一致） */
+@media (max-width: 1200px) {
+  .fs-search-input { flex: 1 1 100%; }
+}
+
+/* =============================================================
+ * FN-02：基金搜索联想下拉（2026-10-26）
+ * ============================================================= */
+.fund-search-wrap { position: relative; display: inline-block; }
+.fund-search-list {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bg-widget);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.fund-search-item {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.fund-search-item:hover { background: var(--bg-hover); color: var(--text); }
+.fund-search-item .code { font-family: var(--font-mono); color: var(--text); }

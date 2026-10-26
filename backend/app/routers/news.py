@@ -17,16 +17,16 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Body, Query
 
 from backend.app import config
-from backend.app.core import cache
+from backend.app.core import cache, netfix
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
+from backend.app.datasource import financial_report
 from backend.app.datasource import news as news_provider
 from backend.app.datasource import sentiment as sentiment_engine
 from backend.app.datasource import utils
@@ -88,7 +88,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
     payload.update({
         "source": source,
         "caliber": caliber,
-        "as_of": as_of or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "as_of": as_of or utils.now_text(),
         "market_status": market_status,
         "is_realtime": bool(is_realtime),
     })
@@ -495,7 +495,8 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     url = ai.base_url.rstrip("/") + "/chat/completions"
     started = time.time()
     try:
-        response = requests.post(
+        response = netfix.http_request(
+            "POST",
             url,
             headers={"Authorization": f"Bearer {ai.api_key}", "Content-Type": "application/json"},
             json={
@@ -542,3 +543,59 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "AI 复核",
         False,
     )
+
+# =============================================================
+# 新增功能 ⑥：财报/公告搜索（2026-10-26）
+# 契约见《设计基准_财报搜索_20261025.md》§7.1：入参 market/q/type/since/page，
+# 返回 data.list 九字段 + total/source/caliber/as_of；列表 TTL 5 分钟（provider 内已实现）。
+# =============================================================
+
+
+@router.get("/financial-search")
+def financial_search(
+    market: str = Query("all", description="全部/A股/港股/美股：all|a|hk|us"),
+    q: str = Query("", description="公司名称 / 股票代码 / 关键词，可为空"),
+    type_value: str = Query("全部", alias="type", description="财报类型过滤，全部表示不过滤"),
+    since: str = Query("all", description="时间范围：all|7|30|90|365（近 N 天）"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+) -> Any:
+    """财报/公告搜索（A 股 · 港股 · 美股）。
+
+    Args:
+        market: 市场枚举 all/a/hk/us。
+        q: 关键词（公司名/代码/空）。
+        type_value: 类型过滤值（全部表示不过滤）。
+        since: 时间范围枚举 all/7/30/90/365。
+        page: 页码。
+
+    Returns:
+        Any: 统一信封 `{data, error, error_code}`；data 含 list/total/source/caliber/as_of。
+
+    Notes:
+        参数非法一律返回 INVALID_PARAM 中文提示，不发起上游请求；
+        单市场失败不整体失败，原因写入 caliber 由前端呈现（不补零、不造数）。
+    """
+    if market not in financial_report.MARKET_VALUES:
+        return _bad("market 参数不合法，仅支持 all / a / hk / us。")
+    if type_value not in financial_report.TYPE_VALUES:
+        return _bad("type 参数不合法，请从「全部/年报/半年报/一季报/三季报/业绩预告/招股书/10-K/10-Q/8-K/其他」中选择。")
+    if since not in financial_report.SINCE_VALUES:
+        return _bad("since 参数不合法，仅支持 all / 7 / 30 / 90 / 365（近 N 天）。")
+    if len(q) > 60:
+        return _bad("关键词过长（上限 60 字），请缩短后重试。")
+
+    try:
+        data = financial_report.search_filings(
+            market=market, q=q, type_value=type_value, since=since, page=page
+        )
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转中文错误态，不裸抛 500
+        logger.warning("财报/公告检索失败：%s", exc)
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            "财报/公告检索失败（可能限频或网络不通），请稍后点击重试。",
+            data={"list": [], "total": 0, "source": "—", "caliber": "上游异常", "as_of": utils.now_text()},
+        )
+    if not data.get("list"):
+        # 空态与错误态严格分离：这里返回成功信封 + 空列表 + 口径说明（红线「空/错分离」）
+        data["caliber"] = data.get("caliber") or "未检索到匹配的财报/公告，请调整关键词、类型或时间范围"
+    return ok(data)

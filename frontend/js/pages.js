@@ -22,14 +22,26 @@
   var COLOR_WARN = "#b77f3d";
   var COLOR_ERR = "#ff5a5a";
 
-  /** 取语言包文本（阶段 6 交接口径：页面文案统一走 I18N，缺 key 时返回 key 本身便于排查）。
-   * @param {string} key 键名 / i18n key
-   * @param {Object} vars 占位符变量表
-   * @returns {*} 处理结果
-   */
-  function t(key, vars) {
-    return window.I18N ? window.I18N.t(key, vars) : key;
-  }
+  // P1-13：共享工具别名（t/el/fmt/fmtPct/api/toast/renderTable 原本各 IIFE 重复定义于此）
+  var t = window.Utils.t;
+  var el = window.Utils.el;
+  var fmt = window.Utils.fmt;
+  var fmtPct = window.Utils.fmtPct;
+  var api = window.Utils.api;
+  var toast = window.Utils.toast;
+
+  // 后端固定中文口径字段 → 前端语义键（R2-08 / R2-15：集中收口，渲染处禁止散写中文字段名）
+  // 评级：stock.py::_RATING_NAMES 固定为 买入/增持/中性/减持/卖出
+  var RATING_SOURCE_KEYS = { buy: "买入", add: "增持", neutral: "中性", reduce: "减持", sell: "卖出" };
+  // 财务摘要：/api/stock/financial-summary 的 metrics[].key 为新浪原始中文口径
+  var FIN_METRIC_FIELDS = {
+    revenue: "营业总收入",
+    netProfit: "归母净利润",
+    eps: "基本每股收益",
+    grossMargin: "毛利率",
+    roe: "净资产收益率(ROE)",
+    debtRatio: "资产负债率"
+  };
 
   // 各视图容器（由 index.html 提供）
   var VIEW_IDS = {
@@ -39,9 +51,14 @@
     news: "page-news",
     fund: "page-fund",
     charting: "page-charting",
+    watchlist: "page-watchlist",
+    lhb: "page-lhb",
     portfolio: "page-portfolio",
     connectors: "page-connectors",
     dashboard: "page-dashboard",
+    // DS-01/DS-02：仪表板管理与组件库独立路由（URL 可直达，四态齐全）
+    "dashboard-manage": "page-dashboard-manage",
+    "widget-library": "page-widget-library",
     yjb: "page-yjb",
     settings: "page-settings"
   };
@@ -63,63 +80,6 @@
   // =============================================================
   // 一、通用工具
   // =============================================================
-  /** 创建元素：cls 为类名，text 为文本（一律用 textContent，避免注入）。
-   * @param {string} tag HTML 标签名
-   * @param {string} cls CSS 类名
-   * @param {string} text 文本内容
-   * @returns {*} 处理结果
-   */
-  function el(tag, cls, text) {
-    var node = document.createElement(tag);
-    if (cls) {
-      node.className = cls;
-    }
-    if (text !== undefined && text !== null) {
-      node.textContent = String(text);
-    }
-    return node;
-  }
-
-  /** 数字格式化：空值返回「无数据」，其余保留指定小数并加千分位（统一走 L10N.num）。
-   * @param {*} value 待格式化或处理的值
-   * @param {number} digits 小数位数
-   * @returns {*} 处理结果
-   */
-  function fmt(value, digits) {
-    if (window.L10N) {
-      return window.L10N.num(value, digits);
-    }
-    if (value === null || value === undefined || (typeof value === "number" && isNaN(value))) {
-      return "无数据";
-    }
-    var num = Number(value);
-    if (isNaN(num)) {
-      return "无数据";
-    }
-    var fixed = num.toFixed(digits === undefined ? 2 : digits);
-    var parts = fixed.split(".");
-    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-    return parts.join(".");
-  }
-
-  /** 百分比格式化：带正负号与 %，空值「无数据」（统一走 L10N.pct）。
-   * @param {*} value 待格式化或处理的值
-   * @returns {*} 处理结果
-   */
-  function fmtPct(value) {
-    if (window.L10N) {
-      return window.L10N.pct(value);
-    }
-    if (value === null || value === undefined) {
-      return "无数据";
-    }
-    var num = Number(value);
-    if (isNaN(num)) {
-      return "无数据";
-    }
-    return (num > 0 ? "+" : "") + num.toFixed(2) + "%";
-  }
-
   /** 涨跌样式类：正红、负绿、零灰。
    * @param {*} value 待格式化或处理的值
    * @returns {*} 处理结果
@@ -142,6 +102,56 @@
     return Number(value) / 1e8;
   }
 
+  /** 成交额格式化：元 → 亿元/万元（与首页行情口径一致）。
+   * @param {*} value 元为单位的数值
+   * @returns {string} 带单位的文本
+   */
+  function fmtAmount(value) {
+    if (value === null || value === undefined) {
+      return t("value.none");
+    }
+    var num = Number(value);
+    if (!isFinite(num)) {
+      return t("value.none");
+    }
+    if (Math.abs(num) >= 1e8) {
+      return fmt(num / 1e8, 2) + " 亿";
+    }
+    if (Math.abs(num) >= 1e4) {
+      return fmt(num / 1e4, 2) + " 万";
+    }
+    return fmt(num, 2);
+  }
+
+  /** 发送 JSON 请求（POST/PATCH/DELETE），统一解包信封并抛中文错误。
+   * @param {string} method HTTP 方法
+   * @param {string} path 接口路径（可含 query）
+   * @param {*} body 请求体（GET/DELETE 可不传）
+   * @returns {Promise} data 段
+   */
+  function sendJson(method, path, body) {
+    var init = { method: method, cache: "no-store", headers: {} };
+    if (body !== undefined && body !== null) {
+      init.headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    return fetch(path, init).then(function (response) {
+      return response.json();
+    }).then(function (envelope) {
+      if (envelope && envelope.error) {
+        var error = new Error(envelope.error);
+        error.code = envelope.error_code;
+        throw error;
+      }
+      return envelope ? envelope.data : null;
+    }).catch(function (error) {
+      if (error instanceof Error && error.message) {
+        throw error;
+      }
+      throw new Error("网络连接失败，请检查网络后重试。");
+    });
+  }
+
   /** 相对时间：把 YYYY-MM-DD HH:MM:SS 转成「x 分钟前 / x 小时前 / 日期」。
    * @param {string} text 文本内容
    * @returns {*} 处理结果
@@ -150,73 +160,25 @@
     if (!text) {
       return "";
     }
-    var stamp = new Date(String(text).replace(/-/g, "/"));
-    if (isNaN(stamp.getTime())) {
+    // TZ-07：后端时间是北京裸串，统一按 UTC+8 解析，避免非 UTC+8 浏览器算错距今秒差
+    var stamp = window.I18N && window.I18N.bjMs ? window.I18N.bjMs(text) : NaN;
+    if (isNaN(stamp)) {
       return String(text).slice(0, 16);
     }
-    var diff = (Date.now() - stamp.getTime()) / 1000;
+    var diff = (Date.now() - stamp) / 1000;
     if (diff < 60) {
-      return "刚刚";
+      return t("stock.time.justNow");
     }
     if (diff < 3600) {
-      return Math.floor(diff / 60) + " 分钟前";
+      return Math.floor(diff / 60) + t("stock.time.minAgo");
     }
     if (diff < 86400) {
-      return Math.floor(diff / 3600) + " 小时前";
+      return Math.floor(diff / 3600) + t("stock.time.hourAgo");
     }
     return String(text).slice(0, 10);
   }
 
-  /** 统一请求：返回 data；失败抛出带中文文案的错误。
-   * @param {string} path 接口路径
-   * @param {Object} params 查询参数对象
-   * @returns {*} 处理结果
-   */
-  function api(path, params) {
-    var query = new URLSearchParams();
-    Object.keys(params || {}).forEach(function (key) {
-      if (params[key] !== undefined && params[key] !== null && params[key] !== "") {
-        query.append(key, params[key]);
-      }
-    });
-    var url = path + (query.toString() ? "?" + query.toString() : "");
-    return fetch(url, { cache: "no-store" })
-      // 网络层失败（断网/请求被拦截）统一转中文，避免把 "Failed to fetch" 暴露到界面
-      .catch(function () {
-        throw new Error("网络连接失败，请检查网络后重试。");
-      })
-      .then(function (response) {
-        return response.json().catch(function () {
-          throw new Error("数据格式异常，请稍后重试。");
-        });
-      })
-      .then(function (body) {
-        if (body && body.error) {
-          // 错误码只进控制台，界面不暴露内部标记
-          console.warn("[api]", url, body.error_code);
-          var err = new Error(body.error);
-          err.code = body.error_code;
-          throw err;
-        }
-        return body.data || {};
-      });
-  }
-
-  /** 轻提示（复用页面底部 #toast 元素）。
-   * @param {string} message 提示文案（中文）
-   */
-  function toast(message) {
-    var node = document.getElementById("toast");
-    if (!node) {
-      return;
-    }
-    node.textContent = message;
-    node.classList.add("show");
-    window.clearTimeout(toast._timer);
-    toast._timer = window.setTimeout(function () {
-      node.classList.remove("show");
-    }, 2600);
-  }
+  // api / toast 已提取到 utils.js（P1-13），此处不再重复定义。
 
   // =============================================================
   // 二、四态与徽章
@@ -242,8 +204,8 @@
   function setEmpty(body, message, onRetry) {
     body.innerHTML = "";
     var box = el("div", "pg-state");
-    box.appendChild(el("div", "pg-state-title", message || "暂无数据，点击刷新"));
-    var button = el("button", "pg-btn", "刷新");
+    box.appendChild(el("div", "pg-state-title", message || t("state.empty")));
+    var button = el("button", "pg-btn", t("action.refresh"));
     button.type = "button";
     button.addEventListener("click", function () {
       if (onRetry) {
@@ -263,9 +225,9 @@
   function setError(body, message, onRetry) {
     body.innerHTML = "";
     var box = el("div", "pg-state");
-    var title = el("div", "pg-state-title", "加载失败");
-    var hint = el("div", "pg-state-hint", message || "请检查网络后点击重试");
-    var button = el("button", "pg-btn", "重试");
+    var title = el("div", "pg-state-title", t("state.errorTitle"));
+    var hint = el("div", "pg-state-hint", message || t("state.errorHint"));
+    var button = el("button", "pg-btn", t("action.retry"));
     button.type = "button";
     button.addEventListener("click", function () {
       if (onRetry) {
@@ -357,7 +319,7 @@
   // 三、表格通用渲染
   // =============================================================
   /**
-   * 渲染表格。
+   * 渲染表格（P1-13 委托 window.Utils.renderTable）。
    * columns: [{title, key, cls, render}]
    * rows: 数据数组；onRowClick(row) 提供整行点击（跳转闭环）。
    * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
@@ -367,44 +329,17 @@
    * @param {*} maxHeightClass 最大高度类名
    */
   function renderTable(body, columns, rows, onRowClick, maxHeightClass) {
-    body.innerHTML = "";
     if (!rows || rows.length === 0) {
-      setEmpty(body, "暂无数据，点击刷新");
+      setEmpty(body, t("state.empty"));
       return;
     }
-    var wrap = el("div", "pg-table-wrap" + (maxHeightClass ? " " + maxHeightClass : ""));
-    var table = el("table", "pg-table");
-    var thead = el("thead");
-    var headRow = el("tr");
-    columns.forEach(function (column) {
-      headRow.appendChild(el("th", column.title === undefined ? "" : "", column.title));
+    window.Utils.renderTable(body, columns, rows, {
+      tableClass: "pg-table",
+      wrapClass: "pg-table-wrap",
+      maxHeightClass: maxHeightClass,
+      onRowClick: onRowClick,
+      nullText: t("value.none")
     });
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    var tbody = el("tbody");
-    rows.forEach(function (row) {
-      var tr = el("tr");
-      columns.forEach(function (column) {
-        var td = el("td", column.cls || "");
-        var value = column.render ? column.render(row) : row[column.key];
-        if (value instanceof Node) {
-          td.appendChild(value);
-        } else {
-          td.textContent = value === undefined || value === null ? "无数据" : String(value);
-        }
-        tr.appendChild(td);
-      });
-      if (onRowClick) {
-        tr.addEventListener("click", function () {
-          onRowClick(row);
-        });
-      }
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    wrap.appendChild(table);
-    body.appendChild(wrap);
     body.setAttribute("data-state", "default");
   }
 
@@ -470,17 +405,22 @@
     var parsed = parseHash();
     var name = parsed.path.split("/")[0] || "home";
     var title = {
-      sectors: "板块分析",
-      stock: "个股详情 · FinScope",
-      "sector-val": "单板块估值",
-      news: "新闻资讯",
-      fund: "场外基金",
-      charting: "图表分析",
-      portfolio: "持仓管理",
-      connectors: "数据连接器",
-      dashboard: window.I18N ? window.I18N.t("page.dashboard") : "仪表板",
-      yjb: "养基宝绑定",
-      settings: "设置"
+      home: t("page.home"),
+      sectors: t("page.sectors"),
+      stock: t("page.stock"),
+      "sector-val": t("page.sectorVal"),
+      news: t("page.news"),
+      fund: t("page.fund"),
+      charting: t("page.charting"),
+      watchlist: t("page.watchlist"),
+      lhb: t("page.lhb"),
+      portfolio: t("page.portfolio"),
+      connectors: t("page.connectors"),
+      dashboard: window.I18N ? window.I18N.t("page.dashboard") : t("page.dashboard"),
+      "dashboard-manage": t("page.dashboardManage"),
+      "widget-library": t("page.widgetLibrary"),
+      yjb: t("page.yjb"),
+      settings: t("page.settings")
     }[name];
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
@@ -509,6 +449,10 @@
       renderFund(parsed.params);
     } else if (name === "charting") {
       renderCharting(parsed.params);
+    } else if (name === "watchlist") {
+      renderWatchlist(parsed.params);
+    } else if (name === "lhb") {
+      renderLhb();
     } else if (name === "portfolio") {
       renderPortfolio();
     } else if (name === "connectors") {
@@ -516,6 +460,14 @@
     } else if (name === "dashboard") {
       if (window.renderDashboard) {
         window.renderDashboard();
+      }
+    } else if (name === "dashboard-manage") {
+      if (window.Dashboard && window.Dashboard.renderManage) {
+        window.Dashboard.renderManage(document.getElementById(VIEW_IDS["dashboard-manage"]));
+      }
+    } else if (name === "widget-library") {
+      if (window.Dashboard && window.Dashboard.renderLibraryPage) {
+        window.Dashboard.renderLibraryPage(document.getElementById(VIEW_IDS["widget-library"]));
       }
     } else if (name === "yjb") {
       renderYjb();
@@ -568,7 +520,7 @@
     // S-01 市场切换
     var marketTabs = el("div", "pg-tabs");
     marketTabs.id = "S-01";
-    [["cn", "国内"], ["hk", "港股"], ["us", "美股"]].forEach(function (item) {
+    [["cn", t("sectors.market.cn")], ["hk", t("sectors.market.hk")], ["us", t("sectors.market.us")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-market", item[0]);
@@ -579,7 +531,7 @@
     // S-02 行业/概念切换
     var kindTabs = el("div", "pg-tabs");
     kindTabs.id = "S-02";
-    [["industry", "行业"], ["concept", "概念"]].forEach(function (item) {
+    [["industry", t("sectors.kind.industry")], ["concept", t("sectors.kind.concept")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-kind", item[0]);
@@ -588,7 +540,7 @@
     toolbar.appendChild(kindTabs);
     toolbar.appendChild(el("span", "pg-spacer"));
 
-    var refresh = el("button", "pg-btn", "刷新本页");
+    var refresh = el("button", "pg-btn", t("action.reload"));
     refresh.type = "button";
     refresh.id = "sectors-refresh";
     toolbar.appendChild(refresh);
@@ -598,7 +550,7 @@
     grid.id = "sectors-grid";
 
     // 左主栏 S-03 热力图
-    var heat = buildCard("S-03", "板块热力图", "g-7", "面积=abs(涨跌幅)，颜色与标签为原值");
+    var heat = buildCard("S-03", t("sectors.heatTitle"), "g-7", t("sectors.heatSub"));
     var heatBody = heat.body;
     heatBody.classList.add("tall");
     heatBody.id = "s03-body";
@@ -610,20 +562,20 @@
     rightStack.style.flexDirection = "column";
     rightStack.style.gap = "16px";
 
-    var rank = buildCard("S-04", "行业板块排行", "", "");
+    var rank = buildCard("S-04", t("sectors.rankIndustry"), "", "");
     rank.card.setAttribute("data-block", "rank"); // 稳定锚点：id 会在 S-04/S-05 间切换
     rank.body.id = "s04-body";
     var rankBody = rank.body;
     rankBody.classList.add("short");
     rightStack.appendChild(rank.card);
 
-    var summary = buildCard("S-06", "板块摘要", "", "");
+    var summary = buildCard("S-06", t("sectors.summaryTitle"), "", "");
     summary.body.id = "s06-body";
     rightStack.appendChild(summary.card);
     grid.appendChild(rightStack);
 
     // S-07 资金流向通栏
-    var flow = buildCard("S-07", "板块资金流向", "g-12", "主力净额/流入/流出；超大单、大单源不提供");
+    var flow = buildCard("S-07", t("sectors.flowTitle"), "g-12", t("sectors.flowSub"));
     flow.body.id = "s07-body";
     grid.appendChild(flow.card);
     container.appendChild(grid);
@@ -660,13 +612,29 @@
     });
   }
 
+  /** 板块市场枚举归一（RT-03/RT-05）：行情/个股侧用 a/hk/us，板块侧用 cn/hk/us。
+   * 跨页带 market=a 跳板块时统一映射为 cn，避免后端 INVALID_PARAM 与页头误显示「美股」。
+   * @param {*} market 市场标识（a/cn/hk/us 或空）
+   * @returns {string} 板块侧枚举：cn / hk / us
+   */
+  function normSectorMarket(market) {
+    var value = String(market === null || market === undefined ? "" : market).toLowerCase();
+    if (value === "hk") {
+      return "hk";
+    }
+    if (value === "us") {
+      return "us";
+    }
+    return "cn";  // a / cn / 空值 一律视为国内市场
+  }
+
   /** 渲染板块页。
    * @param {Object} params 查询参数对象
    */
   function renderSectors(params) {
     var container = document.getElementById(VIEW_IDS.sectors);
     if (params.market) {
-      state.sectors.market = params.market;
+      state.sectors.market = normSectorMarket(params.market);
     }
     if (params.kind) {
       state.sectors.kind = params.kind;
@@ -704,7 +672,7 @@
     // 排行卡标题随口径变化（S-04 行业 / S-05 概念同源切换）
     var rankTitle = cards.s04.querySelector(".pg-card-title");
     if (rankTitle) {
-      rankTitle.textContent = kind === "concept" ? "概念板块排行" : "行业板块排行";
+      rankTitle.textContent = kind === "concept" ? t("sectors.rankConcept") : t("sectors.rankIndustry");
     }
     cards.s04.id = kind === "concept" ? "S-05" : "S-04";
 
@@ -784,7 +752,7 @@
       return node.value !== null && node.value !== undefined;
     });
     if (nodes.length === 0) {
-      setEmpty(bodies.s03, "暂无数据，点击刷新", function () {
+      setEmpty(bodies.s03, t("state.empty"), function () {
         loadSectors(true);
       });
     } else {
@@ -815,9 +783,9 @@
             formatter: function (info) {
               var source = info.data || {};
               return (
-                "<b>" + info.name + "</b><br/>涨跌幅：" + fmtPct(source.pct) +
-                "<br/>成交额：" + (source.amount === null || source.amount === undefined ? "无数据" : fmt(source.amount) + " 亿元") +
-                "<br/>领涨股：" + (source.lead || "无数据")
+                "<b>" + info.name + "</b><br/>" + t("sectors.tooltip.change") + fmtPct(source.pct) +
+                "<br/>" + t("sectors.tooltip.amount") + (source.amount === null || source.amount === undefined ? t("value.none") : fmt(source.amount) + " 亿元") +
+                "<br/>" + t("sectors.tooltip.lead") + (source.lead || t("value.none"))
               );
             }
           },
@@ -841,7 +809,7 @@
                  * @returns {*} 处理结果
                  */
                 formatter: function (info) {
-                  var pctText = info.data.pct === null ? "无数据" : Number(info.data.pct).toFixed(2) + "%";
+                  var pctText = info.data.pct === null ? t("value.none") : Number(info.data.pct).toFixed(2) + "%";
                   return info.name + "\n" + pctText;
                 }
               },
@@ -865,11 +833,11 @@
     renderTable(
       bodies.s04,
       [
-        { title: "板块名", key: "name", cls: "name" },
-        { title: "涨跌幅%", cls: "num", render: function (row) { return pctNode(row.pct); } },
-        { title: "成交额(亿元)", cls: "num", render: function (row) { return fmt(row.amount); } },
-        { title: "领涨股", key: "lead_stock" },
-        { title: "领涨幅%", cls: "num", render: function (row) { return pctNode(row.lead_pct); } }
+        { title: t("sectors.col.board"), key: "name", cls: "name" },
+        { title: t("sectors.pctCol"), cls: "num", render: function (row) { return pctNode(row.pct); } },
+        { title: t("sectors.amountCol"), cls: "num", render: function (row) { return fmt(row.amount); } },
+        { title: t("sectors.col.lead"), key: "lead_stock" },
+        { title: t("sectors.col.leadPct"), cls: "num", render: function (row) { return pctNode(row.lead_pct); } }
       ],
       rows,
       function (row) {
@@ -885,12 +853,12 @@
     // ---- S-07 资金流向 ----
     if (market !== "cn") {
       setBadges(cards.s07, "", "", false);
-      setEmpty(bodies.s07, "境外简化建模：港美股板块资金流暂无免费通道", function () {
+      setEmpty(bodies.s07, t("sectors.overseasFlow"), function () {
         loadSectors(true);
       });
     } else if (payload.kind === "concept") {
       setBadges(cards.s07, "", "", false);
-      setEmpty(bodies.s07, "概念板块资金流暂无免费通道，可切换到「行业」查看", function () {
+      setEmpty(bodies.s07, t("sectors.conceptFlow"), function () {
         state.sectors.kind = "industry";
         syncSectorTabs();
         loadSectors();
@@ -901,14 +869,14 @@
       renderTable(
         bodies.s07,
         [
-          { title: "板块名", key: "name", cls: "name" },
-          { title: "主力净流入(亿元)", cls: "num", render: function (row) { return pctNode(row.net_inflow); } },
-          { title: "流入(亿元)", cls: "num", render: function (row) { return fmt(row.inflow); } },
-          { title: "流出(亿元)", cls: "num", render: function (row) { return fmt(row.outflow); } },
+          { title: t("sectors.col.board"), key: "name", cls: "name" },
+          { title: t("sectors.col.netInflow"), cls: "num", render: function (row) { return pctNode(row.net_inflow); } },
+          { title: t("sectors.col.inflow"), cls: "num", render: function (row) { return fmt(row.inflow); } },
+          { title: t("sectors.col.outflow"), cls: "num", render: function (row) { return fmt(row.outflow); } },
           // 源不提供分项：显示「无数据」而不是补 0（§9）
  // @param {*} row 单行记录
-          { title: "超大单(亿元)", cls: "num", render: function (row) { return fmt(row.super_big); } },
-          { title: "大单(亿元)", cls: "num", render: function (row) { return fmt(row.big); } }
+          { title: t("sectors.col.superBig"), cls: "num", render: function (row) { return fmt(row.super_big); } },
+          { title: t("sectors.col.big"), cls: "num", render: function (row) { return fmt(row.big); } }
         ],
         flowRows,
         null,
@@ -924,7 +892,7 @@
   function paintSummary(body, summary) {
     body.innerHTML = "";
     if (!summary || (!summary.gainers.length && !summary.losers.length)) {
-      setEmpty(body, "暂无数据，点击刷新", function () {
+      setEmpty(body, t("state.empty"), function () {
         loadSectors(true);
       });
       return;
@@ -947,14 +915,14 @@
       });
       body.appendChild(wrap);
     }
-    group("领涨 Top3", summary.gainers || [], "pct");
-    group("领跌 Top3", summary.losers || [], "pct");
+    group(t("sectors.summary.leaders"), summary.gainers || [], "pct");
+    group(t("sectors.summary.losers"), summary.losers || [], "pct");
     if (summary.inflow && summary.inflow.length) {
-      group("主力净流入 Top3", summary.inflow, "net_inflow");
+      group(t("sectors.summary.inflow"), summary.inflow, "net_inflow");
     }
     var conc = el("div", "pg-card-sub");
     conc.textContent =
-      "成交额集中度（Top10 板块占比）：" + (summary.concentration === null ? "无数据" : summary.concentration + "%");
+      t("val.kv.concentration") + (summary.concentration === null ? t("value.none") : summary.concentration + "%");
     body.appendChild(conc);
     body.setAttribute("data-state", "default");
   }
@@ -965,7 +933,7 @@
    */
   function jumpToSectorVal(board, market) {
     window.location.hash =
-      "#/sector-val?board=" + encodeURIComponent(board) + "&market=" + (market || "cn");
+      "#/sector-val?board=" + encodeURIComponent(board) + "&market=" + normSectorMarket(market);
   }
 
   // =============================================================
@@ -977,12 +945,12 @@
   function buildStockShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
-    var label = el("span", "pg-card-sub", "证券代码");
+    var label = el("span", "pg-card-sub", t("stock.kv.codeLabel"));
     toolbar.appendChild(label);
     var input = document.createElement("input");
     input.id = "stock-symbol";
     input.value = state.stock.symbol;
-    input.setAttribute("aria-label", "证券代码");
+    input.setAttribute("aria-label", t("stock.kv.codeLabel"));
     input.style.cssText =
       "width:120px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);" +
       "border-radius:5px;padding:4px 8px;font-family:var(--font-mono)";
@@ -991,7 +959,7 @@
     marketSelect.id = "stock-market";
     marketSelect.style.cssText =
       "background:var(--bg-panel);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px";
-    [["a", "A股"], ["hk", "港股"], ["us", "美股"]].forEach(function (item) {
+    [["a", t("stock.market.a")], ["hk", t("sectors.market.hk")], ["us", t("sectors.market.us")]].forEach(function (item) {
       var option = document.createElement("option");
       option.value = item[0];
       option.textContent = item[1];
@@ -999,12 +967,12 @@
     });
     marketSelect.value = state.stock.market;
     toolbar.appendChild(marketSelect);
-    var go = el("button", "pg-btn", "查看");
+    var go = el("button", "pg-btn", t("action.view"));
     go.type = "button";
     go.id = "stock-go";
     toolbar.appendChild(go);
     toolbar.appendChild(el("span", "pg-spacer"));
-    var refresh = el("button", "pg-btn", "刷新本页");
+    var refresh = el("button", "pg-btn", t("action.reload"));
     refresh.type = "button";
     refresh.id = "stock-refresh";
     toolbar.appendChild(refresh);
@@ -1014,7 +982,7 @@
     grid.id = "stock-grid";
 
     // ST-01 报价大卡（通栏）
-    var quote = buildCard("ST-01", "报价", "g-12", "");
+    var quote = buildCard("ST-01", t("stock.quoteCard"), "g-12", "");
     quote.body.id = "st01-body";
     grid.appendChild(quote.card);
 
@@ -1024,12 +992,12 @@
     left.style.flexDirection = "column";
     left.style.gap = "16px";
 
-    var chartCard = buildCard("ST-02", "价格走势", "", "");
+    var chartCard = buildCard("ST-02", t("stock.chartCard"), "", "");
     chartCard.card.setAttribute("data-block", "chart"); // 稳定锚点：id 在 ST-02/ST-03 间切换
     chartCard.body.id = "st02-body";
     var tabRow = el("div", "pg-tabs");
     tabRow.style.marginBottom = "8px";
-    [["kline", "K 线"], ["minute", "分时"]].forEach(function (item) {
+    [["kline", t("stock.klineTab")], ["minute", t("stock.minuteTab")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-tab", item[0]);
@@ -1038,11 +1006,11 @@
     chartCard.card.insertBefore(tabRow, chartCard.body);
     left.appendChild(chartCard.card);
 
-    var fundCard = buildCard("ST-04", "资金分布", "", "超大单/大单/中单/小单四档");
+    var fundCard = buildCard("ST-04", t("stock.fundCard"), "", t("stock.fundSub"));
     fundCard.body.id = "st04-body";
     left.appendChild(fundCard.card);
 
-    var newsCard = buildCard("ST-05", "相关新闻", "", "标题点击跳转新闻页");
+    var newsCard = buildCard("ST-05", t("stock.newsCard"), "", t("stock.newsSub"));
     newsCard.body.id = "st05-body";
     left.appendChild(newsCard.card);
     grid.appendChild(left);
@@ -1052,24 +1020,24 @@
     right.style.display = "flex";
     right.style.flexDirection = "column";
     right.style.gap = "16px";
-    var sentiCard = buildCard("ST-07", "舆情", "", "本地词典三档");
+    var sentiCard = buildCard("ST-07", t("stock.sentiCard"), "", t("stock.sentiSub"));
     sentiCard.body.id = "st07-body";
     right.appendChild(sentiCard.card);
-    var forecastCard = buildCard("ST-06", "机构预测", "", "");
+    var forecastCard = buildCard("ST-06", t("stock.forecastCard"), "", "");
     forecastCard.body.id = "st06-body";
     right.appendChild(forecastCard.card);
     grid.appendChild(right);
 
     // 通栏：ST-08 / ST-09 / ST-10
-    var profileCard = buildCard("ST-08", "公司概况", "g-12", "");
+    var profileCard = buildCard("ST-08", t("stock.profileCard"), "g-12", "");
     profileCard.body.id = "st08-body";
     grid.appendChild(profileCard.card);
 
-    var finCard = buildCard("ST-09", "财务", "g-12", "");
+    var finCard = buildCard("ST-09", t("stock.finCard"), "g-12", "");
     finCard.body.id = "st09-body";
     grid.appendChild(finCard.card);
 
-    var holderCard = buildCard("ST-10", "十大股东", "g-12", "");
+    var holderCard = buildCard("ST-10", t("stock.holderCard"), "g-12", "");
     holderCard.body.id = "st10-body";
     grid.appendChild(holderCard.card);
     container.appendChild(grid);
@@ -1098,6 +1066,53 @@
     refresh.addEventListener("click", function () {
       loadStock(true);
     });
+    // W-03：自选星标（写入/取消），与 #/watchlist 形成闭环
+    var star = el("button", "pg-btn", t("watchlist.starAdd"));
+    star.type = "button";
+    star.id = "stock-star";
+    toolbar.appendChild(star);
+    star.addEventListener("click", function () {
+      toggleWatchlist(star);
+    });
+    refreshStar();
+  }
+
+  /** 刷新个股页星标状态（是否已在自选）。
+   * @returns {void}
+   */
+  function refreshStar() {
+    var star = document.getElementById("stock-star");
+    if (!star) {
+      return;
+    }
+    api("/api/watchlist").then(function (data) {
+      var exists = (data.items || []).some(function (item) {
+        return item.symbol === state.stock.symbol && item.market === state.stock.market;
+      });
+      star.textContent = exists ? t("watchlist.starRemove") : t("watchlist.starAdd");
+      star.setAttribute("data-in-list", exists ? "1" : "0");
+    }).catch(function () {
+      star.textContent = t("watchlist.starAdd");
+    });
+  }
+
+  /** 切换当前个股的自选状态并提示。
+   * @param {HTMLElement} star 星标按钮
+   * @returns {void}
+   */
+  function toggleWatchlist(star) {
+    var symbol = state.stock.symbol;
+    var market = state.stock.market;
+    var inList = star && star.getAttribute("data-in-list") === "1";
+    var request = inList
+      ? sendJson("DELETE", "/api/watchlist/" + encodeURIComponent(symbol) + "?market=" + encodeURIComponent(market))
+      : sendJson("POST", "/api/watchlist", { symbol: symbol, market: market, name: "" });
+    request.then(function () {
+      toast(inList ? t("watchlist.removed") : t("watchlist.added"));
+      refreshStar();
+    }).catch(function (error) {
+      toast(error.message || t("state.errorHint"));
+    });
   }
 
   /** 读取输入框并跳转（保持 URL 参数与页面状态一致）。 */
@@ -1105,11 +1120,19 @@
     var input = document.getElementById("stock-symbol");
     var code = (input && input.value ? input.value : "").trim();
     if (!code) {
-      toast("请输入证券代码");
+      toast(t("stock.codeRequired"));
       return;
     }
+    // R3-28：市场以 select 当前值为准（程序化改值不触发 change，读 state 会拿旧值）
+    var marketSelect = document.getElementById("stock-market");
+    var market = (marketSelect && marketSelect.value) || state.stock.market;
+    state.stock.market = market;
+    // 先写全局共享 store，再改 hash——确保其它页面无参进入时带回本次标的
+    if (window.SymbolStore) {
+      window.SymbolStore.set(code, market);
+    }
     window.location.hash =
-      "#/stock?symbol=" + encodeURIComponent(code) + "&market=" + state.stock.market;
+      "#/stock?symbol=" + encodeURIComponent(code) + "&market=" + market;
   }
 
   /** 同步 K 线/分时 Tab 选中态与标题。 */
@@ -1125,7 +1148,7 @@
     card.id = state.stock.tab === "minute" ? "ST-03" : "ST-02";
     var title = card.querySelector(".pg-card-title");
     if (title) {
-      title.textContent = state.stock.tab === "minute" ? "分时走势（上下午两段，午休断裂）" : "K 线（日线，前复权）";
+      title.textContent = state.stock.tab === "minute" ? t("stock.minuteTitle") : t("stock.klineTitle");
     }
   }
 
@@ -1138,6 +1161,12 @@
     var container = document.getElementById(VIEW_IDS.stock);
     state.stock.symbol = params.symbol || state.stock.symbol;
     state.stock.market = params.market || state.stock.market;
+    // R3-28：若无 URL 参数，自共享 store 带出最近标的
+    if (!params.symbol && !params.market && window.SymbolStore) {
+      var shared = window.SymbolStore.get();
+      state.stock.symbol = shared.symbol || state.stock.symbol;
+      state.stock.market = shared.market || state.stock.market;
+    }
     if (!container.querySelector("#stock-grid")) {
       buildStockShell(container);
     }
@@ -1224,7 +1253,7 @@
     }
     var quote = panel.quote;
     if (!quote) {
-      setEmpty(body, "该标的暂无行情数据", function () {
+      setEmpty(body, t("stock.empty.quote"), function () {
         loadStock(true);
       });
       return;
@@ -1232,21 +1261,21 @@
     setBadges(card, quote.source, quote.caliber, false);
     body.innerHTML = "";
     var main = el("div", "pg-quote-main");
-    main.appendChild(el("span", "pg-quote-name", quote.name || "无数据"));
+    main.appendChild(el("span", "pg-quote-name", quote.name || t("value.none")));
     main.appendChild(el("span", "pg-quote-price " + pctClass(quote.change), fmt(quote.price, 2)));
     main.appendChild(el("span", pctClass(quote.change), fmt(quote.change, 2) + " / " + fmtPct(quote.pct)));
     main.appendChild(el("span", "pg-card-sub", quote.quote_time || ""));
     body.appendChild(main);
     var meta = el("div", "pg-quote-meta");
     [
-      ["今开", fmt(quote.open, 2)],
-      ["最高", fmt(quote.high, 2)],
-      ["最低", fmt(quote.low, 2)],
-      ["昨收", fmt(quote.prev_close, 2)],
-      ["换手率", quote.turnover === null ? "无数据" : fmt(quote.turnover, 2) + "%"],
-      ["总市值", quote.total_market_cap === null ? "无数据" : fmt(yi(quote.total_market_cap), 2) + " 亿"],
-      ["PE(TTM)", fmt(quote.pe_ttm, 2)],
-      ["市场状态", quote.market_status || "无数据"]
+      [t("stock.kv.open"), fmt(quote.open, 2)],
+      [t("stock.kv.high"), fmt(quote.high, 2)],
+      [t("stock.kv.low"), fmt(quote.low, 2)],
+      [t("stock.kv.prevClose"), fmt(quote.prev_close, 2)],
+      [t("stock.kv.turnover"), quote.turnover === null ? t("value.none") : fmt(quote.turnover, 2) + "%"],
+      [t("stock.kv.totalMarketCap"), quote.total_market_cap === null ? t("value.none") : fmt(yi(quote.total_market_cap), 2) + " 亿"],
+      [t("stock.kv.peTtm"), fmt(quote.pe_ttm, 2)],
+      [t("stock.kv.marketStatus"), quote.market_status || t("value.none")]
     ].forEach(function (item) {
       var box = el("span", "", item[0] + "：");
       var value = el("b", "", item[1]);
@@ -1278,7 +1307,7 @@
     if (state.stock.tab === "minute") {
       var minute = panel.minute || [];
       if (minute.length === 0) {
-        setEmpty(body, "该标的暂无分时数据", function () {
+        setEmpty(body, t("stock.empty.minute"), function () {
           loadStock(true);
         });
         return;
@@ -1303,7 +1332,7 @@
         return value >= "13:00";
       });
       if (noonIndex > 0) {
-        categories.splice(noonIndex, 0, "午休");
+        categories.splice(noonIndex, 0, t("stock.chart.noon"));
         prices.splice(noonIndex, 0, null);
         avg.splice(noonIndex, 0, null);
       }
@@ -1325,8 +1354,8 @@
           splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } }
         },
         series: [
-          { name: "价格", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4 }, color: COLOR_UP },
-          { name: "均价", type: "line", data: avg, showSymbol: false, lineStyle: { width: 1, type: "dashed" }, color: "#e8a33d" }
+          { name: t("stock.chart.price"), type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4 }, color: COLOR_UP },
+          { name: t("stock.chart.avg"), type: "line", data: avg, showSymbol: false, lineStyle: { width: 1, type: "dashed" }, color: "#e8a33d" }
         ]
       });
       body.setAttribute("data-state", "default");
@@ -1335,7 +1364,7 @@
 
     var kline = panel.kline || [];
     if (kline.length === 0) {
-      setEmpty(body, "该标的暂无 K 线数据", function () {
+      setEmpty(body, t("stock.empty.kline"), function () {
         loadStock(true);
       });
       return;
@@ -1349,32 +1378,10 @@
     var volumes = kline.map(function (item, index) {
       return { value: item.volume, itemStyle: { color: item.close >= item.open ? COLOR_UP : COLOR_DOWN } };
     });
-    chart.setOption({
-      backgroundColor: "transparent",
-      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-      axisPointer: { link: [{ xAxisIndex: "all" }] },
-      grid: [
-        { left: 56, right: 16, top: 16, height: "62%" },
-        { left: 56, right: 16, top: "76%", height: "16%" }
-      ],
-      xAxis: [
-        { type: "category", data: dates, axisLabel: { color: theme.text }, axisLine: { lineStyle: { color: theme.border } } },
-        { type: "category", gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } }
-      ],
-      yAxis: [
-        { scale: true, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
-        { gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } }
-      ],
-      series: [
-        {
-          name: "日K",
-          type: "candlestick",
-          data: ohlc,
-          itemStyle: { color: COLOR_UP, color0: COLOR_DOWN, borderColor: COLOR_UP, borderColor0: COLOR_DOWN }
-        },
-        { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes }
-      ]
-    });
+    // P1-14：K线 option 脚手架委托 window.Utils.buildCandlestickOption
+    chart.setOption(window.Utils.buildCandlestickOption(theme, dates, ohlc, volumes, {
+      candleName: t("stock.kline.name")
+    }));
     body.setAttribute("data-state", "default");
   }
 
@@ -1390,12 +1397,12 @@
     }
     var fund = panel.fund_dist;
     if (!fund) {
-      setEmpty(body, "资金数据暂无，点击刷新", function () {
+      setEmpty(body, t("stock.empty.fund"), function () {
         loadStock(true);
       });
       return;
     }
-    setBadges(card, "新浪", fund.caliber_note || "四档资金流", false);
+    setBadges(card, "新浪", fund.caliber_note || t("stock.fundCaliber"), false);
     body.innerHTML = "";
     var box = el("div", "pg-chart small");
     body.appendChild(box);
@@ -1414,7 +1421,7 @@
            */
           formatter: function (info) {
             var item = tiers[info.dataIndex] || {};
-            return item.name + "<br/>净额：" + fmt(item.net, 4) + " 亿元<br/>占比：" + fmt(item.ratio, 2) + "%";
+            return item.name + "<br/>" + t("stock.fundDist.net") + "：" + fmt(item.net, 4) + " 亿元<br/>" + t("stock.fundDist.ratio") + "：" + fmt(item.ratio, 2) + "%";
           }
         },
         legend: { bottom: 0, textStyle: { color: chartTheme().text } },
@@ -1434,7 +1441,7 @@
                */
               formatter: function (info) {
                 var item = tiers[info.dataIndex] || {};
-                var ratioText = item.ratio === null || item.ratio === undefined ? "无数据" : fmt(item.ratio, 1) + "%";
+                var ratioText = item.ratio === null || item.ratio === undefined ? t("value.none") : fmt(item.ratio, 1) + "%";
                 return info.name + "\n" + ratioText;
               }
             },
@@ -1454,7 +1461,7 @@
     }
     var foot = el("div", "pg-card-sub");
     foot.textContent =
-      "主力净流入：" + fmt(fund.main_net, 4) + " 亿元（占成交 " + fmt(fund.main_ratio, 2) + "%）";
+      t("stock.fundDist.netFlow") + fmt(fund.main_net, 4) + " 亿元（占成交 " + fmt(fund.main_ratio, 2) + "%）";
     body.appendChild(foot);
     body.setAttribute("data-state", "default");
   }
@@ -1469,7 +1476,7 @@
     }
     var news = panel.news || [];
     if (news.length === 0) {
-      setEmpty(body, "该股暂无相关新闻", function () {
+      setEmpty(body, t("stock.empty.news"), function () {
         loadStock(true);
       });
       return;
@@ -1479,14 +1486,14 @@
     news.forEach(function (item) {
       var li = el("li", "pg-news-item");
       var title = el("span", "pg-news-title", item.title);
-      // 跳转 #5：标题 → #/news?symbol=…（新闻页 5.2 落地前给轻提示，不报错）
+      // 跳转 #5：标题 → #/news?symbol=…（带当前标的路由参数）
       title.addEventListener("click", function () {
         window.location.hash = "#/news?symbol=" + encodeURIComponent(state.stock.symbol);
-        toast("新闻页 5.2 阶段开放，已带参数跳转。");
+        toast(t("news.pageRedirect"));
       });
-      var chipClass = item.sentiment === "利好" ? "chip up" : item.sentiment === "利空" ? "chip down" : "chip";
+      var chipClass = item.sentiment === t("stock.sentiment.up") ? "chip up" : item.sentiment === t("stock.sentiment.down") ? "chip down" : "chip";
       li.appendChild(title);
-      li.appendChild(el("span", chipClass, item.sentiment || "中性"));
+      li.appendChild(el("span", chipClass, item.sentiment || t("stock.sentiment.neutral")));
       li.appendChild(el("span", "pg-news-time", relativeTime(item.time)));
       list.appendChild(li);
     });
@@ -1504,23 +1511,23 @@
     }
     var news = panel.news || [];
     if (news.length === 0) {
-      setEmpty(body, "暂无可分析的资讯", function () {
+      setEmpty(body, t("stock.empty.senti"), function () {
         loadStock(true);
       });
       return;
     }
-    var positive = news.filter(function (item) { return item.sentiment === "利好"; }).length;
-    var negative = news.filter(function (item) { return item.sentiment === "利空"; }).length;
+    var positive = news.filter(function (item) { return item.sentiment === t("stock.sentiment.up"); }).length;
+    var negative = news.filter(function (item) { return item.sentiment === t("stock.sentiment.down"); }).length;
     var neutral = news.length - positive - negative;
     var score = news.reduce(function (acc, item) { return acc + (item.sentiment_score || 0); }, 0);
-    var level = score > 1 ? "偏多" : score < -1 ? "偏空" : "中性";
+    var level = score > 1 ? t("stock.senti.level.bullish") : score < -1 ? t("stock.senti.level.bearish") : t("stock.sentiment.neutral");
     body.innerHTML = "";
     var rows = [
-      ["利好条数", positive, "up"],
-      ["利空条数", negative, "down"],
-      ["中性条数", neutral, "flat"],
-      ["情绪分", score, score > 0 ? "up" : score < 0 ? "down" : "flat"],
-      ["情绪档位", level, "flat"]
+      [t("stock.senti.upCount"), positive, "up"],
+      [t("stock.senti.downCount"), negative, "down"],
+      [t("stock.senti.neutralCount"), neutral, "flat"],
+      [t("stock.senti.score"), score, score > 0 ? "up" : score < 0 ? "down" : "flat"],
+      [t("news.senti.level"), level, "flat"]
     ];
     var grid = el("div", "pg-metric-grid");
     rows.forEach(function (item) {
@@ -1530,7 +1537,7 @@
       grid.appendChild(cell);
     });
     body.appendChild(grid);
-    var note = el("div", "pg-card-sub", "由 " + news.length + " 条新闻的本地词典标签聚合，非大模型判读");
+    var note = el("div", "pg-card-sub", t("stock.senti.note", { count: news.length }));
     body.appendChild(note);
     body.setAttribute("data-state", "default");
   }
@@ -1572,11 +1579,11 @@
       tr.appendChild(el("td", "", String(row["预测机构数"] || 0)));
       tr.appendChild(el("td", "", fmt(row["均值"], 2)));
       var range = (row["最小值"] === null || row["最大值"] === null)
-        ? "无数据"
+        ? t("value.none")
         : fmt(row["最小值"], 2) + " ~ " + fmt(row["最大值"], 2);
       tr.appendChild(el("td", "", range));
       tr.appendChild(el("td", "", profit["均值"] === null || profit["均值"] === undefined
-        ? "无数据" : fmt(profit["均值"], 2)));
+        ? t("value.none") : fmt(profit["均值"], 2)));
       tr.appendChild(el("td", "", fmt(row["行业平均数"], 2)));
       tbody.appendChild(tr);
     });
@@ -1590,16 +1597,27 @@
    * @returns {Object} markPoint 配置；无数据时返回 undefined
    */
   function troughPoint(series) {
+    var rows = series || [];
     var trough = null;
-    (series || []).forEach(function (item) {
+    var index = -1;
+    rows.forEach(function (item, position) {
       if (item && item.drawdown !== null && item.drawdown !== undefined) {
         if (!trough || item.drawdown < trough.drawdown) {
           trough = item;
+          index = position;
         }
       }
     });
     if (!trough) {
       return undefined;
+    }
+    // 标注必须落在绘图窗内：末段点位文字向左展开、首段向右展开，其余置于点上方，
+    // 否则贴边点位的气泡文字会被画布裁掉（P1-10 人眼验收项）。
+    var labelPosition = "top";
+    if (index >= rows.length - 2) {
+      labelPosition = "left";
+    } else if (index <= 1) {
+      labelPosition = "right";
     }
     return {
       symbol: "circle",
@@ -1607,10 +1625,14 @@
       itemStyle: { color: COLOR_DOWN },
       label: {
         show: true,
-        position: "bottom",
+        position: labelPosition,
+        distance: 6,
         fontSize: 10,
         color: COLOR_DOWN,
-        formatter: "最大回撤 " + trough.date + " " + Number(trough.drawdown).toFixed(2) + "%"
+        backgroundColor: "rgba(0,0,0,0.35)",
+        padding: [2, 4],
+        borderRadius: 3,
+        formatter: t("stock.kdj.troughPrefix") + trough.date + " " + Number(trough.drawdown).toFixed(2) + "%"
       },
       data: [{ coord: [trough.date, trough.drawdown], value: trough.drawdown }]
     };
@@ -1619,6 +1641,7 @@
   /** 渲染机构预测（ST-06）：评级分布 + 目标价 + 分年度一致预期。
    * @param {Object} panel 数据面板（报价/新闻/舆情等聚合块）
    * @param {*} estimates 一致预期数据（eps/profit/institutions/detail）
+   * @returns {void} 无返回值（直接写 DOM）
    */
   function paintForecast(panel, estimates) {
     var body = document.getElementById("st06-body");
@@ -1630,18 +1653,18 @@
     if (!forecast) {
       // 评级通道不可用时，仍尝试展示一致预期（两者数据源不同表，互不阻塞）
       if (estimates && estimates.available) {
-        setBadges(card, "同花顺", estimates.caliber_note || "一致预期", false);
+        setBadges(card, "同花顺", estimates.caliber_note || t("stock.estimates.caliber"), false);
         body.innerHTML = "";
         paintEstimates(body, estimates);
         body.setAttribute("data-state", "default");
         return;
       }
-      setEmpty(body, "机构预测暂无", function () {
+      setEmpty(body, t("stock.empty.forecast"), function () {
         loadStock(true);
       });
       return;
     }
-    setBadges(card, "同花顺", forecast.caliber_note || "评级分布+目标价", false);
+    setBadges(card, "同花顺", forecast.caliber_note || t("stock.forecast.caliber"), false);
     body.innerHTML = "";
     var hasTarget = forecast.target_low !== null && forecast.target_low !== undefined;
     var targetText;
@@ -1650,14 +1673,22 @@
         " 元（均值 " + fmt(forecast.target_avg, 2) + "，样本 " + (forecast.target_samples || 0) + " 篇）";
     } else {
       // 明确空态（P1-11）：说清为什么没有、评级覆盖多少、可以去哪里找替代信息
-      targetText = "目标价暂无（" + (forecast.caliber_note || "该通道不提供目标价") + "）" +
-        "；评级仍覆盖 " + (forecast.org_count || 0) + " 家，可参考下方一致预期 EPS / 净利";
+      targetText = t("stock.forecast.targetNone", {
+        note: t("stock.forecast.channelNoTarget"),
+        count: forecast.org_count || 0
+      });
     }
+    // R2-08：评级字典的键是后端固定中文口径（stock._RATING_NAMES），
+    // 统一经 RATING_SOURCE_KEYS 取值，禁止再用 t() 译文当 key、也不在渲染处散写中文
+    var ratings = forecast.ratings || {};
+    var ratingOf = function (name) {
+      return ratings[RATING_SOURCE_KEYS[name]] || 0;
+    };
     var lines = [
-      ["目标价区间", targetText],
-      ["覆盖机构", (forecast.org_count || 0) + " 家"],
-      ["买入/增持", (forecast.ratings["买入"] || 0) + " / " + (forecast.ratings["增持"] || 0)],
-      ["中性/减持/卖出", (forecast.ratings["中性"] || 0) + " / " + (forecast.ratings["减持"] || 0) + " / " + (forecast.ratings["卖出"] || 0)]
+      [t("stock.forecast.targetRange"), targetText],
+      [t("stock.forecast.orgs"), (forecast.org_count || 0) + " 家"],
+      [t("stock.forecast.buyHold"), ratingOf("buy") + " / " + ratingOf("add")],
+      [t("stock.forecast.neutralSell"), ratingOf("neutral") + " / " + ratingOf("reduce") + " / " + ratingOf("sell")]
     ];
     lines.forEach(function (item) {
       var row = el("div", "pg-quote-meta");
@@ -1684,12 +1715,12 @@
       return;
     }
     if (!profile || !profile.name) {
-      setEmpty(body, "暂无公司概况数据", function () {
+      setEmpty(body, t("stock.empty.profile"), function () {
         loadStock(true);
       });
       return;
     }
-    setBadges(card, "东财", profile.caliber_note || "F10 基本资料", false);
+    setBadges(card, "东财", profile.caliber_note || t("stock.profile.caliber"), false);
     body.innerHTML = "";
 
     // 第三组：机构与基金持有（由十大流通股东派生，确定性统计，不做推断）
@@ -1711,42 +1742,49 @@
     var finGroup = [];
     if (summary && summary.metrics && summary.metrics.length) {
       var latest = summary.periods[0];
+      // key 与 name 双写入：后端 metrics 两种口径（英文 key + 中文 name / 纯中文 key）都能命中
       var byKey = {};
       summary.metrics.forEach(function (item) {
         byKey[item.key] = item.values[0];
+        if (item.name) {
+          byKey[item.name] = item.values[0];
+        }
       });
+      var finValue = function (field) { return byKey[FIN_METRIC_FIELDS[field]]; };
+      var revenue = finValue("revenue");
+      var profit = finValue("netProfit");
       finGroup = [
-        ["报告期", latest],
-        ["营业总收入", byKey["营业总收入"] === null ? "无数据" : fmt(byKey["营业总收入"] / 1e8, 2) + " 亿元"],
-        ["归母净利润", byKey["归母净利润"] === null ? "无数据" : fmt(byKey["归母净利润"] / 1e8, 2) + " 亿元"],
-        ["EPS", fmt(byKey["基本每股收益"], 2) + " 元"],
-        ["毛利率", fmt(byKey["毛利率"], 2) + "%"],
-        ["ROE", fmt(byKey["净资产收益率(ROE)"], 2) + "%"]
+        [t("stock.fin.reportPeriod"), latest],
+        [t("stock.fin.totalRevenue"), revenue === null || revenue === undefined ? t("value.none") : fmt(revenue / 1e8, 2) + " 亿元"],
+        [t("stock.fin.netProfit"), profit === null || profit === undefined ? t("value.none") : fmt(profit / 1e8, 2) + " 亿元"],
+        [t("stock.fin.totalRevenueEps"), fmt(finValue("eps"), 2) + " 元"],
+        [t("stock.fin.grossMargin"), fmt(finValue("grossMargin"), 2) + "%"],
+        [t("stock.fin.roe"), fmt(finValue("roe"), 2) + "%"]
       ];
     }
 
     var groups = [
-      ["基本信息", [
-        ["公司名称", profile.full_name || profile.name],
-        ["所属行业", profile.industry],
-        ["上市日期", profile.listing_date],
-        ["上市板块", profile.board],
-        ["注册地", profile.province]
+      [t("stock.profile.group.basic"), [
+        [t("stock.profile.companyName"), profile.full_name || profile.name],
+        [t("stock.profile.industry"), profile.industry],
+        [t("stock.profile.listDate"), profile.listing_date],
+        [t("stock.profile.board"), profile.board],
+        [t("stock.profile.province"), profile.province]
       ]],
-      ["股本市值", [
-        ["总股本", profile.total_share === null ? "无数据" : fmt(profile.total_share / 1e8, 2) + " 亿股"],
-        ["流通股", profile.float_share === null ? "无数据" : fmt(profile.float_share / 1e8, 2) + " 亿股"],
-        ["总市值", profile.total_mv === null ? "无数据" : fmt(yi(profile.total_mv), 2) + " 亿元"],
-        ["流通市值", profile.float_mv === null ? "无数据" : fmt(yi(profile.float_mv), 2) + " 亿元"],
-        ["PE(TTM)", fmt(profile.pe_ttm, 2)]
+      [t("stock.profile.group.capital"), [
+        [t("stock.profile.totalShare"), profile.total_share === null ? t("value.none") : fmt(profile.total_share / 1e8, 2) + " 亿股"],
+        [t("stock.profile.floatShare"), profile.float_share === null ? t("value.none") : fmt(profile.float_share / 1e8, 2) + " 亿股"],
+        [t("stock.profile.totalMv"), profile.total_mv === null ? t("value.none") : fmt(yi(profile.total_mv), 2) + " 亿元"],
+        [t("stock.profile.floatMv"), profile.float_mv === null ? t("value.none") : fmt(yi(profile.float_mv), 2) + " 亿元"],
+        [t("stock.profile.peTtm"), fmt(profile.pe_ttm, 2)]
       ]],
-      ["机构与基金持有", [
-        ["十大流通股东中机构家数", orgCount ? orgCount + " 家" : "无数据"],
-        ["十大流通股东合计", freeRatio ? fmt(freeRatio, 2) + "%" : "无数据"],
-        ["前三大流通股东", topThree || "无数据"],
-        ["数据口径", (holders && holders.free_top10_period) ? "报告期 " + holders.free_top10_period : "无数据"]
+      [t("stock.profile.group.holding"), [
+        [t("stock.profile.orgCount"), orgCount ? orgCount + " 家" : t("value.none")],
+        [t("stock.profile.freeRatio"), freeRatio ? fmt(freeRatio, 2) + "%" : t("value.none")],
+        [t("stock.profile.topThree"), topThree || t("value.none")],
+        [t("stock.profile.dataCaliber"), (holders && holders.free_top10_period) ? t("stock.fin.reportPeriod") + holders.free_top10_period : t("value.none")]
       ]],
-      ["最新财报摘要", finGroup.length ? finGroup : [["财报", "暂无数据"]]]
+      [t("stock.profile.group.finSummary"), finGroup.length ? finGroup : [[t("stock.profile.financialReport"), t("state.noData")]]]
     ];
 
     groups.forEach(function (group) {
@@ -1754,7 +1792,7 @@
       var grid = el("div", "pg-quote-meta");
       group[1].forEach(function (item) {
         var cell = el("span", "", item[0] + "：");
-        cell.appendChild(el("b", "", item[1] === null || item[1] === undefined || item[1] === "" ? "无数据" : item[1]));
+        cell.appendChild(el("b", "", item[1] === null || item[1] === undefined || item[1] === "" ? t("value.none") : item[1]));
         grid.appendChild(cell);
       });
       body.appendChild(grid);
@@ -1772,7 +1810,7 @@
       return;
     }
     if (!fin.summary) {
-      setEmpty(body, "该市场暂无可用的中文财报通道", function () {
+      setEmpty(body, t("stock.empty.fin"), function () {
         loadStock(true);
       });
       return;
@@ -1780,7 +1818,7 @@
     setBadges(card, fin.summary.source, fin.summary.caliber, false);
     body.innerHTML = "";
     var tabs = el("div", "pg-fin-tabs");
-    [["summary", "关键指标"], ["trend", "财务趋势"], ["report", "三大报表"], ["indicator", "指标明细"]].forEach(function (item) {
+    [["summary", t("stock.fin.tabs").split(",")[0]], ["trend", t("stock.fin.tabs").split(",")[1]], ["report", t("stock.fin.tabs").split(",")[2]], ["indicator", t("stock.fin.tabs").split(",")[3]]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-fin", item[0]);
@@ -1823,7 +1861,7 @@
 
     if (tab === "summary") {
       var metrics = fin.summary.metrics || [];
-      var columns = [{ title: "指标", key: "name", cls: "name" }].concat(
+      var columns = [{ title: t("stock.fin.item"), key: "name", cls: "name" }].concat(
         (fin.summary.periods || []).slice(0, 4).map(function (period, index) {
           return {
             title: period,
@@ -1835,7 +1873,7 @@
             render: function (row) {
               var value = row.values[index];
               if (value === null || value === undefined) {
-                return "无数据";
+                return t("value.none");
               }
               // 金额类指标（原始单位=元）折算为亿元，比例类保持原值
               if (row.key === "营业总收入" || row.key === "归母净利润") {
@@ -1852,7 +1890,7 @@
 
     if (tab === "trend") {
       if (!fin.trend || !fin.trend.series) {
-        setEmpty(pane, "暂无趋势数据", function () {
+        setEmpty(pane, t("stock.empty.trend"), function () {
           loadStock(true);
         });
         return;
@@ -1875,14 +1913,14 @@
           xAxis: { type: "category", data: periods, axisLabel: { color: theme.text }, axisLine: { lineStyle: { color: theme.border } } },
           // 左轴金额（亿元），右轴增速（%），双序列共图但各自量纲
           yAxis: [
-            { type: "value", name: "亿元", nameTextStyle: { color: theme.text }, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
+            { type: "value", name: t("stock.unit.billions"), nameTextStyle: { color: theme.text }, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
             { type: "value", name: "%", nameTextStyle: { color: theme.text }, axisLabel: { color: theme.text }, splitLine: { show: false } }
           ],
           series: [
-            { name: "营业总收入(亿)", type: "bar", data: revenue.map(function (v) { return v === null ? null : +(v / 1e8).toFixed(2); }), color: "#b47da0" },
-            { name: "净利润(亿)", type: "bar", data: profit.map(function (v) { return v === null ? null : +(v / 1e8).toFixed(2); }), color: "#4b9eff" },
-            { name: "营收同比(%)", type: "line", yAxisIndex: 1, data: revenueYoy, color: COLOR_UP, showSymbol: true },
-            { name: "净利同比(%)", type: "line", yAxisIndex: 1, data: profitYoy, color: COLOR_DOWN, showSymbol: true }
+            { name: t("stock.chart.revenue"), type: "bar", data: revenue.map(function (v) { return v === null ? null : +(v / 1e8).toFixed(2); }), color: "#b47da0" },
+            { name: t("stock.chart.profit"), type: "bar", data: profit.map(function (v) { return v === null ? null : +(v / 1e8).toFixed(2); }), color: "#4b9eff" },
+            { name: t("stock.chart.revenueYoy"), type: "line", yAxisIndex: 1, data: revenueYoy, color: COLOR_UP, showSymbol: true },
+            { name: t("stock.chart.profitYoy"), type: "line", yAxisIndex: 1, data: profitYoy, color: COLOR_DOWN, showSymbol: true }
           ]
         });
       }
@@ -1893,7 +1931,7 @@
       // 报表/指标数据按需加载，避免首屏 5 个财务请求
       pane.innerHTML = "";
       var loadingBox = el("div", "pg-state");
-      loadingBox.textContent = "加载中…";
+      loadingBox.textContent = t("state.loading");
       pane.appendChild(loadingBox);
       var request =
         tab === "report"
@@ -1904,8 +1942,9 @@
           pane.innerHTML = "";
           if (tab === "report") {
             var selectRow = el("div", "pg-fin-tabs");
-            ["资产负债表", "利润表", "现金流量表"].forEach(function (name) {
-              var button = el("button", "pg-tab" + (name === "利润表" ? " active" : ""), name);
+            var reports = t("stock.fin.reportTabs").split(",");
+            reports.forEach(function (name, idx) {
+              var button = el("button", "pg-tab" + (idx === 1 ? " active" : ""), name);
               button.type = "button";
               button.addEventListener("click", function () {
                 selectRow.querySelectorAll(".pg-tab").forEach(function (node) {
@@ -1942,7 +1981,7 @@
    */
   function renderFinTable(pane, data) {
     var holder = el("div", "");
-    var columns = [{ title: "项目", key: "name", cls: "name" }].concat(
+    var columns = [{ title: t("stock.fin.item"), key: "name", cls: "name" }].concat(
       (data.periods || []).map(function (period, index) {
         return {
           title: period,
@@ -1953,7 +1992,7 @@
            */
           render: function (row) {
             var value = row.values[index];
-            return value === null || value === undefined ? "无数据" : fmt(value / 1e8, 2) + " 亿";
+            return value === null || value === undefined ? t("value.none") : fmt(value / 1e8, 2) + " 亿";
           }
         };
       })
@@ -1973,20 +2012,20 @@
       return;
     }
     if (!holders || !holders.top10 || holders.top10.length === 0) {
-      setEmpty(body, "暂无股东数据", function () {
+      setEmpty(body, t("stock.empty.holder"), function () {
         loadStock(true);
       });
       return;
     }
-    setBadges(card, "东财", "F10 股东（报告期 " + (holders.top10_period || "—") + "）", false);
+    setBadges(card, "东财", t("stock.holder.caliberPrefix") + (holders.top10_period || t("value.dash")) + t("stock.holder.caliberSuffix"), false);
     renderTable(
       body,
       [
-        { title: "排名", key: "rank", cls: "num" },
-        { title: "股东名称", key: "name", cls: "name" },
-        { title: "持股比例%", cls: "num", render: function (row) { return fmt(row.ratio); } },
+        { title: t("stock.holder.rank"), key: "rank", cls: "num" },
+        { title: t("stock.holder.name"), key: "name", cls: "name" },
+        { title: t("stock.holder.ratio"), cls: "num", render: function (row) { return fmt(row.ratio); } },
         {
-          title: "本期变动",
+          title: t("stock.holder.change"),
           cls: "num",
           /** 股东表「本期变动」：优先用源站文本，缺省回落到数值格式化。
            * @param {*} row 单行记录
@@ -2031,11 +2070,11 @@
   function buildValShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
-    var info = el("span", "pg-card-sub", "板块");
+    var info = el("span", "pg-card-sub", t("val.boardLabel"));
     info.id = "val-board-label";
     toolbar.appendChild(info);
     toolbar.appendChild(el("span", "pg-spacer"));
-    var refresh = el("button", "pg-btn", "刷新本页");
+    var refresh = el("button", "pg-btn", t("action.reload"));
     refresh.type = "button";
     refresh.addEventListener("click", function () {
       loadSectorVal(true);
@@ -2050,27 +2089,27 @@
     left.style.flexDirection = "column";
     left.style.gap = "16px";
 
-    var kline = buildCard("V-01", "板块 K 线", "", "板块指数日线");
+    var kline = buildCard("V-01", t("stock.kv.chartBoard"), "", t("val.chartTitle"));
     kline.body.id = "v01-body";
     kline.body.classList.add("tall");
     left.appendChild(kline.card);
 
-    var metrics = buildCard("V-02", "板块估值指标", "", "");
+    var metrics = buildCard("V-02", t("val.metricsTitle"), "", "");
     metrics.body.id = "v02-body";
     left.appendChild(metrics.card);
 
-    var cons = buildCard("V-03", "成分股", "", "整行可点进入个股");
+    var cons = buildCard("V-03", t("val.components"), "", t("val.componentsSub"));
     cons.body.id = "v03-body";
     left.appendChild(cons.card);
     grid.appendChild(left);
 
     var right = el("div", "g-5");
-    var info4 = buildCard("V-04", "板块精准资讯", "", "5.2 阶段落地，本批占位");
+    var info4 = buildCard("V-04", t("val.newsTitle"), "", t("val.newsSub"));
     info4.body.id = "v04-body";
     // 占位区块固定渲染，不参与数据加载/错误态，避免上游失败时把占位卡也标成「加载失败」
     var placeholder = el("div", "pg-state");
-    placeholder.appendChild(el("div", "pg-state-title", "板块精准资讯（AI 初评）5.2 阶段落地"));
-    var hint = el("div", "pg-state-hint", "本批仅占位并预留 board / market 参数，不做 AI 判读");
+    placeholder.appendChild(el("div", "pg-state-title", t("val.chartPlaceholder")));
+    var hint = el("div", "pg-state-hint", t("val.chartHint"));
     hint.id = "v04-hint";
     placeholder.appendChild(hint);
     info4.body.appendChild(placeholder);
@@ -2086,13 +2125,13 @@
   function renderSectorVal(params) {
     var container = document.getElementById(VIEW_IDS["sector-val"]);
     state.sectorVal.board = params.board || state.sectorVal.board;
-    state.sectorVal.market = params.market || state.sectorVal.market;
+    state.sectorVal.market = normSectorMarket(params.market || state.sectorVal.market);  // RT-05：a→cn 归一
     if (!container.querySelector("#val-grid")) {
       buildValShell(container);
     }
     var label = document.getElementById("val-board-label");
     if (label) {
-      label.textContent = "板块：" + (state.sectorVal.board || "未选择") + "（" + (state.sectorVal.market === "cn" ? "国内" : state.sectorVal.market === "hk" ? "港股" : "美股") + "）";
+      label.textContent = t("val.boardLabel") + (state.sectorVal.board || t("val.placeholder.unselected")) + "（" + (state.sectorVal.market === "cn" ? t("sectors.market.cn") : state.sectorVal.market === "hk" ? t("sectors.market.hk") : t("sectors.market.us")) + "）";
     }
     loadSectorVal();
   }
@@ -2112,7 +2151,7 @@
     if (!board) {
       bodies.forEach(function (body) {
         if (body) {
-          setEmpty(body, "请从板块分析页点击板块进入", null);
+          setEmpty(body, t("val.enterFromSectors"), null);
         }
       });
       return;
@@ -2160,7 +2199,7 @@
       var items = kline.items || [];
       v01.innerHTML = "";
       if (items.length === 0) {
-        setEmpty(v01, "该板块暂无 K 线数据", function () {
+        setEmpty(v01, t("stock.empty.boardKline"), function () {
           loadSectorVal(true);
         });
       } else {
@@ -2198,7 +2237,7 @@
     if (v02) {
       var list = kline.items || [];
       if (list.length === 0) {
-        setEmpty(v02, "暂无数据，点击刷新", function () {
+        setEmpty(v02, t("state.empty"), function () {
           loadSectorVal(true);
         });
       } else {
@@ -2214,12 +2253,12 @@
         v02.innerHTML = "";
         var grid = el("div", "pg-quote-meta");
         [
-          ["最新点位", fmt(last.close, 2)],
-          ["当日涨跌", fmtPct(pct)],
-          ["成交额", last.amount === null ? "无数据" : fmt(yi(last.amount), 2) + " 亿元"],
-          ["近一年价格分位", percentile === null ? "无数据" : fmt(percentile, 1) + "%"],
-          ["领涨股", leader ? leader.name + " " + fmtPct(leader.pct) : "无数据"],
-          ["领跌股", laggard ? laggard.name + " " + fmtPct(laggard.pct) : "无数据"]
+          [t("val.kv.latest"), fmt(last.close, 2)],
+          [t("val.kv.change"), fmtPct(pct)],
+          [t("val.kv.amount"), last.amount === null ? t("value.none") : fmt(yi(last.amount), 2) + " 亿元"],
+          [t("val.kv.percentile"), percentile === null ? t("value.none") : fmt(percentile, 1) + "%"],
+          [t("val.kv.lead"), leader ? leader.name + " " + fmtPct(leader.pct) : t("value.none")],
+          [t("val.kv.laggard"), laggard ? laggard.name + " " + fmtPct(laggard.pct) : t("value.none")]
         ].forEach(function (item) {
           var cell = el("span", "", item[0] + "：");
           cell.appendChild(el("b", "", item[1]));
@@ -2238,7 +2277,7 @@
           loadSectorVal(true);
         });
       } else if (!cons || (cons.items || []).length === 0) {
-        setEmpty(v03, "该板块暂无成分数据", function () {
+        setEmpty(v03, t("val.empty.components"), function () {
           loadSectorVal(true);
         });
       } else {
@@ -2246,11 +2285,11 @@
         renderTable(
           v03,
           [
-            { title: "代码", key: "code", cls: "num" },
-            { title: "名称", key: "name", cls: "name" },
-            { title: "涨跌幅%", cls: "num", render: function (row) { return pctNode(row.pct); } },
-            { title: "权重%", cls: "num", render: function (row) { return fmt(row.weight); } },
-            { title: "最新价", cls: "num", render: function (row) { return fmt(row.price, 2); } }
+            { title: t("th.code"), key: "code", cls: "num" },
+            { title: t("th.name"), key: "name", cls: "name" },
+            { title: t("sectors.pctCol"), cls: "num", render: function (row) { return pctNode(row.pct); } },
+            { title: t("th.weight"), cls: "num", render: function (row) { return fmt(row.weight); } },
+            { title: t("mk.kv.price"), cls: "num", render: function (row) { return fmt(row.price, 2); } }
           ],
           cons.items,
           function (row) {
@@ -2274,7 +2313,7 @@
     var hint = document.getElementById("v04-hint");
     if (hint) {
       hint.textContent =
-        "已预留参数：board=" + (board || "未选择") + "，market=" + market + "；本批不做 AI 判读";
+        t("val.placeholder.hint", { board: board || t("val.placeholder.unselected"), market: market });
     }
   }
 
@@ -2320,6 +2359,451 @@
   /** 构建新闻页骨架。
    * @param {HTMLElement} container DOM 容器节点
    */
+  // =============================================================
+  // 新增功能 ⑥：财报 / 公告搜索（#/news?fs=1，FS-01~FS-09）
+  // 唯一实现页；入口 = 新闻页 N-05 入口卡 + 侧栏同名项（两处同跳）
+  // 设计依据：验收方《设计基准_财报搜索_20261025.md》§5.3；
+  //          样式复用现网 pages.css 的 FS-* 段，无第二套配色/栅格。
+  // =============================================================
+  var fsState = {
+    market: "all",   // all / a / hk / us
+    type: "全部",     // 财报类型 chips
+    since: "all",    // 全部时间 / 近 N 天
+    keyword: "",     // 当前生效关键词
+    page: 1,         // 当前页码（「加载更多」递增）
+    seq: 0,          // 请求序号：过期响应直接丢弃（防抖 + 竞态保护）
+    timer: null,     // 输入防抖计时器（300ms）
+    rows: [],        // 已累积结果（「加载更多」追加）
+    total: 0,        // 源站总命中数
+    loading: false   // 加载中禁止重复提交
+  };
+
+  var FS_MARKETS = [["all", "fs.market.all"], ["a", "fs.market.a"], ["hk", "fs.market.hk"], ["us", "fs.market.us"]];
+  var FS_TIMES = [["all", "fs.time.all"], ["7", "fs.time.7"], ["30", "fs.time.30"], ["90", "fs.time.90"], ["365", "fs.time.365"]];
+  var FS_TYPES = ["全部", "年报", "半年报", "一季报", "三季报", "业绩预告", "招股书", "10-K", "10-Q", "8-K"];
+
+  /** 市场标签样式类：A 股绿描边 / 港股橙描边 / 美股蓝描边（设计基准 §5.3）。
+   * @param {string} market a/hk/us
+   * @returns {string} 样式类名
+   */
+  function fsMarketClass(market) {
+    return { a: "mkt-a", hk: "mkt-hk", us: "mkt-us" }[market] || "";
+  }
+
+  /** 市场中文名。
+   * @param {string} market a/hk/us
+   * @returns {string} 中文名
+   */
+  function fsMarketLabel(market) {
+    // 显式映射：避免动态拼接键（i18n 静态检查与翻译抽取都依赖字面量键）
+    var labels = { a: "fs.market.a", hk: "fs.market.hk", us: "fs.market.us" };
+    return t(labels[market] || "fs.market.all");
+  }
+
+  /** 定期报告类走「财报」色，其余公告走「公告」色。
+   * @param {string} type 类型
+   * @returns {boolean} 是否定期报告
+   */
+  function fsIsReport(type) {
+    return ["年报", "半年报", "一季报", "三季报", "招股书", "10-K", "10-Q"].indexOf(type) >= 0;
+  }
+
+  /** HTML 转义：标题高亮走 innerHTML，必须先转义防注入。
+   * @param {*} text 原文
+   * @returns {string} 转义后的文本
+   */
+  function fsEscape(text) {
+    return String(text === null || text === undefined ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /** 标题关键词高亮（只高亮命中片段，其余原样转义）。
+   * @param {*} text 标题
+   * @param {string} keyword 关键词
+   * @returns {string} 含 mark 标签的 HTML
+   */
+  function fsHighlight(text, keyword) {
+    var safe = fsEscape(text);
+    if (!keyword) {
+      return safe;
+    }
+    var needle = fsEscape(keyword).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return safe.replace(new RegExp("(" + needle + ")", "gi"), "<mark>$1</mark>");
+  }
+
+  /** 渲染财报/公告搜索页（FS 唯一实现页，对齐原型 fs 视图）。
+   * @param {HTMLElement} container 页面容器（#page-news）
+   */
+  function renderFinancialSearch(container) {
+    container.innerHTML = "";
+    container.setAttribute("data-fs", "1");  // 标记当前容器是 FS 视图，返回时据此重建新闻壳
+
+    var toolbar = el("div", "page-toolbar");
+    var back = el("button", "fs-back", t("fs.back"));
+    back.type = "button";
+    back.addEventListener("click", function () {
+      window.location.hash = "#/news";
+    });
+    toolbar.appendChild(back);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    var refresh = el("button", "pg-btn", t("action.reload"));
+    refresh.type = "button";
+    refresh.id = "fs-refresh";
+    refresh.addEventListener("click", function () {
+      loadFinancialSearch(true);
+    });
+    toolbar.appendChild(refresh);
+    container.appendChild(toolbar);
+
+    var grid = el("div", "pg-grid");
+    grid.id = "fs-grid";
+
+    // 顶行：市场 Tab（FS-01a）
+    var topCard = buildCard("FS-00", t("fs.title"), "g-12", "");
+    setBadges(topCard.card, "巨潮资讯 · 东财 · HKEX披露易 · SEC EDGAR", t("fs.entry.sub"), false);
+    var marketTabs = el("div", "pg-tabs");
+    marketTabs.id = "fs-market";
+    FS_MARKETS.forEach(function (item) {
+      var button = el("button", "pg-tab", t(item[1]));
+      button.type = "button";
+      button.setAttribute("data-market", item[0]);
+      marketTabs.appendChild(button);
+    });
+    topCard.body.appendChild(marketTabs);
+    topCard.body.setAttribute("data-state", "default");
+    grid.appendChild(topCard.card);
+
+    // FS-01：搜索条件区（输入框 + 时间下拉 + 搜索按钮 + 类型 chips）
+    var cond = buildCard("FS-01", t("fs.condTitle"), "g-12", "");
+    var bar = el("div", "fs-searchbar");
+    var input = el("input", "fs-search-input");
+    input.id = "fs-input";
+    input.type = "search";
+    input.placeholder = t("fs.placeholder");
+    input.value = fsState.keyword;
+    bar.appendChild(input);
+    var select = el("select", "fs-select");
+    select.id = "fs-time";
+    FS_TIMES.forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item[0];
+      option.textContent = t(item[1]);
+      select.appendChild(option);
+    });
+    select.value = fsState.since;
+    bar.appendChild(select);
+    var searchBtn = el("button", "pg-btn primary", t("fs.search"));
+    searchBtn.type = "button";
+    searchBtn.id = "fs-search-btn";
+    bar.appendChild(searchBtn);
+    cond.body.appendChild(bar);
+
+    var chips = el("div", "fs-chips");
+    chips.id = "fs-type";
+    FS_TYPES.forEach(function (name) {
+      var chip = el("button", "fs-chip" + (fsState.type === name ? " on" : ""), name);
+      chip.type = "button";
+      chip.setAttribute("data-type", name);
+      chips.appendChild(chip);
+    });
+    cond.body.appendChild(chips);
+    cond.body.setAttribute("data-state", "default");
+    grid.appendChild(cond.card);
+
+    // FS-02：结果列表（四态容器）
+    var result = buildCard("FS-02", t("fs.resultTitle"), "g-12", "");
+    var count = el("span", "fs-count", "");
+    count.id = "fs-count";
+    result.card.querySelector(".pg-card-head").insertBefore(count, result.card.querySelector(".pg-spacer"));
+    result.body.id = "fs-body";
+    grid.appendChild(result.card);
+
+    container.appendChild(grid);
+
+    // ---------- 交互绑定 ----------
+    marketTabs.addEventListener("click", function (event) {
+      var button = event.target.closest(".pg-tab");
+      if (!button) {
+        return;
+      }
+      fsState.market = button.getAttribute("data-market");
+      fsSyncTabs();
+      loadFinancialSearch(true);
+    });
+    chips.addEventListener("click", function (event) {
+      var chip = event.target.closest(".fs-chip");
+      if (!chip) {
+        return;
+      }
+      fsState.type = chip.getAttribute("data-type");
+      fsSyncTabs();
+      loadFinancialSearch(true);
+    });
+    select.addEventListener("change", function () {
+      fsState.since = select.value;
+      loadFinancialSearch(true);
+    });
+    searchBtn.addEventListener("click", function () {
+      fsState.keyword = input.value.trim();
+      loadFinancialSearch(true);
+    });
+    input.addEventListener("input", function () {
+      // 防抖 300ms：连续输入只在停顿后发一次请求
+      window.clearTimeout(fsState.timer);
+      fsState.timer = window.setTimeout(function () {
+        fsState.keyword = input.value.trim();
+        loadFinancialSearch(true);
+      }, 300);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        window.clearTimeout(fsState.timer);
+        fsState.keyword = input.value.trim();
+        loadFinancialSearch(true);
+      }
+    });
+
+    fsSyncTabs();
+    loadFinancialSearch(true);
+  }
+
+  /** 同步市场 Tab 与类型 chips 的选中态。*/
+  function fsSyncTabs() {
+    var marketBox = document.getElementById("fs-market");
+    if (marketBox) {
+      marketBox.querySelectorAll(".pg-tab").forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-market") === fsState.market);
+      });
+    }
+    var chipBox = document.getElementById("fs-type");
+    if (chipBox) {
+      chipBox.querySelectorAll(".fs-chip").forEach(function (chip) {
+        chip.classList.toggle("on", chip.getAttribute("data-type") === fsState.type);
+      });
+    }
+  }
+
+  /** 设置结果区四态（default/loading/empty/error）。
+   * @param {string} state 状态名
+   * @param {string} message 空/错态说明文案
+   * @param {Function} onRetry 重试回调
+   */
+  function fsSetState(state, message, onRetry) {
+    var body = document.getElementById("fs-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    body.setAttribute("data-state", state);
+    if (state === "loading") {
+      var skeleton = el("div", "pg-skeleton");
+      for (var i = 0; i < 5; i += 1) {
+        var row = el("div", "sk-row");
+        row.appendChild(el("span", i % 2 ? "w2" : "w1", ""));
+        skeleton.appendChild(row);
+      }
+      body.appendChild(skeleton);
+      fsSetCount(t("fs.searching"));
+      return;
+    }
+    var box = el("div", "pg-state");
+    if (state === "empty") {
+      box.appendChild(el("div", "pg-state-title", t("fs.emptyTitle")));
+      box.appendChild(el("div", "pg-state-hint", message || t("fs.emptyHint")));
+      var clear = el("button", "pg-btn", t("fs.clearRetry"));
+      clear.type = "button";
+      clear.addEventListener("click", function () {
+        fsState.market = "all";
+        fsState.type = "全部";
+        fsState.since = "all";
+        fsState.keyword = "";
+        renderFinancialSearch(document.getElementById(VIEW_IDS.news));
+      });
+      box.appendChild(clear);
+      fsSetCount(t("fs.countZero"));
+    } else {
+      box.appendChild(el("div", "pg-state-title", t("fs.errorTitle")));
+      box.appendChild(el("div", "pg-state-hint", message || t("fs.errorHint")));
+      var retry = el("button", "pg-btn primary", t("action.retry"));
+      retry.type = "button";
+      retry.addEventListener("click", function () {
+        if (onRetry) {
+          onRetry();
+        }
+      });
+      box.appendChild(retry);
+      fsSetCount("—");
+    }
+    body.appendChild(box);
+  }
+
+  /** 更新结果计数文案。
+   * @param {string} text 计数文本
+   */
+  function fsSetCount(text) {
+    var node = document.getElementById("fs-count");
+    if (node) {
+      node.textContent = text;
+    }
+  }
+
+  /** 渲染结果行（FS-02 九字段 + 标题高亮）。
+   * @param {Array} rows 记录列表
+   */
+  function fsRenderRows(rows) {
+    var body = document.getElementById("fs-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    body.setAttribute("data-state", "default");
+    var list = el("div", "fs-list");
+    rows.forEach(function (item) {
+      var row = el("div", "fs-item");
+      var title = el("div", "fs-item-title");
+      title.innerHTML = fsHighlight(item.title, fsState.keyword);  // 已转义，仅插入 mark
+      row.appendChild(title);
+
+      var sub = el("div", "fs-item-sub");
+      sub.appendChild(el("span", "co", item.company || t("value.none")));
+      sub.appendChild(el("span", "code", item.code || "—"));
+      sub.appendChild(el("span", "fs-tag " + fsMarketClass(item.market), fsMarketLabel(item.market)));
+      sub.appendChild(el("span", "fs-tag " + (fsIsReport(item.type) ? "fr" : "ann"), item.type || "其他"));
+      sub.appendChild(el("span", "", "来源：" + (item.source || "—")));
+      var time = el("span", "fs-time");
+      time.innerHTML = fsEscape(item.pubTime || "—") + ' <span class="tz">' + fsEscape(t("fs.tz")) + "</span>";
+      sub.appendChild(time);
+      row.appendChild(sub);
+
+      row.addEventListener("click", function () {
+        fsOpenDetail(item);
+      });
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+
+    var more = el("div", "fs-more");
+    more.appendChild(el("span", "fs-count", t("fs.shown", { n: rows.length })));
+    var moreBtn = el("button", "pg-btn sm", t("fs.loadMore"));
+    moreBtn.type = "button";
+    moreBtn.addEventListener("click", function () {
+      loadFinancialSearch(false);
+    });
+    more.appendChild(moreBtn);
+    body.appendChild(more);
+    fsSetCount(t("fs.count", { n: rows.length }));
+  }
+
+  /** FS-08 详情弹窗：标题/元信息/摘要/原文链接。
+   * @param {Object} item 单条记录
+   */
+  function fsOpenDetail(item) {
+    var mask = el("div", "fs-modal-mask");
+    var modal = el("div", "fs-modal");
+    modal.appendChild(el("h3", "", item.title || t("value.none")));
+
+    var meta = el("div", "m-meta");
+    meta.appendChild(el("span", "fs-tag " + fsMarketClass(item.market), fsMarketLabel(item.market)));
+    meta.appendChild(el("span", "fs-tag " + (fsIsReport(item.type) ? "fr" : "ann"), item.type || "其他"));
+    meta.appendChild(el("span", "fs-tag", (item.company || "") + " · " + (item.code || "")));
+    meta.appendChild(el("span", "fs-time", (item.pubTime || "—") + " " + t("fs.tz")));
+    modal.appendChild(meta);
+
+    modal.appendChild(el("div", "m-sec", t("fs.summary")));
+    // 源站不提供摘要时不编造：如实说明「未提供」并引导看原文
+    modal.appendChild(el("div", "m-body", item.summary || t("fs.summaryNone")));
+
+    modal.appendChild(el("div", "m-sec", t("fs.docLink", { source: item.source || "—" })));
+    var link = el("a", "m-link", item.docUrl || t("value.none"));
+    if (item.docUrl) {
+      link.href = item.docUrl;
+      link.target = "_blank";
+      link.rel = "noopener";
+    }
+    modal.appendChild(link);
+
+    var ops = el("div", "m-ops");
+    var close = el("button", "pg-btn", t("fs.close"));
+    close.type = "button";
+    close.addEventListener("click", function () {
+      mask.remove();
+    });
+    ops.appendChild(close);
+    var open = el("button", "pg-btn primary", t("fs.openDoc"));
+    open.type = "button";
+    open.addEventListener("click", function () {
+      if (item.docUrl) {
+        window.open(item.docUrl, "_blank", "noopener");
+      }
+    });
+    ops.appendChild(open);
+    modal.appendChild(ops);
+
+    mask.appendChild(modal);
+    mask.addEventListener("click", function (event) {
+      if (event.target === mask) {
+        mask.remove();
+      }
+    });
+    document.body.appendChild(mask);
+  }
+
+  /** 拉取财报/公告结果（reset=true 重新检索，false 追加下一页）。
+   * @param {boolean} reset 是否重置分页与已累积结果
+   */
+  function loadFinancialSearch(reset) {
+    var body = document.getElementById("fs-body");
+    if (!body) {
+      return;
+    }
+    if (fsState.loading) {
+      return;  // 加载中禁止重复提交
+    }
+    if (reset) {
+      fsState.page = 1;
+      fsState.rows = [];
+    }
+    var seq = ++fsState.seq;
+    fsState.loading = true;
+    if (reset) {
+      fsSetState("loading");
+    }
+    window.Utils.api("/api/news/financial-search", {
+      market: fsState.market,
+      q: fsState.keyword,
+      type: fsState.type,
+      since: fsState.since,
+      page: fsState.page
+    }).then(function (data) {
+      if (seq !== fsState.seq) {
+        return;  // 过期响应丢弃
+      }
+      fsState.loading = false;
+      var rows = (data && data.list) || [];
+      fsState.total = (data && data.total) || 0;
+      fsState.rows = fsState.rows.concat(rows);
+      var card = document.getElementById("FS-02");
+      if (card) {
+        setBadges(card, (data && data.source) || "—", (data && data.caliber) || "—", false);
+      }
+      if (!rows.length && !fsState.rows.length) {
+        fsState.loading = false;
+        fsSetState("empty", (data && data.caliber) || "");
+        return;
+      }
+      fsRenderRows(fsState.rows);
+      fsState.page += 1;
+    }).catch(function (error) {
+      if (seq !== fsState.seq) {
+        return;
+      }
+      fsState.loading = false;
+      fsSetState("error", (error && error.message) || "", function () {
+        loadFinancialSearch(true);
+      });
+    });
+  }
+
   function buildNewsShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
@@ -2327,7 +2811,7 @@
     // 模式切换：资讯流 / 个股新闻（个股模式需带 symbol）
     var modeTabs = el("div", "pg-tabs");
     modeTabs.id = "N-mode";
-    [["feed", "多源资讯流"], ["stock", "个股新闻"]].forEach(function (item) {
+    [["feed", t("news.tab.feed")], ["stock", t("news.tab.stock")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-mode", item[0]);
@@ -2338,7 +2822,7 @@
     // 排序切换
     var sortTabs = el("div", "pg-tabs");
     sortTabs.id = "N-sort";
-    [["relevance", "相关度"], ["time", "时间"], ["impact", "影响度"]].forEach(function (item) {
+    [["relevance", t("news.sort.relevance")], ["time", t("th.time")], ["impact", t("news.sort.impact")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-sort", item[0]);
@@ -2349,7 +2833,7 @@
     // 区域切换（仅资讯流模式生效）
     var regionTabs = el("div", "pg-tabs");
     regionTabs.id = "N-region";
-    [["global", "全球"], ["cn", "国内"]].forEach(function (item) {
+    [["global", t("news.region.global")], ["cn", t("sectors.market.cn")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-region", item[0]);
@@ -2358,7 +2842,7 @@
     toolbar.appendChild(regionTabs);
     toolbar.appendChild(el("span", "pg-spacer"));
 
-    var refresh = el("button", "pg-btn", "刷新本页");
+    var refresh = el("button", "pg-btn", t("action.reload"));
     refresh.type = "button";
     refresh.id = "news-refresh";
     toolbar.appendChild(refresh);
@@ -2367,22 +2851,41 @@
     var grid = el("div", "pg-grid");
     grid.id = "news-grid";
 
+    // N-05：财报/公告搜索入口卡（新增功能 ⑥，48 列通栏，置于资讯流上方）
+    var fsEntryCard = buildCard("N-05", t("fs.entry.title"), "g-12", "");
+    setBadges(fsEntryCard.card, "巨潮/东财/HKEX/EDGAR", t("fs.entry.sub"), false);
+    var entryBox = el("div", "fs-entry");
+    entryBox.id = "fs-entry-btn";
+    entryBox.title = t("fs.entry.tip");
+    entryBox.appendChild(el("div", "ic", "📑"));
+    var entryText = el("div");
+    entryText.appendChild(el("div", "t", t("fs.entry.title")));
+    entryText.appendChild(el("div", "d", t("fs.entry.desc")));
+    entryBox.appendChild(entryText);
+    entryBox.appendChild(el("div", "go", t("fs.entry.go")));
+    entryBox.addEventListener("click", function () {
+      window.location.hash = "#/news?fs=1";
+    });
+    fsEntryCard.body.appendChild(entryBox);
+    fsEntryCard.body.setAttribute("data-state", "default");
+    grid.appendChild(fsEntryCard.card);
+
     // 左栏：板块树 + 情绪温度
     var left = el("div", "g-4");
     left.style.display = "flex";
     left.style.flexDirection = "column";
     left.style.gap = "16px";
-    var treeCard = buildCard("N-01", "板块树", "", "三级：市场 / 方向 / 细分");
+    var treeCard = buildCard("N-01", t("news.treeTitle"), "", t("news.treeSub"));
     treeCard.body.id = "n01-body";
     treeCard.body.classList.add("short");
     left.appendChild(treeCard.card);
-    var sentiCard = buildCard("N-03", "情绪温度", "", "本地规则引擎");
+    var sentiCard = buildCard("N-03", t("news.sentiTitle"), "", t("news.sentiSub"));
     sentiCard.body.id = "n03-body";
     left.appendChild(sentiCard.card);
     grid.appendChild(left);
 
     // 右栏：资讯流
-    var feedCard = buildCard("N-02", "资讯流", "g-8", "本地确定性初评 · 非 AI 判读");
+    var feedCard = buildCard("N-02", t("news.feedTitle"), "g-8", t("news.feedSub"));
     feedCard.body.id = "n02-body";
     grid.appendChild(feedCard.card);
     container.appendChild(grid);
@@ -2394,7 +2897,7 @@
       }
       var mode = button.getAttribute("data-mode");
       if (mode === "stock" && !newsState.symbol) {
-        toast("个股新闻需从个股详情页「相关新闻」进入，或先在地址栏带 symbol 参数");
+        toast(t("news.stockRedirectToast"));
         return;
       }
       newsState.mode = mode;
@@ -2450,6 +2953,16 @@
    */
   function renderNews(params) {
     var container = document.getElementById(VIEW_IDS.news);
+    // 财报/公告搜索：唯一实现页 #/news?fs=1（新增功能 ⑥），不另起第二套外壳
+    if (String(params.fs || "") === "1") {
+      renderFinancialSearch(container);
+      return;
+    }
+    if (container.getAttribute("data-fs") === "1") {
+      // 从财报搜索返回：容器内是 FS 视图，先清空并摘掉标记，再走常规新闻页渲染
+      container.innerHTML = "";
+      container.removeAttribute("data-fs");
+    }
     if (params.symbol) {
       newsState.symbol = params.symbol;
       newsState.mode = "stock";
@@ -2527,14 +3040,14 @@
     }
     var levels = (tree && tree.tree) || [];
     if (!levels.length) {
-      setEmpty(body, "板块树暂无数据", function () {
+      setEmpty(body, t("news.empty.board"), function () {
         loadNews(true);
       });
       return;
     }
     body.innerHTML = "";
     var meta = el("div", "pg-card-sub",
-      "版本 " + tree.version + " · 一级 " + tree.counts.level1 + " / 二级 " + tree.counts.level2 + " / 末级 " + tree.counts.leaf);
+      t("sectors.versionFormat", { version: tree.version, l1: tree.counts.level1, l2: tree.counts.level2, leaf: tree.counts.leaf }));
     body.appendChild(meta);
 
     levels.forEach(function (level1) {
@@ -2608,7 +3121,7 @@
     setBadges(card, payload.source, payload.caliber, false);
     var items = payload.items || [];
     if (!items.length) {
-      setEmpty(body, "当前板块暂无相关资讯，可换一个板块或稍后刷新", function () {
+      setEmpty(body, t("news.empty.feed"), function () {
         loadNews(true);
       });
       return;
@@ -2620,14 +3133,14 @@
       var box = el("article", "pg-feed-item");
 
       var head = el("div", "pg-feed-head");
-      var chipClass = sentiment.label === "利好" ? "chip up" : sentiment.label === "利空" ? "chip down" : "chip";
-      head.appendChild(el("span", chipClass, sentiment.label || "中性"));
-      head.appendChild(el("span", "pg-feed-score", "情绪分 " + fmt(sentiment.score, 4) + " · " + (sentiment.strength || "弱")));
+      var chipClass = sentiment.label === t("stock.sentiment.up") ? "chip up" : sentiment.label === t("stock.sentiment.down") ? "chip down" : "chip";
+      head.appendChild(el("span", chipClass, sentiment.label || t("stock.sentiment.neutral")));
+      head.appendChild(el("span", "pg-feed-score", t("news.scoreLabel") + fmt(sentiment.score, 4) + " · " + (sentiment.strength || t("news.weak"))));
       head.appendChild(el("span", "pg-spacer"));
       head.appendChild(el("span", "pg-news-time", relativeTime(item.time)));
       box.appendChild(head);
 
-      var title = el("div", "pg-feed-title", item.title || "无标题");
+      var title = el("div", "pg-feed-title", item.title || t("news.titleMissing"));
       if (item.url) {
         title.style.cursor = "pointer";
         title.addEventListener("click", function () {
@@ -2641,7 +3154,7 @@
       }
 
       var foot = el("div", "pg-feed-foot");
-      foot.appendChild(el("span", "pg-card-sub", item.source || "来源未知"));
+      foot.appendChild(el("span", "pg-card-sub", item.source || t("news.sourceUnknown")));
       (item.channels || []).forEach(function (channel) {
         foot.appendChild(el("span", "pg-news-tag", channel));
       });
@@ -2650,14 +3163,14 @@
       });
       if ((sentiment.events || []).length) {
         foot.appendChild(el("span", "pg-news-tag",
-          "事件：" + sentiment.events.map(function (event) { return event.name; }).join("、")));
+          t("news.eventLabel") + sentiment.events.map(function (event) { return event.name; }).join("、")));
       }
-      var reviewButton = el("button", "pg-btn", "AI 复核");
+      var reviewButton = el("button", "pg-btn", t("news.button.review"));
       reviewButton.type = "button";
       var reviewBox = el("div", "pg-review-box");
       reviewButton.addEventListener("click", function () {
         reviewButton.disabled = true;
-        reviewButton.textContent = "复核中…";
+        reviewButton.textContent = t("news.button.reviewing");
         apiPost("/api/news/ai-review", {
           title: item.title,
           content: item.text,
@@ -2667,19 +3180,19 @@
           strength: sentiment.strength
         })
           .then(function (data) {
-            reviewButton.textContent = "AI 复核";
+            reviewButton.textContent = t("news.button.review");
             reviewButton.disabled = false;
-            reviewBox.textContent = "AI（" + (data.model || "已配置模型") + "）：" + (data.review && data.review.raw ? data.review.raw.slice(0, 200) : "已返回");
+            reviewBox.textContent = "AI（" + (data.model || t("news.reviewConfigured")) + "）：" + (data.review && data.review.raw ? data.review.raw.slice(0, 200) : t("news.reviewReturned"));
             reviewBox.className = "pg-review-box ok";
           })
           .catch(function (error) {
-            reviewButton.textContent = "AI 复核";
+            reviewButton.textContent = t("news.button.review");
             reviewButton.disabled = false;
             // AI 未配置属预期契约：给出明确引导，不报错、不冒充结果
             reviewBox.textContent =
               error.code === "NOT_CONFIGURED"
-                ? "AI 复核不可用：未配置模型接口，请到「设置 → AI 设置」填写 base_url / api_key / model"
-                : "AI 复核失败：" + error.message;
+                ? t("copilot.aiNotConfigured")
+                : t("news.reviewFailed") + error.message;
             reviewBox.className = "pg-review-box warn";
           });
       });
@@ -2702,7 +3215,7 @@
       return;
     }
     if (!payload || payload.error || payload.temperature === undefined) {
-      setEmpty(body, (payload && payload.error) || "情绪数据暂无", function () {
+      setEmpty(body, (payload && payload.error) || t("senti.empty"), function () {
         loadNews(true);
       });
       return;
@@ -2710,11 +3223,11 @@
     body.innerHTML = "";
     var grid = el("div", "pg-metric-grid");
     [
-      ["温度", payload.temperature, payload.temperature >= 65 ? "up" : payload.temperature <= 35 ? "down" : "flat"],
-      ["档位", payload.level, "flat"],
-      ["利好", payload.positive, "up"],
-      ["利空", payload.negative, "down"],
-      ["样本", payload.total, "flat"]
+      [t("news.senti.temperature"), payload.temperature, payload.temperature >= 65 ? "up" : payload.temperature <= 35 ? "down" : "flat"],
+      [t("news.senti.level"), payload.level, "flat"],
+      [t("stock.sentiment.up"), payload.positive, "up"],
+      [t("stock.sentiment.down"), payload.negative, "down"],
+      [t("news.senti.sample"), payload.total, "flat"]
     ].forEach(function (item) {
       var cell = el("div", "pg-metric-cell");
       cell.appendChild(el("div", "pg-metric-label", item[0]));
@@ -2727,7 +3240,7 @@
       var events = payload.top_events.map(function (event) {
         return event.name + "×" + event.count;
       }).join("、");
-      body.appendChild(el("div", "pg-card-sub", "驱动事件：" + events));
+      body.appendChild(el("div", "pg-card-sub", t("news.senti.driving") + events));
     }
     if ((payload.samples || []).length) {
       var list = el("ul", "pg-news-list");
@@ -2740,7 +3253,7 @@
       body.appendChild(list);
     }
     body.appendChild(el("div", "pg-card-sub",
-      "口径：" + (payload.caliber || "本地规则引擎") + "；温度 = 50 + 均分×500，裁剪 0–100"));
+      t("news.senti.caliber") + (payload.caliber || t("news.senti.engine")) + t("news.senti.equation")));
     body.setAttribute("data-state", "default");
   }
 
@@ -2764,7 +3277,7 @@
     }
     return fetch(path, options)
       .catch(function () {
-        throw new Error("网络连接失败，请检查网络后重试。");
+        throw new Error(t("error.network"));
       })
       .then(function (response) {
         return response.json();
@@ -2786,21 +3299,39 @@
   function buildFundShell(container) {
     container.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
-    toolbar.appendChild(el("span", "pg-card-sub", "基金代码"));
+    toolbar.appendChild(el("span", "pg-card-sub", t("fund.codeLabel")));
     var input = document.createElement("input");
     input.id = "fund-code";
     input.value = fundState.code;
-    input.setAttribute("aria-label", "基金代码");
+    input.setAttribute("aria-label", t("fund.codeLabel"));
     input.style.cssText =
       "width:120px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);" +
       "border-radius:5px;padding:4px 8px;font-family:var(--font-mono)";
     toolbar.appendChild(input);
-    var go = el("button", "pg-btn", "查看");
+    var go = el("button", "pg-btn", t("action.view"));
     go.type = "button";
     go.id = "fund-go";
     toolbar.appendChild(go);
+
+    // FN-02：基金独立搜索（OB-F044 P0）—— 支持代码/简称/拼音，选中直接跳详情，
+    // 不再只能靠自选或养基宝带 code 进入；接口复用既有 GET /api/fund/search。
+    var searchWrap = el("div", "fund-search-wrap");
+    var searchInput = document.createElement("input");
+    searchInput.id = "fund-search";
+    searchInput.type = "search";
+    searchInput.placeholder = t("fund.searchPlaceholder");
+    searchInput.setAttribute("aria-label", t("fund.searchPlaceholder"));
+    searchInput.style.cssText =
+      "width:200px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);" +
+      "border-radius:5px;padding:4px 8px";
+    var searchList = el("div", "fund-search-list");
+    searchList.id = "fund-search-list";
+    searchList.hidden = true;
+    searchWrap.appendChild(searchInput);
+    searchWrap.appendChild(searchList);
+    toolbar.appendChild(searchWrap);
     toolbar.appendChild(el("span", "pg-spacer"));
-    var refresh = el("button", "pg-btn", "刷新本页");
+    var refresh = el("button", "pg-btn", t("action.reload"));
     refresh.type = "button";
     refresh.id = "fund-refresh";
     toolbar.appendChild(refresh);
@@ -2809,7 +3340,7 @@
     var grid = el("div", "pg-grid");
     grid.id = "fund-grid";
 
-    var head = buildCard("F-01", "基金概览", "g-12", "场外基金 · T+1 公布净值");
+    var head = buildCard("F-01", t("fund.overviewCard"), "g-12", t("fund.overviewSub"));
     head.body.id = "f01-body";
     grid.appendChild(head.card);
 
@@ -2817,10 +3348,10 @@
     left.style.display = "flex";
     left.style.flexDirection = "column";
     left.style.gap = "16px";
-    var navCard = buildCard("F-02", "净值与回撤", "", "净值走势 + 回撤序列（净值自算）");
+    var navCard = buildCard("F-02", t("fund.navCard"), "", t("fund.navSub"));
     navCard.body.id = "f02-body";
     left.appendChild(navCard.card);
-    var perfCard = buildCard("F-03", "阶段业绩", "", "涨幅与同类排名（蛋卷）");
+    var perfCard = buildCard("F-03", t("fund.perfCard"), "", t("fund.perfSub"));
     perfCard.body.id = "f03-body";
     left.appendChild(perfCard.card);
     grid.appendChild(left);
@@ -2829,15 +3360,15 @@
     right.style.display = "flex";
     right.style.flexDirection = "column";
     right.style.gap = "16px";
-    var infoCard = buildCard("F-05", "档案与分红", "", "蛋卷档案 + 东财分红");
+    var infoCard = buildCard("F-05", t("fund.infoCard"), "", t("fund.infoSub"));
     infoCard.body.id = "f05-body";
     right.appendChild(infoCard.card);
-    var posCard = buildCard("F-06", "持仓分布", "", "需登录通道已禁用");
+    var posCard = buildCard("F-06", t("fund.holdCard"), "", t("fund.holdSub"));
     posCard.body.id = "f06-body";
     right.appendChild(posCard.card);
     grid.appendChild(right);
 
-    var holdCard = buildCard("F-04", "重仓股", "g-12", "东财基金季报（占比/市值）");
+    var holdCard = buildCard("F-04", t("fund.holdingCard"), "g-12", t("fund.holdingSub"));
     holdCard.body.id = "f04-body";
     grid.appendChild(holdCard.card);
 
@@ -2859,10 +3390,87 @@
     var input = document.getElementById("fund-code");
     var code = (input && input.value ? input.value : "").trim();
     if (!code) {
-      toast("请输入基金代码");
+      toast(t("fund.codeRequired"));
       return;
     }
     window.location.hash = "#/fund?code=" + encodeURIComponent(code);
+  }
+
+  /** 渲染基金页。
+   * @param {Object} params 查询参数对象
+   */
+  /** FN-02：基金搜索联想（代码/简称/拼音），点击结果直接跳详情。
+   *
+   * 说明：基金页此前只能靠自选/养基宝带 code 进入（OB-F044 P0 缺口）；
+   * 本函数复用既有 GET /api/fund/search（后端已存在），不新增接口。
+   * @param {HTMLInputElement} input 搜索输入框
+   */
+  function bindFundSearch(input) {
+    var list = document.getElementById("fund-search-list");
+    var timer = null;
+    var seq = 0;
+
+    /** 收起下拉并清空内容。*/
+    function hide() {
+      if (list) {
+        list.hidden = true;
+        list.innerHTML = "";
+      }
+    }
+
+    /** 渲染联想结果（空结果给中文提示，不编造）。
+     * @param {Array} items 结果列表
+     */
+    function render(items) {
+      if (!list) {
+        return;
+      }
+      list.innerHTML = "";
+      if (!items.length) {
+        list.appendChild(el("div", "fund-search-item", t("fund.searchNone")));
+      } else {
+        items.forEach(function (item) {
+          var row = el("div", "fund-search-item");
+          row.appendChild(el("span", "code", item.code || ""));
+          row.appendChild(el("span", "name", item.name || ""));
+          row.addEventListener("click", function () {
+            fundState.code = item.code;
+            hide();
+            input.value = item.name || item.code;
+            window.location.hash = "#/fund?code=" + encodeURIComponent(item.code);
+          });
+          list.appendChild(row);
+        });
+      }
+      list.hidden = false;
+    }
+
+    // 防抖 300ms + 请求序号过期丢弃（与财报搜索同一交互口径）
+    input.addEventListener("input", function () {
+      var keyword = input.value.trim();
+      window.clearTimeout(timer);
+      if (!keyword) {
+        hide();
+        return;
+      }
+      timer = window.setTimeout(function () {
+        var mine = ++seq;
+        api("/api/fund/search", { q: keyword, limit: 10 }).then(function (data) {
+          if (mine !== seq) {
+            return;
+          }
+          render((data && data.items) || []);
+        }).catch(function () {
+          if (mine !== seq) {
+            return;
+          }
+          render([]);
+        });
+      }, 300);
+    });
+    input.addEventListener("blur", function () {
+      window.setTimeout(hide, 180);  // 延迟收起，保证点击结果能先触发
+    });
   }
 
   /** 渲染基金页。
@@ -2877,6 +3485,24 @@
     var input = document.getElementById("fund-code");
     if (input) {
       input.value = fundState.code;
+    }
+    // FN-02：绑定「查看」按钮与基金搜索联想（只绑一次，路由重复进入不叠加监听器）
+    var goBtn = document.getElementById("fund-go");
+    if (goBtn && !goBtn.getAttribute("data-bound")) {
+      goBtn.setAttribute("data-bound", "1");
+      goBtn.addEventListener("click", function () {
+        var box = document.getElementById("fund-code");
+        var next = box ? box.value.trim() : "";
+        if (next) {
+          fundState.code = next;
+          window.location.hash = "#/fund?code=" + encodeURIComponent(next);
+        }
+      });
+    }
+    var searchBox = document.getElementById("fund-search");
+    if (searchBox && !searchBox.getAttribute("data-bound")) {
+      searchBox.setAttribute("data-bound", "1");
+      bindFundSearch(searchBox);
     }
     loadFund();
   }
@@ -2924,10 +3550,10 @@
         setError(head, info.error, function () { loadFund(); });
       } else {
         setBadges(headCard, (realtime && realtime.source) || "蛋卷",
-          (realtime && realtime.caliber) || "T+1 公布净值", false);
+          (realtime && realtime.caliber) || t("fund.caliber.navFallback"), false);
         head.innerHTML = "";
         var main = el("div", "pg-quote-main");
-        main.appendChild(el("span", "pg-quote-name", info.name || "无数据"));
+        main.appendChild(el("span", "pg-quote-name", info.name || t("value.none")));
         main.appendChild(el("span", "pg-card-sub", info.code || ""));
         main.appendChild(el("span", "pg-quote-price " + pctClass(realtime.day_growth), fmt(realtime.nav, 4)));
         main.appendChild(el("span", pctClass(realtime.day_growth), fmtPct(realtime.day_growth)));
@@ -2935,16 +3561,16 @@
         head.appendChild(main);
         var meta = el("div", "pg-quote-meta");
         [
-          ["基金全称", info.full_name],
-          ["基金经理", info.manager],
-          ["成立日期", info.found_date],
-          ["最新规模", info.scale],
-          ["风险等级", info.risk_level ? "R" + info.risk_level : "无数据"],
-          ["申购状态", info.subscribe_status === "0" ? "开放申购" : "限制/暂停"],
-          ["赎回状态", info.withdraw_status === "1" ? "开放赎回" : "暂停赎回"]
+          [t("fund.kv.fullName"), info.full_name],
+          [t("fund.kv.manager"), info.manager],
+          [t("fund.kv.foundDate"), info.found_date],
+          [t("fund.kv.scale"), info.scale],
+          [t("fund.kv.riskLevel"), info.risk_level ? "R" + info.risk_level : t("value.none")],
+          [t("fund.kv.subscribe"), info.subscribe_status === "0" ? t("fund.kv.subscribeOpen") : t("fund.kv.subscribeLimited")],
+          [t("fund.kv.withdraw"), info.withdraw_status === "1" ? t("fund.kv.withdrawOpen") : t("fund.kv.withdrawPause")]
         ].forEach(function (item) {
           var cell = el("span", "", item[0] + "：");
-          cell.appendChild(el("b", "", item[1] || "无数据"));
+          cell.appendChild(el("b", "", item[1] || t("value.none")));
           meta.appendChild(cell);
         });
         head.appendChild(meta);
@@ -2958,25 +3584,32 @@
       var navItems = (payload.nav && payload.nav.items) || [];
       var ddSeries = (payload.drawdown && payload.drawdown.series) || [];
       if (!navItems.length) {
-        setEmpty(navBody, (payload.nav && payload.nav.error) || "净值数据暂无", function () { loadFund(); });
+        setEmpty(navBody, (payload.nav && payload.nav.error) || t("fund.empty.nav"), function () { loadFund(); });
       } else {
         setBadges(document.getElementById("F-02"), (payload.nav && payload.nav.source) || "蛋卷",
-          (payload.nav && payload.nav.caliber) || "净值历史", false);
+          (payload.nav && payload.nav.caliber) || t("fund.caliber.nav"), false);
         var ordered = navItems.slice().reverse();
         var box = el("div", "pg-chart");
         navBody.innerHTML = "";
         navBody.appendChild(box);
         var chart = mountChart(box);
         var theme = chartTheme();
+        // 回撤子图纵轴固定阶梯：>50% 用 30% 步长，其余 25%，保证最多 3~4 档标签，
+        // 窄高（1024 下 260px）也不会互相挤压（P1-10 人眼验收项）
+        var ddValues = ddSeries.map(function (i) { return Number(i.drawdown) || 0; });
+        var ddWorst = ddValues.length ? Math.abs(Math.min.apply(null, ddValues)) : 0;
+        var ddStep = ddWorst > 50 ? 30 : 25;
+        var ddMin = -Math.ceil((ddWorst + 5) / ddStep) * ddStep;
         if (chart) {
           chart.setOption({
             backgroundColor: "transparent",
             tooltip: { trigger: "axis" },
             legend: { textStyle: { color: theme.text }, top: 0 },
+            // 用纯百分比切分：主图 44%，子图 22%，中间与底部各留 14% / 12% 给日期标签，
+            // 避免 px 与 % 混算在 260px 窄高下溢出（P1-10）
             grid: [
-              // 主图与回撤子图留出足够间距，避免回撤纵轴标签压住净值横轴日期（P1-10）
-              { left: 62, right: 18, top: 34, height: "40%" },
-              { left: 62, right: 18, top: "72%", height: "16%" }
+              { left: 62, right: 18, top: "8%", height: "44%" },
+              { left: 62, right: 18, top: "66%", height: "22%" }
             ],
             xAxis: [
               { type: "category", data: ordered.map(function (i) { return i.date; }),
@@ -2984,20 +3617,21 @@
                   interval: Math.max(1, Math.floor(ordered.length / 6)) },
                 axisLine: { lineStyle: { color: theme.border } } },
               { type: "category", gridIndex: 1, data: ddSeries.map(function (i) { return i.date; }),
-                axisLabel: { color: theme.text, fontSize: 10, margin: 6,
+                axisLabel: { color: theme.text, fontSize: 10, margin: 6, hideOverlap: true,
                   interval: Math.max(1, Math.floor(ddSeries.length / 5)) },
                 axisLine: { lineStyle: { color: theme.border } } }
             ],
             yAxis: [
               { scale: true, axisLabel: { color: theme.text, fontSize: 10 },
                 splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
-              { gridIndex: 1, axisLabel: { color: theme.text, fontSize: 10, margin: 8, formatter: "{value}%" },
+              { gridIndex: 1, min: ddMin, max: 0, interval: ddStep,
+                axisLabel: { color: theme.text, fontSize: 10, margin: 8, formatter: "{value}%" },
                 splitLine: { show: false } }
             ],
             series: [
-              { name: "单位净值", type: "line", data: ordered.map(function (i) { return i.nav; }),
+              { name: t("fund.nav.nav"), type: "line", data: ordered.map(function (i) { return i.nav; }),
                 showSymbol: false, color: "#b47da0", lineStyle: { width: 1.6 } },
-              { name: "回撤%", type: "line", xAxisIndex: 1, yAxisIndex: 1,
+              { name: t("fund.nav.drawdown"), type: "line", xAxisIndex: 1, yAxisIndex: 1,
                 data: ddSeries.map(function (i) { return i.drawdown; }),
                 showSymbol: false, areaStyle: { opacity: 0.25 }, color: COLOR_DOWN,
                 // 最大回撤点直接标在绘图窗内（与坐标对齐），替代图外文字标注
@@ -3007,8 +3641,8 @@
         }
         var dd = payload.drawdown || {};
         navBody.appendChild(el("div", "pg-card-sub",
-          "最大回撤 " + fmt(dd.max_drawdown, 2) + "%（" + (dd.peak_date || "—") + " → " + (dd.trough_date || "—") +
-          "），当前回撤 " + fmt(dd.current_drawdown, 2) + "%"));
+          t("stock.kdj.troughPrefix") + fmt(dd.max_drawdown, 2) + "%（" + (dd.peak_date || t("value.dash")) + " → " + (dd.trough_date || t("value.dash")) +
+          t("stock.kdj.currentSuffix") + fmt(dd.current_drawdown, 2) + "%"));
         navBody.setAttribute("data-state", "default");
       }
     }
@@ -3018,15 +3652,15 @@
     if (perfBody) {
       var perf = payload.performance || {};
       if (perf.error || !(perf.periods || []).length) {
-        setEmpty(perfBody, perf.error || "阶段业绩暂无", function () { loadFund(); });
+        setEmpty(perfBody, perf.error || t("fund.empty.perf"), function () { loadFund(); });
       } else {
-        setBadges(document.getElementById("F-03"), perf.source || "蛋卷", perf.caliber || "阶段涨幅", false);
+        setBadges(document.getElementById("F-03"), perf.source || "蛋卷", perf.caliber || t("fund.caliber.perf"), false);
         renderTable(
           perfBody,
           [
-            { title: "区间", key: "period", cls: "name" },
-            { title: "涨幅%", cls: "num", render: function (row) { return pctNode(row.growth); } },
-            { title: "同类排名", key: "rank" }
+            { title: t("fund.perf.col.period"), key: "period", cls: "name" },
+            { title: t("fund.perf.col.growth"), cls: "num", render: function (row) { return pctNode(row.growth); } },
+            { title: t("fund.perf.col.rank"), key: "rank" }
           ],
           perf.periods,
           null,
@@ -3040,18 +3674,18 @@
     if (holdBody) {
       var holding = payload.holding || {};
       if (holding.error || !(holding.items || []).length) {
-        setEmpty(holdBody, holding.error || "重仓数据暂无", function () { loadFund(); });
+        setEmpty(holdBody, holding.error || t("fund.empty.holding"), function () { loadFund(); });
       } else {
         setBadges(document.getElementById("F-04"), holding.source || "东财季报",
-          (holding.caliber || "") + "；报告期 " + (holding.quarter || "—"), false);
+          (holding.caliber || "") + t("stock.profile.dataCaliber") + (holding.quarter || t("value.dash")), false);
         renderTable(
           holdBody,
           [
-            { title: "代码", key: "code", cls: "num" },
-            { title: "名称", key: "name", cls: "name" },
-            { title: "占净值%", cls: "num", render: function (row) { return fmt(row.ratio, 2); } },
-            { title: "持股数(万股)", cls: "num", render: function (row) { return fmt(row.shares, 2); } },
-            { title: "持仓市值(万元)", cls: "num", render: function (row) { return fmt(row.value, 2); } }
+            { title: t("th.code"), key: "code", cls: "num" },
+            { title: t("th.name"), key: "name", cls: "name" },
+            { title: t("fund.holding.col.ratio"), cls: "num", render: function (row) { return fmt(row.ratio, 2); } },
+            { title: t("fund.holding.col.shares"), cls: "num", render: function (row) { return fmt(row.shares, 2); } },
+            { title: t("fund.holding.col.value"), cls: "num", render: function (row) { return fmt(row.value, 2); } }
           ],
           holding.items,
           function (row) {
@@ -3069,27 +3703,29 @@
       infoBody.innerHTML = "";
       var group = el("div", "pg-quote-meta");
       [
-        ["托管银行", info.trustee],
-        ["基金公司", info.keeper],
-        ["雪球规模", info.xq && info.xq["最新规模"]]
+        [t("fund.profile.bank"), info.trustee],
+        [t("fund.profile.company"), info.keeper],
+        // R2-04：雪球档案键名与 i18n 统一为「基金规模」；若接口为旧缓存，
+        // 回退到蛋卷归一字段 info.scale，两处兜底避免再显示"无数据"
+        [t("fund.profile.size"), (info.xq && info.xq[t("fund.kv.scale")]) || info.scale]
       ].forEach(function (item) {
         var cell = el("span", "", item[0] + "：");
-        cell.appendChild(el("b", "", item[1] || "无数据"));
+        cell.appendChild(el("b", "", item[1] || t("value.none")));
         group.appendChild(cell);
       });
       infoBody.appendChild(group);
-      infoBody.appendChild(el("div", "pg-card-sub", "分红记录：" + (div.caliber || "")));
+      infoBody.appendChild(el("div", "pg-card-sub", t("fund.profile.dividend") + (div.caliber || "")));
       if ((div.items || []).length) {
         var list = el("div", "pg-news-list");
         div.items.slice(0, 6).forEach(function (row) {
           var line = el("div", "pg-news-item");
-          line.appendChild(el("span", "pg-news-title", (row.record_date || "") + " 每10份派 " + (row.per_10 || "—") + " 元"));
+          line.appendChild(el("span", "pg-news-title", (row.record_date || "") + " 每10份派 " + (row.per_10 || t("value.dash")) + " 元"));
           line.appendChild(el("span", "pg-news-time", row.pay_date || ""));
           list.appendChild(line);
         });
         infoBody.appendChild(list);
       } else {
-        infoBody.appendChild(el("div", "pg-card-sub", "该基金暂无分红记录"));
+        infoBody.appendChild(el("div", "pg-card-sub", t("fund.profile.noDividend")));
       }
       infoBody.setAttribute("data-state", "default");
     }
@@ -3099,9 +3735,9 @@
     if (posBody) {
       posBody.innerHTML = "";
       var boxState = el("div", "pg-state");
-      boxState.appendChild(el("div", "pg-state-title", "持仓分布暂不可用"));
+      boxState.appendChild(el("div", "pg-state-title", t("fund.holdUnavailable")));
       boxState.appendChild(el("div", "pg-state-hint",
-        "蛋卷持仓分布端点需登录（rc=300001），依规范已禁用；可用上方「重仓股」查看季报前十大持仓。"));
+        t("fund.holdDisabled")));
       posBody.appendChild(boxState);
       posBody.setAttribute("data-state", "empty");
     }
@@ -3118,12 +3754,12 @@
   function buildPortfolioShell(container) {
     container.innerHTML = "";
     var form = el("div", "page-toolbar");
-    form.appendChild(el("span", "pg-card-sub", "新增持仓"));
+    form.appendChild(el("span", "pg-card-sub", t("portfolio.addPosition")));
     var market = document.createElement("select");
     market.id = "pf-market";
     market.style.cssText =
       "background:var(--bg-panel);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px";
-    [["a", "A股"], ["hk", "港股"], ["us", "美股"], ["fund", "场外基金"]].forEach(function (item) {
+    [["a", t("stock.market.a")], ["hk", t("sectors.market.hk")], ["us", t("sectors.market.us")], ["fund", t("page.fund")]].forEach(function (item) {
       var option = document.createElement("option");
       option.value = item[0];
       option.textContent = item[1];
@@ -3147,29 +3783,29 @@
       return input;
     }
 
-    form.appendChild(field("pf-symbol", "代码", 100));
-    form.appendChild(field("pf-name", "名称（可选）", 140));
-    form.appendChild(field("pf-shares", "份额/股数", 100));
-    form.appendChild(field("pf-cost", "成本价", 90));
-    var add = el("button", "pg-btn", "添加");
+    form.appendChild(field("pf-symbol", t("th.code"), 100));
+    form.appendChild(field("pf-name", t("portfolio.namePlaceholder"), 140));
+    form.appendChild(field("pf-shares", t("portfolio.col.shares"), 100));
+    form.appendChild(field("pf-cost", t("portfolio.costPlaceholder"), 90));
+    var add = el("button", "pg-btn", t("portfolio.addBtn"));
     add.type = "button";
     add.id = "pf-add";
     form.appendChild(add);
     form.appendChild(el("span", "pg-spacer"));
-    var refresh = el("button", "pg-btn", "刷新");
+    var refresh = el("button", "pg-btn", t("action.refresh"));
     refresh.type = "button";
     form.appendChild(refresh);
     container.appendChild(form);
 
     var grid = el("div", "pg-grid");
     grid.id = "portfolio-grid";
-    var summary = buildCard("P-01", "持仓汇总", "g-12", "人民币口径（港美按实时汇率折算）");
+    var summary = buildCard("P-01", t("portfolio.summaryTitle"), "g-12", t("portfolio.summarySub"));
     summary.body.id = "p01-body";
     grid.appendChild(summary.card);
-    var dist = buildCard("P-04", "市场分布", "g-5", "按人民币市值占比");
+    var dist = buildCard("P-04", t("portfolio.distTitle"), "g-5", t("portfolio.distSub"));
     dist.body.id = "p04-body";
     grid.appendChild(dist.card);
-    var table = buildCard("P-03", "持仓明细", "g-12", "盈亏按本币与人民币双口径");
+    var table = buildCard("P-03", t("portfolio.tableTitle"), "g-12", t("portfolio.tableSub"));
     table.body.id = "p03-body";
     grid.appendChild(table.card);
     container.appendChild(grid);
@@ -3183,12 +3819,12 @@
         cost: document.getElementById("pf-cost").value
       };
       if (!payload.symbol || !payload.shares) {
-        toast("请填写代码与份额/股数");
+        toast(t("portfolio.inputRequired"));
         return;
       }
       apiSend("POST", "/api/portfolio", payload)
         .then(function () {
-          toast("已添加持仓");
+          toast(t("portfolio.added"));
           ["pf-symbol", "pf-name", "pf-shares", "pf-cost"].forEach(function (id) {
             var node = document.getElementById(id);
             if (node) {
@@ -3249,18 +3885,18 @@
       if (listing.error || analysis.error) {
         setError(p01, listing.error || analysis.error, function () { loadPortfolio(); });
       } else if (!(listing.items || []).length) {
-        setEmpty(p01, "暂无持仓，请在上方添加", function () { loadPortfolio(); });
+        setEmpty(p01, t("portfolio.empty.listing"), function () { loadPortfolio(); });
       } else {
-        setBadges(document.getElementById("P-01"), analysis.source || "本地持仓", analysis.caliber || "", false);
+        setBadges(document.getElementById("P-01"), analysis.source || t("portfolio.source.local"), analysis.caliber || "", false);
         var totals = analysis.totals || {};
         p01.innerHTML = "";
         var grid = el("div", "pg-metric-grid");
         [
-          ["市值(人民币)", fmt(totals.cny_market_value, 2), "flat"],
-          ["成本(人民币)", fmt(totals.cny_cost, 2), "flat"],
-          ["盈亏(人民币)", fmt(totals.cny_pnl, 2), pctClass(totals.cny_pnl)],
-          ["持仓条数", (analysis.count || 0) + " 条", "flat"],
-          ["汇率", analysis.fx && analysis.fx.USD ? ("USD " + fmt(analysis.fx.USD, 4) + " / HKD " + fmt(analysis.fx.HKD, 4)) : "无数据", "flat"]
+          [t("portfolio.kv.valueCny"), fmt(totals.cny_market_value, 2), "flat"],
+          [t("portfolio.kv.costCny"), fmt(totals.cny_cost, 2), "flat"],
+          [t("portfolio.kv.pnlCny"), fmt(totals.cny_pnl, 2), pctClass(totals.cny_pnl)],
+          [t("portfolio.kv.count"), (analysis.count || 0) + " 条", "flat"],
+          [t("portfolio.kv.fx"), analysis.fx && analysis.fx.USD ? ("USD " + fmt(analysis.fx.USD, 4) + " / HKD " + fmt(analysis.fx.HKD, 4)) : t("value.none"), "flat"]
         ].forEach(function (item) {
           var cell = el("div", "pg-metric-cell");
           cell.appendChild(el("div", "pg-metric-label", item[0]));
@@ -3269,7 +3905,7 @@
         });
         p01.appendChild(grid);
         if (analysis.fx_missing) {
-          p01.appendChild(el("div", "pg-card-sub", "部分外币持仓缺少汇率，折算值显示为无数据"));
+          p01.appendChild(el("div", "pg-card-sub", t("portfolio.fxMissing")));
         }
         p01.setAttribute("data-state", "default");
       }
@@ -3280,7 +3916,7 @@
     if (p04) {
       var dist = (analysis.distribution || []).filter(function (item) { return item.value_cny; });
       if (!dist.length) {
-        setEmpty(p04, "暂无分布数据", function () { loadPortfolio(); });
+        setEmpty(p04, t("portfolio.empty.distribution"), function () { loadPortfolio(); });
       } else {
         p04.innerHTML = "";
         var box = el("div", "pg-chart small");
@@ -3321,7 +3957,7 @@
     if (p03) {
       var rows = (analysis.items || []).filter(function (item) { return item.id; });
       if (!rows.length) {
-        setEmpty(p03, "暂无持仓明细", function () { loadPortfolio(); });
+        setEmpty(p03, t("portfolio.empty.detail"), function () { loadPortfolio(); });
       } else {
         var wrap = el("div", "");
         p03.innerHTML = "";
@@ -3329,29 +3965,29 @@
         renderTable(
           wrap,
           [
-            { title: "市场", key: "market_label" },
-            { title: "代码", key: "symbol", cls: "num" },
-            { title: "名称", key: "name", cls: "name" },
-            { title: "份额/股数", cls: "num", render: function (row) { return fmt(row.shares, 2); } },
-            { title: "成本", cls: "num", render: function (row) { return fmt(row.cost, 4); } },
-            { title: "现价", cls: "num", render: function (row) { return fmt(row.price, 4); } },
-            { title: "市值(本币)", cls: "num", render: function (row) { return fmt(row.market_value, 2); } },
-            { title: "盈亏(本币)", cls: "num", render: function (row) { return pctNode(row.pnl); } },
-            { title: "盈亏%", cls: "num", render: function (row) { return pctNode(row.pnl_pct); } },
+            { title: t("portfolio.col.market"), key: "market_label" },
+            { title: t("th.code"), key: "symbol", cls: "num" },
+            { title: t("th.name"), key: "name", cls: "name" },
+            { title: t("portfolio.col.shares"), cls: "num", render: function (row) { return fmt(row.shares, 2); } },
+            { title: t("portfolio.col.cost"), cls: "num", render: function (row) { return fmt(row.cost, 4); } },
+            { title: t("portfolio.col.price"), cls: "num", render: function (row) { return fmt(row.price, 4); } },
+            { title: t("portfolio.col.value"), cls: "num", render: function (row) { return fmt(row.market_value, 2); } },
+            { title: t("portfolio.col.pnl"), cls: "num", render: function (row) { return pctNode(row.pnl); } },
+            { title: t("portfolio.col.pnlPct"), cls: "num", render: function (row) { return pctNode(row.pnl_pct); } },
             {
-              title: "操作",
+              title: t("portfolio.col.action"),
               /** 持仓表「操作」列：渲染删除按钮，点击后调用 DELETE 并重载。
                * @param {*} row 单行记录
                * @returns {*} 处理结果
                */
               render: function (row) {
-                var button = el("button", "pg-btn", "删除");
+                var button = el("button", "pg-btn", t("portfolio.col.delete"));
                 button.type = "button";
                 button.addEventListener("click", function (event) {
                   event.stopPropagation();
                   apiSend("DELETE", "/api/portfolio/" + encodeURIComponent(row.id))
                     .then(function () {
-                      toast("已删除");
+                      toast(t("portfolio.deleted"));
                       loadPortfolio();
                     })
                     .catch(function (error) {
@@ -3366,6 +4002,8 @@
           null,
           null
         );
+        // 有持仓时表格渲染完成必须显式收口，否则四态巡检一直停在 loading
+        p03.setAttribute("data-state", "default");
       }
     }
   }
@@ -3377,69 +4015,318 @@
   /** 渲染连接器页。
    * @returns {*} 处理结果
    */
+  /** 源状态中文文案（与后端 capabilities 同口径，缺失时按启用/探测推导）。
+   * @param {Object} item 数据源条目
+   * @param {boolean} userDisabled 用户是否停用
+   * @returns {string} 中文状态
+   */
+  function connectorStateText(item, userDisabled) {
+    if (userDisabled) {
+      return t("connectors.state.userDisabled");
+    }
+    if (item.status) {
+      return String(item.status);
+    }
+    if (item.active) {
+      return t("connectors.state.enabled");
+    }
+    if (item.enabled) {
+      return item.stage === "installed" ? t("connectors.state.installed") : t("connectors.state.pending");
+    }
+    return t("connectors.state.disabled");
+  }
+
+  /** 源状态色阶：active=正常 / enabled 未探测=安装待接 / 停用=down / optin=warn。
+   * @param {Object} item 数据源条目
+   * @param {boolean} userDisabled 用户是否停用
+   * @returns {string} CSS 类名
+   */
+  function connectorTone(item, userDisabled) {
+    if (userDisabled) {
+      return "down";
+    }
+    if (item.active) {
+      return "flat";
+    }
+    if (item.stage === "optin") {
+      return "warn";
+    }
+    return "down";
+  }
+
+  /** 渲染连接器页：C-01 总览 + C-02 源表格 + C-03 降级链 + C-04 四市场矩阵（R3-03/R3-13）。
+   * @returns {void} 无返回值（异步渲染）
+   */
   function renderConnectors() {
     var container = document.getElementById(VIEW_IDS.connectors);
     container.innerHTML = "";
     var grid = el("div", "pg-grid");
-    var card = buildCard("C-01", "数据源与能力矩阵", "g-12", "按实测能力矩阵，不可用项如实标注");
+
+    var card = buildCard("C-01", t("connectors.cardTitle"), "g-12", t("connectors.cardSub"));
     card.body.id = "c01-body";
     grid.appendChild(card.card);
+    var chainCard = buildCard("C-03", t("connectors.chainTitle"), "g-6", t("connectors.chainSub"));
+    chainCard.body.id = "c03-body";
+    grid.appendChild(chainCard.card);
+    var matrixCard = buildCard("C-04", t("connectors.matrixTitle"), "g-6", t("connectors.matrixSub"));
+    matrixCard.body.id = "c04-body";
+    grid.appendChild(matrixCard.card);
     container.appendChild(grid);
+
     var body = document.getElementById("c01-body");
     setLoading(body);
+    document.getElementById("c03-body").setAttribute("data-state", "default");
+    document.getElementById("c03-body").appendChild(el("div", "pg-card-sub", t("connectors.chainNote")));
+    document.getElementById("c04-body").setAttribute("data-state", "default");
 
     api("/api/connectors/status", {})
       .then(function (data) {
         setBadges(card.card, data.source, data.caliber, false);
         body.innerHTML = "";
 
-        var sourceTitle = el("div", "pg-card-sub", "数据源开关");
-        body.appendChild(sourceTitle);
-        var sourceGrid = el("div", "pg-metric-grid");
-        (data.datasources || []).forEach(function (item) {
-          var cell = el("div", "pg-metric-cell");
-          cell.appendChild(el("div", "pg-metric-label", item.label));
-          var state = item.enabled ? (item.active ? "启用" : (item.stage === "installed" ? "已装待接" : "待接入")) : "未启用";
-          cell.appendChild(el("div", "pg-metric-value " + (item.enabled ? "flat" : "down"), state));
-          sourceGrid.appendChild(cell);
+        var disabledSet = {};
+        (data.disabled || []).forEach(function (name) {
+          disabledSet[name] = true;
         });
-        body.appendChild(sourceGrid);
+        var sources = data.datasources || [];
+        var enabledCount = sources.filter(function (item) {
+          return item.enabled && !disabledSet[item.label];
+        }).length;
+        var activeCount = sources.filter(function (item) { return item.active; }).length;
+        var userDisabledCount = sources.filter(function (item) {
+          return disabledSet[item.label];
+        }).length;
+        var degradedCount = Math.max(0, sources.length - activeCount - userDisabledCount);
 
-        var tableTitle = el("div", "pg-card-sub", "三市场能力矩阵（✓ 可用 / — 不可用）");
-        body.appendChild(tableTitle);
-        var wrap = el("div", "");
-        body.appendChild(wrap);
-        var features = [
-          ["quote", "报价"], ["kline", "K 线"], ["minute", "分时"],
-          ["index", "指数"], ["stock_news", "个股新闻"], ["sector", "板块专项"]
+        // C-01 四统计 + 缓存管理
+        var statGrid = el("div", "pg-metric-grid");
+        [
+          [t("connectors.stat.enabled"), enabledCount + " / " + sources.length, "flat"],
+          [t("connectors.stat.active"), String(activeCount), "flat"],
+          [t("connectors.stat.degraded"), String(degradedCount), "warn"],
+          [t("connectors.stat.disabled"), String(userDisabledCount), "down"]
+        ].forEach(function (item) {
+          var cell = el("div", "pg-metric-cell");
+          cell.appendChild(el("div", "pg-metric-label", item[0]));
+          cell.appendChild(el("div", "pg-metric-value " + item[2], item[1]));
+          statGrid.appendChild(cell);
+        });
+        body.appendChild(statGrid);
+
+        var cacheRow = el("div", "page-toolbar");
+        cacheRow.appendChild(el("span", "pg-toolbar-label", t("connectors.cacheLabel")));
+        var clearBtn = el("button", "pg-btn", t("set.cache.clear"));
+        clearBtn.type = "button";
+        clearBtn.addEventListener("click", function () {
+          clearBtn.disabled = true;
+          clearBtn.textContent = t("set.cache.clearing");
+          fetch("/api/cache/clear", { method: "POST" })
+            .then(function (response) { return response.json(); })
+            .then(function (result) {
+              toast(result.error ? t("toast.cacheFailed") : t("toast.cacheCleared"));
+            })
+            .catch(function () { toast(t("toast.cacheFailed")); })
+            .then(function () {
+              clearBtn.disabled = false;
+              clearBtn.textContent = t("set.cache.clear");
+            });
+        });
+        cacheRow.appendChild(clearBtn);
+        body.appendChild(cacheRow);
+
+        // C-02：源表格（状态 pill / 启停 / 密钥 / 测试 / 限流 / TTL / 降级链）
+        var tableHost = el("div", "");
+        body.appendChild(tableHost);
+        var rows = sources.map(function (item) {
+          var userDisabled = !!disabledSet[item.label];
+          return {
+            label: item.label,
+            state: connectorStateText(item, userDisabled),
+            tone: connectorTone(item, userDisabled),
+            enabled: item.enabled && !userDisabled,
+            key: item.label.indexOf("ai") >= 0 || item.label === "akshare（东财/新浪等）"
+              ? t("connectors.key.public")
+              : t("connectors.key.public"),
+            rate: item.rate_limit || "未登记",
+            ttl: item.ttl || "—",
+            fallback: item.fallback || "—",
+            detail: item.detail || ""
+          };
+        });
+        renderTable(tableHost, [
+          {
+            title: t("connectors.col.source"), cls: "l",
+            /** 源名列：中文标签 + 探测说明。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              var box = el("div", "");
+              box.appendChild(el("b", "", row.label));
+              if (row.detail) {
+                box.appendChild(el("div", "pg-card-sub", row.detail));
+              }
+              return box;
+            }
+          },
+          {
+            title: t("connectors.col.state"),
+            /** 状态 pill：按 tone 上色。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              return el("span", "chip " + (row.tone === "flat" ? "up" : row.tone === "warn" ? "warn" : "down"), row.state);
+            }
+          },
+          {
+            title: t("connectors.col.key"),
+            /** 密钥列：公开接口如实标注；AI 服务商密钥在设置页管理。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              return el("span", "pg-card-sub", row.key);
+            }
+          },
+          {
+            title: t("connectors.col.rate"),
+            /** 限流策略列。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              return el("span", "pg-card-sub", row.rate);
+            }
+          },
+          { title: t("connectors.col.ttl"), key: "ttl", cls: "mono" },
+          {
+            title: t("connectors.col.fallback"),
+            /** 降级链列。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              return el("span", "pg-card-sub", row.fallback);
+            }
+          },
+          {
+            title: t("connectors.col.actions"),
+            /** 操作列：测试连接 + 启用/停用。
+             * @param {Object} row 数据行
+             * @returns {HTMLElement} 单元格节点
+             */
+            render: function (row) {
+              var box = el("div", "page-toolbar");
+              var testBtn = el("button", "pg-btn", t("connectors.testConn"));
+              testBtn.type = "button";
+              testBtn.addEventListener("click", function (event) {
+                event.stopPropagation();
+                testBtn.disabled = true;
+                testBtn.textContent = t("connectors.testing");
+                fetch("/api/connectors/test?source=" + encodeURIComponent(row.label), { method: "POST" })
+                  .then(function (response) { return response.json(); })
+                  .then(function (result) {
+                    var payload = result.data || {};
+                    testBtn.textContent = payload.ok ? t("connectors.testOk") : t("connectors.testFail");
+                    toast(row.label + " · " + (payload.ok ? t("connectors.testOk") : t("connectors.testFail"))
+                      + (payload.detail ? "（" + payload.detail + "）" : ""));
+                  })
+                  .catch(function () {
+                    testBtn.textContent = t("connectors.testFail");
+                    toast(t("connectors.testFail"));
+                  })
+                  .then(function () { testBtn.disabled = false; });
+              });
+              box.appendChild(testBtn);
+              var toggleBtn = el("button", "pg-btn", row.enabled ? t("connectors.disable") : t("connectors.enable"));
+              toggleBtn.type = "button";
+              toggleBtn.addEventListener("click", function (event) {
+                event.stopPropagation();
+                fetch("/api/connectors/toggle", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ source: row.label, enabled: !row.enabled })
+                }).then(function (response) { return response.json(); })
+                  .then(function (result) {
+                    if (result.error) {
+                      toast(result.error);
+                      return;
+                    }
+                    toast(result.data && result.data.enabled ? t("connectors.enabledToast") : t("connectors.disabledToast"));
+                    renderConnectors();
+                  })
+                  .catch(function () { toast(t("connectors.toggleFail")); });
+              });
+              box.appendChild(toggleBtn);
+              return box;
+            }
+          }
+        ], rows, null, "tall");
+        body.appendChild(el("div", "pg-card-sub", t("connectors.keyNote")));
+
+        // C-03：三级降级链说明
+        var chainBody = document.getElementById("c03-body");
+        chainBody.innerHTML = "";
+        var chains = [
+          t("connectors.chain.quote"),
+          t("connectors.chain.fund"),
+          t("connectors.chain.news"),
+          t("connectors.chain.sector")
         ];
-        var rows = features.map(function (pair) {
+        var list = el("ul", "pg-news-list");
+        chains.forEach(function (text) {
+          var li = el("li", "pg-news-item");
+          li.appendChild(el("span", "pg-news-title", text));
+          list.appendChild(li);
+        });
+        chainBody.appendChild(list);
+        chainBody.setAttribute("data-state", "default");
+
+        // C-04：四市场能力矩阵（含场外基金列；缺口如实标注）
+        var matrixBody = document.getElementById("c04-body");
+        matrixBody.innerHTML = "";
+        var features = [
+          ["quote", t("connectors.feature.quote")],
+          ["kline", t("connectors.feature.kline")],
+          ["minute", t("connectors.feature.minute")],
+          ["index", t("connectors.feature.index")],
+          ["stock_news", t("connectors.feature.stockNews")],
+          ["sector", t("connectors.feature.sector")]
+        ];
+        var matrixRows = features.map(function (pair) {
           var row = { feature: pair[1] };
-          ["a", "hk", "us"].forEach(function (market) {
+          ["a", "hk", "us", "fund"].forEach(function (market) {
             var cell = ((data.markets || {})[market] || {})[pair[0]] || {};
-            row[market] = cell.available ? "✓ " + (cell.source || "") : "— 暂不可用";
+            row[market] = cell.available
+              ? "✓ " + (cell.source || "")
+              : t("connectors.unavailableShort");
           });
           return row;
         });
-        renderTable(wrap, [
-          { title: "能力", key: "feature", cls: "name" },
-          { title: "A股", key: "a" },
-          { title: "港股", key: "hk" },
-          { title: "美股", key: "us" }
-        ], rows, null, null);
+        var matrixHost = el("div", "");
+        matrixBody.appendChild(matrixHost);
+        renderTable(matrixHost, [
+          { title: t("connectors.featureLabel"), key: "feature", cls: "name" },
+          { title: t("stock.market.a"), key: "a" },
+          { title: t("sectors.market.hk"), key: "hk" },
+          { title: t("sectors.market.us"), key: "us" },
+          { title: t("nav.fund"), key: "fund" }
+        ], matrixRows, null, null);
 
         if ((data.gaps || []).length) {
-          body.appendChild(el("div", "pg-card-sub", "已确认缺口（D3 决策：不编造数据）"));
-          var list = el("ul", "pg-news-list");
+          matrixBody.appendChild(el("div", "pg-card-sub", t("connectors.gapTitle")));
+          var gapList = el("ul", "pg-news-list");
           data.gaps.forEach(function (gap) {
             var li = el("li", "pg-news-item");
             li.appendChild(el("span", "pg-news-title", gap.market_label + " · " + gap.feature_label));
-            li.appendChild(el("span", "chip down", "暂不可用"));
+            li.appendChild(el("span", "chip down", t("connectors.unavailable")));
             li.appendChild(el("span", "pg-news-time", gap.reason));
-            list.appendChild(li);
+            gapList.appendChild(li);
           });
-          body.appendChild(list);
+          matrixBody.appendChild(gapList);
         }
+        matrixBody.setAttribute("data-state", "default");
         body.setAttribute("data-state", "default");
       })
       .catch(function (error) {
@@ -3460,37 +4347,46 @@
     var container = document.getElementById(VIEW_IDS.yjb);
     container.innerHTML = "";
     var grid = el("div", "pg-grid");
-    var g1 = buildCard("Y-01", "合规告知书", "g-4", "首次启用前必须确认");
+    var g1 = buildCard("Y-01", t("yjb.consentTitle"), "g-4", t("yjb.consentSub"));
     g1.body.id = "y01-body";
-    var g2 = buildCard("Y-02", "连接状态", "g-4", "token 仅后端加密存储");
+    var g2 = buildCard("Y-02", t("yjb.statusTitle"), "g-4", t("yjb.statusSub"));
     g2.body.id = "y02-body";
-    var g3 = buildCard("Y-03", "扫码绑定", "g-4", "二维码 2 秒轮询");
+    var g3 = buildCard("Y-03", t("yjb.bindTitle"), "g-4", t("yjb.bindSub"));
     g3.body.id = "y03-body";
-    var g4 = buildCard("Y-04", "盘中估值", "g-12", "非官方·拟合估算·仅供参考·不构成投资建议");
+    var g4 = buildCard("Y-04", t("yjb.estimateTitle"), "g-12", t("yjb.estimateSub"));
     g4.body.id = "y04-body";
-    [g1, g2, g3, g4].forEach(function (item) { grid.appendChild(item.card); });
+    // Y-05 / Y-06：养基宝账户概览与持仓估值（数据来自 account_collect / fund_hold）
+    var g5 = buildCard("Y-05", t("yjb.collectTitle"), "g-12", t("yjb.collectSub"));
+    g5.body.id = "y05-body";
+    var g6 = buildCard("Y-06", t("yjb.holdTitle"), "g-12", t("yjb.holdSub"));
+    g6.body.id = "y06-body";
+    [g1, g2, g3, g4, g5, g6].forEach(function (item) { grid.appendChild(item.card); });
     container.appendChild(grid);
     var body = document.getElementById("y04-body");
     body.innerHTML = "";
     var toolbar = el("div", "page-toolbar");
-    toolbar.appendChild(el("span", "pg-card-sub", "基金代码"));
+    toolbar.appendChild(el("span", "pg-card-sub", t("fund.codeLabel")));
     var input = document.createElement("input");
     input.id = "yjb-code";
     input.value = "017811";
     input.style.cssText = "width:110px;background:var(--bg-panel);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px;font-family:var(--font-mono)";
     toolbar.appendChild(input);
-    var query = el("button", "pg-btn", "查询估值");
+    var query = el("button", "pg-btn", t("yjb.queryBtn"));
     query.type = "button";
     query.addEventListener("click", loadYjbEstimate);
     toolbar.appendChild(query);
     toolbar.appendChild(el("span", "pg-spacer"));
-    toolbar.appendChild(el("span", "badge-src state-degraded", "非官方通道"));
+    toolbar.appendChild(el("span", "badge-src state-degraded", t("yjb.unofficial")));
     body.appendChild(toolbar);
-    body.appendChild(el("div", "pg-card-sub", "本区域为拟合估算，不构成投资建议；可随时在左侧关闭增强通道回退 T+1 净值。"));
+    body.appendChild(el("div", "pg-card-sub", t("yjb.disclaimer")));
     var result = el("div", "");
     result.id = "yjb-result";
     body.appendChild(result);
+    // 该区块是本地表单，不发起加载请求，显式收口为默认态（四态巡检要求）
+    body.setAttribute("data-state", "default");
     loadYjbStatus();
+    loadYjbCollect();
+    loadYjbHoldings("all");
   }
 
   /** 加载连接器状态与告知书。 */
@@ -3519,14 +4415,14 @@
     text.style.overflow = "auto";
     body.appendChild(text);
     var row = el("div", "page-toolbar");
-    var tip = el("span", "chip " + (accepted ? "" : "down"), accepted ? "已确认" : "未确认");
+    var tip = el("span", "chip " + (accepted ? "" : "down"), accepted ? t("yjb.accepted") : t("yjb.unconfirmed"));
     row.appendChild(tip);
     if (!accepted) {
-      var agree = el("button", "pg-btn primary", "我已阅读并同意");
+      var agree = el("button", "pg-btn primary", t("yjb.agree"));
       agree.type = "button";
       agree.addEventListener("click", function () {
         apiSend("POST", "/api/fund/yjb/consent", { accepted: true }).then(function () {
-          toast("已记录确认");
+          toast(t("yjb.consentRecorded"));
           loadYjbStatus();
         });
       });
@@ -3543,9 +4439,9 @@
     var body = document.getElementById("y02-body");
     body.innerHTML = "";
     var grid = el("div", "pg-metric-grid");
-    [["绑定", data.bound ? "已绑定" : "未绑定"], ["增强通道", data.enabled ? "已开启" : "已关闭"],
-     ["签名密钥", data.secret_configured ? "已配置" : "未配置"],
-     ["安全存储", data.secure_storage ? "DPAPI" : "不可用"]].forEach(function (pair) {
+    [[t("yjb.kv.binding"), data.bound ? t("yjb.bound") : t("yjb.unbound")], [t("yjb.kv.enhanced"), data.enabled ? t("yjb.enabled") : t("yjb.disabled")],
+     [t("yjb.kv.secret"), data.secret_configured ? t("yjb.secretConfigured") : t("yjb.secretUnconfigured")],
+     [t("yjb.kv.security"), data.secure_storage ? t("yjb.secure.dpapi") : t("yjb.unavailable")]].forEach(function (pair) {
       var cell = el("div", "pg-metric-cell");
       cell.appendChild(el("div", "pg-metric-label", pair[0]));
       cell.appendChild(el("div", "pg-metric-value", pair[1]));
@@ -3553,20 +4449,35 @@
     });
     body.appendChild(grid);
     var row = el("div", "page-toolbar");
-    var toggle = el("button", "pg-btn", data.enabled ? "一键关闭增强通道" : "开启增强通道");
+    var toggle = el("button", "pg-btn", data.enabled ? t("yjb.toggle.offBtn") : t("yjb.toggle.onBtn"));
     toggle.type = "button";
     toggle.addEventListener("click", function () {
       apiSend("POST", "/api/fund/yjb/toggle", { enabled: !data.enabled })
-        .then(function () { toast(data.enabled ? "已关闭，回退 T+1 净值" : "已开启"); loadYjbStatus(); })
+        .then(function () { toast(data.enabled ? t("yjb.toggle.onToast") : t("yjb.toggle.offToast")); loadYjbStatus(); })
         .catch(function (error) { toast(error.message); });
     });
     row.appendChild(toggle);
     if (data.bound) {
-      var unbind = el("button", "pg-btn", "解绑");
+      var unbind = el("button", "pg-btn", t("yjb.unbind"));
       unbind.type = "button";
       unbind.addEventListener("click", function () {
-        apiSend("POST", "/api/fund/yjb/unbind", {}).then(function () {
-          toast("已解绑"); loadYjbStatus();
+        // RT-01 整改：解绑不可逆，必须先二次确认弹窗，再带 confirm=true 提交
+        if (!window.UI) {
+          return;
+        }
+        window.UI.modal({
+          title: t("yjb.unbind"),
+          message: t("yjb.unbindWarn"),
+          confirmText: t("yjb.unbindConfirm"),
+          danger: true,
+          /** 确认解绑：显式提交 confirm=true（后端无此标识一律拒绝执行）。
+           * @returns {void} 无返回值
+           */
+          onConfirm: function () {
+            apiSend("POST", "/api/fund/yjb/unbind", { confirm: true }).then(function () {
+              toast(t("yjb.unbindToast")); loadYjbStatus();
+            }).catch(function (error) { toast(error.message); });
+          }
         });
       });
       row.appendChild(unbind);
@@ -3574,6 +4485,84 @@
     body.appendChild(row);
     body.appendChild(el("div", "pg-card-sub", data.notice || ""));
     body.setAttribute("data-state", "default");
+  }
+
+  /** 签名盐配置区（R1）：仅在未配置或用户点「更新密钥」时展开。
+   * 密码框输入，提交后走 POST /api/fund/yjb/secret（后端 DPAPI 加密，不回显）。
+   * RT-01 整改：已配置时追加「清除签名盐」危险按钮（二次确认 + confirm=true）。
+   * @param {HTMLElement} host 容器节点
+   * @param {boolean} [secretConfigured] 当前是否已配置签名盐（决定是否显示清除按钮）
+   * @param {Function} [onCleared] 清除成功后的回调（默认刷新状态）
+   * @returns {void} 无返回值
+   */
+  function buildYjbSecretForm(host, secretConfigured, onCleared) {
+    host.innerHTML = "";
+    var row = el("div", "page-toolbar");
+    var newInput = document.createElement("input");
+    newInput.type = "password";
+    newInput.placeholder = t("yjb.secret.newPlaceholder");
+    newInput.autocomplete = "off";
+    newInput.style.cssText = "flex:1;min-width:120px;background:var(--bg-panel);" +
+      "border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px";
+    var oldInput = document.createElement("input");
+    oldInput.type = "password";
+    oldInput.placeholder = t("yjb.secret.oldPlaceholder");
+    oldInput.autocomplete = "off";
+    oldInput.style.cssText = newInput.style.cssText;
+    row.appendChild(newInput);
+    row.appendChild(oldInput);
+    var save = el("button", "pg-btn primary", t("yjb.secret.save"));
+    save.type = "button";
+    save.addEventListener("click", function () {
+      var payload = { new: newInput.value, old: oldInput.value };
+      if (!payload.new && !payload.old) {
+        toast(t("yjb.secret.empty"));
+        return;
+      }
+      save.disabled = true;
+      apiSend("POST", "/api/fund/yjb/secret", payload).then(function () {
+        // 立即清空输入框，避免明文停留在 DOM
+        newInput.value = "";
+        oldInput.value = "";
+        toast(t("yjb.secret.saved"));
+        loadYjbStatus();
+      }).catch(function (error) {
+        save.disabled = false;
+        toast(t("yjb.secret.saveFailed") + (error.message || ""));
+      });
+    });
+    row.appendChild(save);
+    host.appendChild(row);
+    // RT-01 整改：清除签名盐属不可逆操作，独立危险按钮 + 二次确认弹窗；
+    // 仅当已配置时才显示（未配置时无需清除）
+    if (secretConfigured) {
+      var clearRow = el("div", "page-toolbar");
+      var clearBtn = el("button", "pg-btn danger", t("yjb.secret.clear"));
+      clearBtn.type = "button";
+      clearBtn.addEventListener("click", function () {
+        if (!window.UI) {
+          return;
+        }
+        window.UI.modal({
+          title: t("yjb.secret.clear"),
+          message: t("yjb.secret.clearWarn"),
+          confirmText: t("yjb.secret.clear"),
+          danger: true,
+          /** 确认清除：仅提交 confirm=true（不带 new/old，后端据此判定清除意图）。
+           * @returns {void} 无返回值
+           */
+          onConfirm: function () {
+            apiSend("POST", "/api/fund/yjb/secret", { confirm: true }).then(function () {
+              toast(t("yjb.secret.clearToast"));
+              if (typeof onCleared === "function") { onCleared(); }
+            }).catch(function (error) { toast(t("yjb.secret.clearFailed") + (error.message || "")); });
+          }
+        });
+      });
+      clearRow.appendChild(clearBtn);
+      host.appendChild(clearRow);
+    }
+    host.appendChild(el("div", "pg-card-sub", t("yjb.secret.note")));
   }
 
   /** 二维码与轮询。
@@ -3584,14 +4573,17 @@
     body.innerHTML = "";
     if (!data.secret_configured) {
       var hint = el("div", "pg-state");
-      hint.appendChild(el("div", "pg-state-title", "扫码绑定不可用"));
-      hint.appendChild(el("div", "pg-state-hint",
-        "未配置养基宝签名密钥（YJB_SECRET_NEW/OLD），按规范不内置签名盐；可继续使用拟合估算与 T+1 净值。"));
+      hint.appendChild(el("div", "pg-state-title", t("yjb.qrUnavailable")));
+      hint.appendChild(el("div", "pg-state-hint", t("yjb.qrHint")));
       body.appendChild(hint);
+      // R1：提供加密输入框（DPAPI 落盘），未提供真实盐前仍保持「待配置」态
+      var formHost = el("div", "");
+      buildYjbSecretForm(formHost, false);
+      body.appendChild(formHost);
       body.setAttribute("data-state", "empty");
       return;
     }
-    var button = el("button", "pg-btn", "获取二维码");
+    var button = el("button", "pg-btn", t("yjb.qrButton"));
     button.type = "button";
     var box = el("div", "");
     button.addEventListener("click", function () {
@@ -3603,35 +4595,192 @@
           img.style.cssText = "width:200px;height:200px;background:#fff;border-radius:8px";
           box.appendChild(img);
         }
-        var state = el("div", "pg-card-sub", "等待扫码…");
+        var state = el("div", "pg-card-sub", t("yjb.qrWaiting"));
         state.id = "yjb-poll-state";
         box.appendChild(state);
+        // R9：轮询次数与间隔由后端 expires_in 推导，不再硬编码 60 次
+        var pollMs = 2000;
+        var ttlSec = Number(session.expires_in) > 0 ? Number(session.expires_in) : 120;
+        var maxAttempts = Math.max(1, Math.ceil((ttlSec * 1000) / pollMs));
         var attempts = 0;
         window.clearInterval(yjbTimer);
         yjbTimer = window.setInterval(function () {
           attempts += 1;
+          if (attempts > maxAttempts) {
+            window.clearInterval(yjbTimer);
+            state.textContent = t("yjb.qrTimeout");
+            return;
+          }
           api("/api/fund/yjb/poll", { session_id: session.session_id }).then(function (status) {
             state.textContent = status.message || status.state;
             if (status.state === "success") {
               window.clearInterval(yjbTimer);
               apiSend("POST", "/api/fund/yjb/bind", { session_id: session.session_id })
-                .then(function () { toast("绑定成功"); loadYjbStatus(); })
-                .catch(function (error) { state.textContent = "绑定失败：" + error.message; });
-            } else if (status.state === "expired" || status.state === "timeout") {
+                .then(function () { toast(t("yjb.bindSuccess")); loadYjbStatus(); })
+                .catch(function (error) { state.textContent = t("yjb.bindFailed") + error.message; });
+            } else if (status.state === "expired" || status.state === "timeout" || status.state === "error") {
               window.clearInterval(yjbTimer);
             }
           });
-          if (attempts > 60) {
-            window.clearInterval(yjbTimer);
-          }
-        }, 2000);
+        }, pollMs);
       }).catch(function (error) {
         box.textContent = error.message;
       });
     });
     body.appendChild(button);
     body.appendChild(box);
+    // 已配置时提供「更新密钥」入口：社区逆向盐随 App 版本漂移，需可随时替换
+    var update = el("button", "pg-btn", t("yjb.secret.update"));
+    update.type = "button";
+    var updateHost = el("div", "");
+    update.addEventListener("click", function () {
+      if (updateHost.childNodes.length) {
+        updateHost.innerHTML = "";
+        return;
+      }
+      // 已配置态：显示清除按钮；清除成功后整体刷新回到「待配置」引导
+      buildYjbSecretForm(updateHost, true, function () { loadYjbStatus(); });
+    });
+    body.appendChild(update);
+    body.appendChild(updateHost);
     body.setAttribute("data-state", "default");
+  }
+
+  /** Y-05：养基宝账户概览（总资产 / 今日估算收益 / 各账户明细）。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadYjbCollect() {
+    var body = document.getElementById("y05-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/fund/yjb/collect", {}).then(function (data) {
+      var card = document.getElementById("Y-05");
+      setBadges(card, data.source, data.caliber);
+      var accounts = data.accounts || [];
+      if (!data.total_assets && !accounts.length) {
+        setEmpty(body, t("yjb.notBoundHint"), function () { loadYjbCollect(); });
+        return;
+      }
+      body.innerHTML = "";
+      var kpis = el("div", "pg-kpis");
+      var items = [
+        [t("yjb.kpi.totalAssets"), fmt(data.total_assets, 2), "flat", t("yjb.kpi.yuan")],
+        [t("yjb.kpi.todayIncome"), (data.today_income > 0 ? "+" : "") + fmt(data.today_income, 2),
+          pctClass(data.today_income), t("yjb.kpi.estimateTag")],
+        [t("yjb.kpi.todayRate"), fmtPct(data.today_income_rate), pctClass(data.today_income_rate), ""],
+        [t("yjb.kpi.holdIncome"), (data.hold_income > 0 ? "+" : "") + fmt(data.hold_income, 2),
+          pctClass(data.hold_income), t("yjb.kpi.yuan")],
+        [t("yjb.kpi.accounts"), String(accounts.length), "flat", t("yjb.kpi.countTag")]
+      ];
+      items.forEach(function (row) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", row[0]));
+        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+        if (row[3]) {
+          box.appendChild(el("div", "pg-kpi-x", row[3]));
+        }
+        kpis.appendChild(box);
+      });
+      body.appendChild(kpis);
+      if (accounts.length) {
+        var list = el("div", "pg-kpi-accounts");
+        accounts.forEach(function (acc) {
+          var box = el("div", "pg-kpi-acc");
+          var head = el("div", "pg-kpi-acc-head");
+          head.appendChild(el("span", "pg-kpi-acc-name", acc.title || acc.id));
+          head.appendChild(el("span", "pg-kpi-acc-id", acc.id));
+          box.appendChild(head);
+          var rows = [
+            [t("yjb.kpi.todayIncome"), (acc.today_income > 0 ? "+" : "") + fmt(acc.today_income, 2), pctClass(acc.today_income)],
+            [t("yjb.kpi.todayRate"), fmtPct(acc.today_income_rate), pctClass(acc.today_income_rate)],
+            [t("yjb.kpi.holdIncome"), (acc.hold_income > 0 ? "+" : "") + fmt(acc.hold_income, 2), pctClass(acc.hold_income)],
+            [t("yjb.kpi.upDown"), acc.up + " / " + acc.down, "flat"]
+          ];
+          rows.forEach(function (r) {
+            var line = el("div", "pg-kpi-acc-row");
+            line.appendChild(el("span", "", r[0]));
+            line.appendChild(el("b", r[2], r[1]));
+            box.appendChild(line);
+          });
+          list.appendChild(box);
+        });
+        body.appendChild(list);
+      }
+      body.appendChild(el("div", "pg-card-sub", t("yjb.collectNote")));
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadYjbCollect(); });
+    });
+  }
+
+  /** Y-06：养基宝持仓与估值（支持账户 Tab 切换）。
+   * @param {string} accountId 账户 id；"all" 表示全部账户
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadYjbHoldings(accountId) {
+    var body = document.getElementById("y06-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/fund/yjb/holdings", { account_id: accountId || "all" }).then(function (data) {
+      var card = document.getElementById("Y-06");
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      body.innerHTML = "";
+      var bar = el("div", "page-toolbar");
+      var tabs = [{ id: "all", title: t("yjb.hold.all"), n: data.total }];
+      (data.accounts || []).forEach(function (acc) {
+        var n = items.filter(function (x) { return x.account_id === acc.id; }).length;
+        tabs.push({ id: acc.id, title: acc.title || acc.id, n: n });
+      });
+      var current = data.account_id || "all";
+      tabs.forEach(function (tab) {
+        var btn = el("button", "pg-btn" + (tab.id === current ? " primary" : ""),
+          tab.title + (current === "all" ? "（" + tab.n + "）" : ""));
+        btn.type = "button";
+        btn.addEventListener("click", function () { loadYjbHoldings(tab.id); });
+        bar.appendChild(btn);
+      });
+      bar.appendChild(el("span", "pg-spacer"));
+      bar.appendChild(el("span", "badge-src state-degraded", t("yjb.unofficial")));
+      body.appendChild(bar);
+
+      if (!items.length) {
+        setEmpty(body, t("yjb.hold.empty"), function () { loadYjbHoldings(current); });
+        return;
+      }
+      renderTable(body, [
+        {
+          title: t("yjb.hold.col.fund"), cls: "l",
+          /** 基金名称列：代码 + 简称。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "pg-sym");
+            box.appendChild(el("b", "", row.code));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          }
+        },
+        { title: t("yjb.hold.col.pct"), num: true, render: function (row) { return el("span", pctClass(row.pct), fmtPct(row.pct)); } },
+        { title: t("yjb.hold.col.nav"), num: true, render: function (row) { return row.nav === null ? t("value.none") : fmt(row.nav, 4); } },
+        { title: t("yjb.hold.col.share"), num: true, render: function (row) { return row.share === null ? t("value.none") : fmt(row.share, 2); } },
+        { title: t("yjb.hold.col.cost"), num: true, render: function (row) { return row.cost === null ? t("value.none") : fmt(row.cost, 4); } },
+        { title: t("yjb.hold.col.money"), num: true, render: function (row) { return row.money === null ? t("value.none") : fmt(row.money, 2); } },
+        { title: t("yjb.hold.col.earn"), num: true, render: function (row) { return row.hold_earn === null ? t("value.none") : el("span", pctClass(row.hold_earn), fmt(row.hold_earn, 2)); } },
+        { title: t("yjb.hold.col.account"), render: function (row) { return el("span", "pg-card-sub", row.account_title || row.account_id); } },
+        { title: t("yjb.hold.col.asOf"), render: function (row) { return el("span", "pg-card-sub", row.as_of || t("value.none")); } }
+      ], items, function (row) {
+        window.location.hash = "#/fund?code=" + row.code;
+      });
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadYjbHoldings(accountId); });
+    });
   }
 
   /** 查询估值（显示命中源与口径）。 */
@@ -3643,8 +4792,8 @@
       .then(function (data) {
         box.innerHTML = "";
         var grid = el("div", "pg-metric-grid");
-        [["最新估值", fmt(data.nav, 4)], ["日涨幅", fmtPct(data.day_growth)],
-         ["数据源", data.source || t("value.none")], ["覆盖度", data.coverage ? fmt(data.coverage, 2) + "%" : "无数据"]]
+        [[t("fund.estimateTitle"), fmt(data.nav, 4)], [t("fund.estimateGrowth"), fmtPct(data.day_growth)],
+         [t("fund.estimateSource"), data.source || t("value.none")], [t("fund.estimateCoverage"), data.coverage ? fmt(data.coverage, 2) + "%" : t("value.none")]]
           .forEach(function (pair) {
             var cell = el("div", "pg-metric-cell");
             cell.appendChild(el("div", "pg-metric-label", pair[0]));
@@ -3842,6 +4991,10 @@
         state.charting.market = document.getElementById("ch-market").value;
         state.charting.period = document.getElementById("ch-period").value;
         state.charting.adjust = document.getElementById("ch-adjust").value;
+        // R3-28：同步共享 store，行情页也能带上图表页最近一次标的
+        if (window.SymbolStore) {
+          window.SymbolStore.set(state.charting.symbol, state.charting.market);
+        }
         loadCharting();
       });
     }
@@ -3897,6 +5050,12 @@
     }
     if (params && params.market) {
       state.charting.market = params.market;
+    }
+    // R3-28：若无 URL 参数，自共享 store 带出最近标的
+    if ((!params || (!params.symbol && !params.market)) && window.SymbolStore) {
+      var shared = window.SymbolStore.get();
+      state.charting.symbol = shared.symbol || state.charting.symbol;
+      state.charting.market = shared.market || state.charting.market;
     }
     if (!container.querySelector("#ch-tabs")) {
       buildChartingShell(container);
@@ -4034,24 +5193,23 @@
     var markLines = chartingCache.lines.map(function (price) {
       return { yAxis: price };
     });
-    chart.setOption({
-      backgroundColor: "transparent",
-      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-      axisPointer: { link: [{ xAxisIndex: "all" }] },
+    // P1-14：K线 option 脚手架委托 window.Utils.buildCandlestickOption
+    chart.setOption(window.Utils.buildCandlestickOption(theme, dates, ohlc, volumes, {
+      candleName: t("chart.series.candle"),
       legend: { textStyle: { color: theme.text }, top: 0 },
-      grid: [
+      grids: [
         { left: 56, right: 16, top: 28, height: "42%" },
         { left: 56, right: 16, top: "74%", height: "7%" },
         { left: 56, right: 16, top: "83%", height: "8%" },
         { left: 56, right: 16, top: "93%", height: "6%" }
       ],
-      xAxis: [
+      xAxes: [
         { type: "category", data: dates, axisLabel: { color: theme.text }, axisLine: { lineStyle: { color: theme.border } } },
         { type: "category", gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } },
         { type: "category", gridIndex: 2, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } },
         { type: "category", gridIndex: 3, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: theme.border } } }
       ],
-      yAxis: [
+      yAxes: [
         { scale: true, axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
         { gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
         { gridIndex: 2, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
@@ -4080,7 +5238,7 @@
         { name: "D", type: "line", xAxisIndex: 3, yAxisIndex: 3, data: kdj.d, showSymbol: false, lineStyle: { width: 1 }, color: "#4c8df6" },
         { name: "J", type: "line", xAxisIndex: 3, yAxisIndex: 3, data: kdj.j, showSymbol: false, lineStyle: { width: 1 }, color: "#b07cf0" }
       ]
-    });
+    }));
     // 画线交互：开启后点击主图，按像素坐标换算价格，添加水平参考线（本地标注不写回数据）
     chart.off("click");
     if (state.charting.draw) {
@@ -4190,22 +5348,103 @@
     container.innerHTML = "";
     var grid = el("div", "pg-grid");
 
-    // —— AI 设置卡：base_url / api_key / model，保存走 POST /api/ai/config ——
+    // —— S-01 AI 设置卡：服务商预设 / base_url / api_key / model + 测试连接 ——
     var aiCard = buildCard("ST-AI", t("set.card.ai"), "g-12", t("set.card.aiSub"));
     aiCard.body.id = "set-ai-body";
     grid.appendChild(aiCard.card);
 
-    // —— 主题与缓存卡：主题切换开关 + 缓存清理入口（唯一定位在连接器页） ——
+    // —— S-02 外观卡：主题切换 + 字号档位（CSS 变量缩放，即时生效） ——
     var themeCard = buildCard("ST-TH", t("set.card.theme"), "g-6", t("set.card.themeSub"));
     themeCard.body.id = "set-theme-body";
     grid.appendChild(themeCard.card);
 
-    // —— 关于卡：版本/构建标识/数据口径声明 ——
-    var aboutCard = buildCard("ST-AB", t("set.card.about"), "g-6", t("set.card.aboutSub"));
+    // —— S-03 缓存卡：内存/磁盘/布局占用 + TTL 口径 + 清理（R3-13） ——
+    var cacheCard = buildCard("ST-CA", t("set.card.cache"), "g-6", t("set.card.cacheSub"));
+    cacheCard.body.id = "set-cache-body";
+    grid.appendChild(cacheCard.card);
+
+    // —— S-04 数据与合规卡（R3-13）：盘中估值 + 养基宝增强通道两个 opt-in 开关 ——
+    var complianceCard = buildCard("ST-CP", t("set.card.compliance"), "g-12", t("set.card.complianceSub"));
+    complianceCard.body.id = "set-compliance-body";
+    grid.appendChild(complianceCard.card);
+
+    // —— S-05 关于卡：版本/许可证/数据源数 + 日志导出 + 恢复出厂 ——
+    var aboutCard = buildCard("ST-AB", t("set.card.about"), "g-12", t("set.card.aboutSub"));
     aboutCard.body.id = "set-about-body";
     grid.appendChild(aboutCard.card);
 
     container.appendChild(grid);
+  }
+
+  /** 渲染「数据与合规」卡：盘中估值 + 养基宝增强通道两个 opt-in 开关（R3-13 S-04）。
+   * 两个开关默认均为关；关闭后相关通道立即回退 T+1 官方净值口径。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintSettingsCompliance() {
+    var body = document.getElementById("set-compliance-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/fund/estimation", {})
+      .then(function (data) {
+        body.innerHTML = "";
+        var row = el("div", "page-toolbar");
+        row.appendChild(el("span", "pg-toolbar-label", t("set.estimation.label")));
+        var toggle = el("button", "pg-btn" + (data.enabled ? " primary" : ""),
+          data.enabled ? t("set.estimation.on") : t("set.estimation.off"));
+        toggle.type = "button";
+        toggle.addEventListener("click", function () {
+          fetch("/api/fund/estimation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: !data.enabled })
+          }).then(function (response) { return response.json(); })
+            .then(function (res) {
+              if (res.error) {
+                toast(res.error);
+                return;
+              }
+              toast(t("set.estimation.toggled"));
+              paintSettingsCompliance();
+            })
+            .catch(function () { toast(t("set.estimation.fail")); });
+        });
+        row.appendChild(toggle);
+        body.appendChild(row);
+        // 常驻口径角标：估算非官方，关闭即回退 T+1
+        body.appendChild(el("div", "pg-card-sub", t("set.estimation.note")));
+
+        // 养基宝增强通道开关（Y-04 一级估值通道；未绑定时引导去扫码）
+        return api("/api/fund/yjb/status", {}).then(function (yjb) {
+          var yjbRow = el("div", "page-toolbar");
+          yjbRow.appendChild(el("span", "pg-toolbar-label", t("set.yjb.label")));
+          if (!yjb.bound) {
+            yjbRow.appendChild(el("span", "pg-card-sub", t("set.yjb.unbound")));
+            body.appendChild(yjbRow);
+            body.setAttribute("data-state", "default");
+            return;
+          }
+          var yjbToggle = el("button", "pg-btn" + (yjb.enabled ? " primary" : ""),
+            yjb.enabled ? t("set.yjb.on") : t("set.yjb.off"));
+          yjbToggle.type = "button";
+          yjbToggle.addEventListener("click", function () {
+            apiPost("/api/fund/yjb/toggle", { enabled: !yjb.enabled })
+              .then(function () {
+                toast(t("set.yjb.toggled"));
+                paintSettingsCompliance();
+              })
+              .catch(function (error) { toast(error.message); });
+          });
+          yjbRow.appendChild(yjbToggle);
+          body.appendChild(yjbRow);
+          body.appendChild(el("div", "pg-card-sub", t("set.yjb.note")));
+          body.setAttribute("data-state", "default");
+        });
+      })
+      .catch(function (error) {
+        setError(body, error.message, function () { paintSettingsCompliance(); });
+      });
   }
 
   /** AI 配置表单字段构造（输入框样式与持仓页表单一致）。
@@ -4228,7 +5467,7 @@
     return input;
   }
 
-  /** 渲染 AI 设置卡：回显当前配置（掩码）+ 保存。 */
+  /** 渲染 AI 设置卡：服务商预设 + 配置回显（掩码）+ 保存 + 测试连接。 */
   function paintSettingsAI() {
     var body = document.getElementById("set-ai-body");
     if (!body) {
@@ -4239,6 +5478,24 @@
       .then(function (data) {
         body.innerHTML = "";
         var form = el("div", "page-toolbar");
+        form.appendChild(el("span", "pg-toolbar-label", t("set.label.provider")));
+        var provider = document.createElement("select");
+        provider.id = "set-provider";
+        provider.style.cssText = "background:var(--bg-panel);border:1px solid var(--border);"
+          + "color:var(--text);border-radius:5px;padding:4px 8px";
+        [
+          { value: "deepseek", label: "DeepSeek", base: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+          { value: "qwen", label: "通义千问", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
+          { value: "custom", label: t("set.provider.custom"), base: "", model: "" }
+        ].forEach(function (preset) {
+          var option = document.createElement("option");
+          option.value = preset.value;
+          option.textContent = preset.label;
+          option.dataset.base = preset.base;
+          option.dataset.model = preset.model;
+          provider.appendChild(option);
+        });
+        form.appendChild(provider);
         form.appendChild(el("span", "pg-toolbar-label", t("set.label.baseUrl")));
         form.appendChild(settingsField("set-base-url", t("set.placeholder.baseUrl"), 240));
         form.appendChild(el("span", "pg-toolbar-label", t("set.label.apiKey")));
@@ -4250,16 +5507,39 @@
         save.type = "button";
         save.id = "set-ai-save";
         form.appendChild(save);
+        // 测试连接：用当前表单值直连上游探测（api_key 留空时用已保存密钥）
+        var testBtn = el("button", "pg-btn", t("set.action.test"));
+        testBtn.type = "button";
+        testBtn.id = "set-ai-test";
+        form.appendChild(testBtn);
         body.appendChild(form);
         // 回显：base_url/model 明文（非敏感），api_key 只显示掩码状态
         document.getElementById("set-base-url").value = data.base_url || "";
         document.getElementById("set-model").value = data.model || "";
+        // 按已保存的 base_url 反选服务商预设（匹配不到回落 custom）
+        var matched = "custom";
+        Array.prototype.slice.call(provider.options).forEach(function (option) {
+          if (option.dataset.base && option.dataset.base === (data.base_url || "")) {
+            matched = option.value;
+          }
+        });
+        provider.value = matched;
+        // 选择预设时自动填充 base_url/model（custom 不动已填内容）
+        provider.addEventListener("change", function () {
+          var option = provider.options[provider.selectedIndex];
+          if (!option || !option.dataset || !option.dataset.base) {
+            return;
+          }
+          document.getElementById("set-base-url").value = option.dataset.base;
+          document.getElementById("set-model").value = option.dataset.model;
+        });
         var status = el("div", "pg-card-sub");
         status.id = "set-ai-status";
         status.textContent = data.configured
           ? t("set.ai.configured", { model: data.model || t("set.ai.modelEmpty"), key: data.api_key || t("set.ai.keyMasked") })
           : t("set.ai.notConfigured");
         body.appendChild(status);
+        body.appendChild(el("div", "pg-card-sub", t("set.ai.securityNote")));
         body.setAttribute("data-state", "default");
 
         save.addEventListener("click", function () {
@@ -4288,13 +5568,43 @@
               save.textContent = t("set.action.save");
             });
         });
+
+        // 测试连接：加载态 + 结果 toast（R3-13）
+        testBtn.addEventListener("click", function () {
+          if (state.settings.testing) {
+            return;
+          }
+          state.settings.testing = true;
+          testBtn.disabled = true;
+          testBtn.textContent = t("set.action.testing");
+          apiPost("/api/ai/test", {
+            base_url: (document.getElementById("set-base-url").value || "").trim(),
+            api_key: (document.getElementById("set-api-key").value || "").trim(),
+            model: (document.getElementById("set-model").value || "").trim()
+          })
+            .then(function (detail) {
+              // apiPost 成功即代表探测通过：data 透传 {ok, latency_ms, detail}
+              toast(t("set.toast.testOk", { ms: (detail && detail.latency_ms) || 0 }));
+            })
+            .catch(function (error) {
+              // 业务失败（未配置/鉴权/超时/上游异常）走 reject，error.message 已是中文
+              toast(t("set.toast.testFail", { message: error.message }));
+            })
+            .then(function () {
+              state.settings.testing = false;
+              testBtn.disabled = false;
+              testBtn.textContent = t("set.action.test");
+            });
+        });
       })
       .catch(function (error) {
         setError(body, error.message, paintSettingsAI);
       });
   }
 
-  /** 渲染主题与缓存卡：主题切换 + 缓存清理引导（唯一定位在连接器页）。 */
+  /** 渲染外观卡：主题切换 + 字号档位（R3-13 S-02）。
+   * 字号通过 html 的 data-font 属性 + CSS 变量缩放，立即生效并持久化。
+   */
   function paintSettingsTheme() {
     var body = document.getElementById("set-theme-body");
     if (!body) {
@@ -4331,19 +5641,117 @@
       toast(t("set.theme.toggled"));
     });
 
-    var cacheRow = el("div", "page-toolbar");
-    cacheRow.appendChild(el("span", "pg-toolbar-label", t("set.cache.label")));
-    var jump = el("button", "pg-btn", t("set.cache.jump"));
-    jump.type = "button";
-    jump.addEventListener("click", function () {
-      window.location.hash = "#/connectors";
+    // 字号档位：小/中/大 → html[data-font] → CSS 变量缩放（R3-13 S-02）
+    var fontRow = el("div", "page-toolbar");
+    fontRow.appendChild(el("span", "pg-toolbar-label", t("set.font.label")));
+    var currentFont = document.documentElement.getAttribute("data-font") || "md";
+    [
+      { value: "sm", label: t("set.font.sm") },
+      { value: "md", label: t("set.font.md") },
+      { value: "lg", label: t("set.font.lg") }
+    ].forEach(function (item) {
+      var button = el("button", "pg-btn" + (currentFont === item.value ? " primary" : ""), item.label);
+      button.type = "button";
+      button.addEventListener("click", function () {
+        document.documentElement.setAttribute("data-font", item.value);
+        try {
+          window.localStorage.setItem("openbb-font", item.value);
+        } catch (error) {
+          /* 隐私模式下忽略持久化，字号仍生效 */
+        }
+        charts.forEach(function (instance) {
+          try {
+            instance.resize();
+          } catch (error) {
+            /* 已释放则忽略 */
+          }
+        });
+        toast(t("set.font.toggled", { label: item.label }));
+        paintSettingsTheme();
+      });
+      fontRow.appendChild(button);
     });
-    cacheRow.appendChild(jump);
-    body.appendChild(cacheRow);
+    body.appendChild(fontRow);
+    body.appendChild(el("div", "pg-card-sub", t("set.font.note")));
     body.setAttribute("data-state", "default");
   }
 
-  /** 渲染关于卡：版本/构建标识（/api/health）+ 合规声明。 */
+  /** 渲染缓存卡：占用统计 + TTL 口径表 + 清理按钮（R3-13 S-03）。 */
+  function paintSettingsCache() {
+    var body = document.getElementById("set-cache-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/cache/stats", {})
+      .then(function (data) {
+        body.innerHTML = "";
+        var grid = el("div", "pg-metric-grid");
+        [
+          [t("set.cache.memory"), data.memory + " " + t("set.cache.entries") + " · " + (data.memory_mb || 0) + " MB", "flat"],
+          [t("set.cache.disk"), data.disk + " " + t("set.cache.files") + " · " + (data.disk_mb || 0) + " MB", "flat"],
+          [t("set.cache.layout"), (data.layout_kb || 0) + " KB", "flat"]
+        ].forEach(function (item) {
+          var cell = el("div", "pg-metric-cell");
+          cell.appendChild(el("div", "pg-metric-label", item[0]));
+          cell.appendChild(el("div", "pg-metric-value " + item[2], String(item[1])));
+          grid.appendChild(cell);
+        });
+        body.appendChild(grid);
+
+        var row = el("div", "page-toolbar");
+        var clearBtn = el("button", "pg-btn", t("set.cache.clear"));
+        clearBtn.type = "button";
+        clearBtn.addEventListener("click", function () {
+          clearBtn.disabled = true;
+          clearBtn.textContent = t("set.cache.clearing");
+          fetch("/api/cache/clear", { method: "POST" })
+            .then(function (response) { return response.json(); })
+            .then(function (result) {
+              toast(result.error ? t("toast.cacheFailed") : t("toast.cacheCleared"));
+              paintSettingsCache();
+            })
+            .catch(function () { toast(t("toast.cacheFailed")); })
+            .then(function () {
+              clearBtn.disabled = false;
+              clearBtn.textContent = t("set.cache.clear");
+            });
+        });
+        row.appendChild(clearBtn);
+        row.appendChild(el("span", "pg-spacer"));
+        row.appendChild(el("span", "pg-card-sub", t("set.cache.scope")));
+        body.appendChild(row);
+
+        // TTL 口径表（与 07_数据 数据字典 §9 同源）
+        var table = el("table", "pg-table");
+        var head = document.createElement("tr");
+        [t("set.cache.ttlKey"), t("set.cache.ttlValue"), t("set.cache.ttlNote")].forEach(function (label) {
+          var th = document.createElement("th");
+          th.textContent = label;
+          head.appendChild(th);
+        });
+        table.appendChild(head);
+        (data.ttl_map || []).forEach(function (item) {
+          var tr = document.createElement("tr");
+          [item.key, String(item.ttl), item.note || "—"].forEach(function (text, index) {
+            var td = document.createElement("td");
+            td.textContent = text;
+            if (index === 0) {
+              td.className = "mono";
+            }
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+        body.appendChild(table);
+        body.setAttribute("data-state", "default");
+      })
+      .catch(function (error) {
+        setError(body, error.message, paintSettingsCache);
+      });
+  }
+
+  /** 渲染关于卡：版本/许可证/数据源数 + 日志导出 + 恢复出厂（R3-13 S-05）。 */
   function paintSettingsAbout() {
     var body = document.getElementById("set-about-body");
     if (!body) {
@@ -4360,6 +5768,7 @@
           [t("set.about.build"), data.build || "—"],
           [t("set.about.python"), data.python || "—"],
           [t("set.about.datasources"), t("set.about.datasourcesValue", { count: Object.keys(data.datasources || {}).length })],
+          [t("set.about.license"), t("set.about.licenseValue")],
           [t("set.about.serverTime"), data.server_time || "—"]
         ];
         var table = el("table", "pg-table");
@@ -4374,6 +5783,53 @@
           table.appendChild(tr);
         });
         body.appendChild(table);
+
+        // 日志导出：GET /api/logs/export 直接下载 zip
+        var row = el("div", "page-toolbar");
+        var exportBtn = el("button", "pg-btn", t("set.about.exportLogs"));
+        exportBtn.type = "button";
+        exportBtn.addEventListener("click", function () {
+          exportBtn.disabled = true;
+          window.open("/api/logs/export", "_blank");
+          toast(t("set.about.exportStarted"));
+          exportBtn.disabled = false;
+        });
+        row.appendChild(exportBtn);
+
+        // 恢复出厂：二次确认弹窗（R3-13）；只清应用偏好，不动持仓/自选/密钥
+        var resetBtn = el("button", "pg-btn danger", t("set.about.factoryReset"));
+        resetBtn.type = "button";
+        resetBtn.addEventListener("click", function () {
+          if (!window.UI) {
+            return;
+          }
+          window.UI.modal({
+            title: t("set.about.factoryReset"),
+            message: t("set.about.factoryWarn"),
+            confirmText: t("set.about.factoryConfirm"),
+            danger: true,
+            /** 确认恢复出厂：显式提交 confirm + 全部偏好 scope。
+             * @returns {void} 无返回值
+             */
+            onConfirm: function () {
+              apiPost("/api/factory-reset", {
+                confirm: true,
+                scopes: ["prefs", "connectors", "dashboards", "ai"]
+              })
+                .then(function (result) {
+                  var removed = (result && result.removed) || [];
+                  toast(removed.length
+                    ? t("set.about.factoryDone", { n: removed.length })
+                    : t("set.about.factoryNothing"));
+                  paintSettingsAbout();
+                })
+                .catch(function (error) { toast(error.message); });
+            }
+          });
+        });
+        row.appendChild(resetBtn);
+        body.appendChild(row);
+        body.appendChild(el("div", "pg-card-sub", t("set.about.factoryNote")));
         body.appendChild(el("div", "pg-card-sub", t("set.about.disclaimer")));
         body.setAttribute("data-state", "default");
       })
@@ -4382,7 +5838,7 @@
       });
   }
 
-  /** 渲染置页入口：骨架 + 三卡数据。 */
+  /** 渲染置页入口：骨架 + 五卡数据（AI/外观/缓存/合规/关于）。 */
   function renderSettings() {
     var container = document.getElementById(VIEW_IDS.settings);
     if (!container.querySelector("#set-ai-body")) {
@@ -4390,7 +5846,9 @@
     }
     paintSettingsAI();
     paintSettingsTheme();
+    paintSettingsCache();
     paintSettingsAbout();
+    paintSettingsCompliance();
   }
 
   // =============================================================
@@ -4411,6 +5869,486 @@
           }
         });
       }, 120);
+    });
+  }
+
+
+  // =============================================================
+  // 二十一、自选股（W-01/W-02）与龙虎榜·北向（L-01~L-03）
+  // 设计基准：新增功能设计基准_20261022.md；数据全部真实接口，无演示数据
+  // =============================================================
+  var MARKET_LABELS = { a: "A股", hk: "港股", us: "美股", fund: "场外基金" };
+
+  /** 市场中文标签。
+   * @param {string} market 市场标识
+   * @returns {string} 中文标签
+   */
+  function marketLabel(market) {
+    return MARKET_LABELS[market] || market;
+  }
+
+  /** 渲染自选股页（W-01 概览 + W-02 行情表）。
+   */
+  /** 当前自选分组过滤（W-02 分组 chips / W-03 侧栏树共用，空=全部）。
+   * @type {string}
+   */
+  var watchlistGroup = "";
+
+  /** 渲染自选股页（W-01 概览 + W-02 分组筛选 + 行情表）。
+   * @param {Object} params 查询参数（支持 group=a/hk/us/fund 预过滤，来自侧栏树）
+   * @returns {void} 无返回值
+   */
+  function renderWatchlist(params) {
+    var page = document.getElementById("page-watchlist");
+    if (!page) {
+      return;
+    }
+    watchlistGroup = (params && params.group) || "";
+    page.innerHTML = "";
+    var grid = el("div", "pg-grid");
+    var w1 = buildCard("W-01", t("watchlist.overview"), "g-12", t("watchlist.overviewSub"));
+    w1.body.id = "w01-body";
+    grid.appendChild(w1.card);
+    var w2 = buildCard("W-02", t("watchlist.tableTitle"), "g-12", t("watchlist.tableSub"));
+    w2.body.id = "w02-body";
+    grid.appendChild(w2.card);
+    page.appendChild(grid);
+    loadWatchlist();
+  }
+
+  /** 拉取并渲染自选股（force=true 时绕过前端无缓存直接刷新）。
+   * @param {boolean} force 是否强制刷新
+   * @returns {void} 无返回值（异步渲染）
+   */
+  /** W-03：渲染侧栏「自选股」分组树（我的自选 + 市场分组 + 数量徽章）。
+   * 数据源与 W-02 chips 相同（counts.by_market），点击分组进入自选页并预过滤。
+   * @param {Object} byMarket 市场 → 数量 映射
+   * @param {number} total 自选总数
+   * @returns {void} 无返回值
+   */
+  function renderWatchlistTree(byMarket, total) {
+    var host = document.getElementById("sidebar-watchlist-groups");
+    if (!host) {
+      return;
+    }
+    host.innerHTML = "";
+    if (!total) {
+      return; // 空清单不渲染分组（避免 0 徽章噪音）
+    }
+    [
+      ["a", t("watchlist.group.a")],
+      ["hk", t("watchlist.group.hk")],
+      ["us", t("watchlist.group.us")],
+      ["fund", t("watchlist.group.fund")]
+    ].forEach(function (pair) {
+      var count = (byMarket || {})[pair[0]] || 0;
+      if (!count) {
+        return; // 无成员的组不展示
+      }
+      var li = el("li", "sidebar-item sidebar-sub");
+      li.setAttribute("data-action", "view");
+      li.setAttribute("data-view", "watchlist");
+      // app.js bindSidebar 按 data-view-target 拼 hash，缺失会导致点击无响应
+      li.setAttribute("data-view-target", "watchlist");
+      li.dataset.group = pair[0];
+      var label = el("span", "", pair[1]);
+      li.appendChild(label);
+      li.appendChild(el("span", "sidebar-count", String(count)));
+      host.appendChild(li);
+    });
+  }
+
+  function loadWatchlist(force) {
+    var body1 = document.getElementById("w01-body");
+    var body2 = document.getElementById("w02-body");
+    if (!body1 || !body2) {
+      return;
+    }
+    setLoading(body1);
+    setLoading(body2);
+    api("/api/watchlist").then(function (data) {
+      var counts = data.counts || {};
+      var card1 = document.getElementById("W-01");
+      setBadges(card1, data.source, data.caliber);
+      body1.innerHTML = "";
+      var grid = el("div", "pg-metric-grid");
+      [
+        [t("watchlist.count"), counts.total || 0, "flat"],
+        [t("watchlist.up"), counts.up || 0, "up"],
+        [t("watchlist.down"), counts.down || 0, "down"],
+        [t("watchlist.flat"), counts.flat || 0, "flat"],
+        [t("watchlist.asOf"), String(data.as_of || "").slice(11, 19), "flat"]
+      ].forEach(function (item) {
+        var cell = el("div", "pg-metric-cell");
+        cell.appendChild(el("div", "pg-metric-label", item[0]));
+        cell.appendChild(el("div", "pg-metric-value " + item[2], String(item[1])));
+        grid.appendChild(cell);
+      });
+      body1.appendChild(grid);
+      body1.setAttribute("data-state", "default");
+
+      var rows = data.items || [];
+      var byMarket = (counts.by_market) || {};
+      // W-03：侧栏自选分组树（当前市场分布 + 数量徽章），与 W-02 chips 同源
+      renderWatchlistTree(byMarket, counts.total || 0);
+      if (watchlistGroup) {
+        rows = rows.filter(function (row) { return row.market === watchlistGroup; });
+      }
+      if (!rows.length) {
+        if (watchlistGroup) {
+          setEmpty(body2, t("watchlist.groupEmpty"), function () {
+            watchlistGroup = "";
+            loadWatchlist(true);
+          });
+          return;
+        }
+        setEmpty(body2, data.empty_note || t("watchlist.empty"), function () { loadWatchlist(true); });
+        return;
+      }
+      renderTable(body2, [
+        {
+          title: t("watchlist.col.name"), cls: "l",
+          /** 名称列：代码加粗 + 名称。
+           * @param {Object} row 自选行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.symbol));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          }
+        },
+        { title: t("watchlist.col.market"), cls: "l", render: function (row) { return marketLabel(row.market); } },
+        { title: t("watchlist.col.price"), num: true, render: function (row) { return fmt((row.quote || {}).price, 2); } },
+        { title: t("watchlist.col.change"), num: true, render: function (row) { var q = row.quote || {}; return el("span", pctClass(q.change), fmt(q.change, 2)); } },
+        { title: t("watchlist.col.pct"), num: true, render: function (row) { var q = row.quote || {}; return el("span", pctClass(q.pct), fmtPct(q.pct)); } },
+        { title: t("watchlist.col.amount"), num: true, render: function (row) { return fmtAmount((row.quote || {}).amount); } },
+        { title: t("watchlist.col.pe"), num: true, render: function (row) { return fmt((row.quote || {}).pe_ttm, 2); } },
+        {
+          title: "", cls: "l",
+          /** 操作列：移除按钮（二次确认后 DELETE）。
+           * @param {Object} row 自选行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var btn = el("button", "pg-btn", t("watchlist.remove"));
+            btn.type = "button";
+            btn.addEventListener("click", function (event) {
+              event.stopPropagation();
+              if (!window.confirm(t("watchlist.removeConfirm"))) {
+                return;
+              }
+              sendJson("DELETE", "/api/watchlist/" + encodeURIComponent(row.symbol)
+                + "?market=" + encodeURIComponent(row.market)).then(function () {
+                toast(t("watchlist.removed"));
+                loadWatchlist(true);
+              }).catch(function (error) {
+                toast(error.message || t("state.errorHint"));
+              });
+            });
+            return btn;
+          }
+        }
+      ], rows, function (row) {
+        if (row.market === "fund") {
+          window.location.hash = "#/fund?code=" + row.symbol;
+        } else {
+          window.location.hash = "#/stock?symbol=" + row.symbol + "&market=" + row.market;
+        }
+      });
+      // W-02：分组筛选 chips 必须在 renderTable 之后追加——renderTable 会清空容器
+      var chips = el("div", "pg-tabs");
+      [
+        ["", t("watchlist.group.all"), counts.total || 0],
+        ["a", t("watchlist.group.a"), byMarket.a || 0],
+        ["hk", t("watchlist.group.hk"), byMarket.hk || 0],
+        ["us", t("watchlist.group.us"), byMarket.us || 0],
+        ["fund", t("watchlist.group.fund"), byMarket.fund || 0]
+      ].forEach(function (chip) {
+        var btn = el("button", "pg-tab" + (watchlistGroup === chip[0] ? " active" : ""),
+          chip[1] + "（" + chip[2] + "）");
+        btn.type = "button";
+        btn.addEventListener("click", function () {
+          watchlistGroup = chip[0];
+          loadWatchlist(true);
+        });
+        chips.appendChild(btn);
+      });
+      body2.appendChild(chips);
+    }).catch(function (error) {
+      setError(body1, error.message || t("state.errorHint"), function () { loadWatchlist(true); });
+      setError(body2, error.message || t("state.errorHint"), function () { loadWatchlist(true); });
+    });
+  }
+
+  /** 渲染龙虎榜·北向页（L-01 图 + L-02 Top10 + L-03 明细 + L-04 机构席位 + L-05 营业部）。
+   */
+  function renderLhb() {
+    var page = document.getElementById("page-lhb");
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var grid = el("div", "pg-grid");
+    var l1 = buildCard("L-01", t("lhb.northTitle"), "g-7", t("lhb.northSub"));
+    l1.body.id = "l01-body";
+    grid.appendChild(l1.card);
+    var l2 = buildCard("L-02", t("lhb.topTitle"), "g-5", t("lhb.topSub"));
+    l2.body.id = "l02-body";
+    grid.appendChild(l2.card);
+    var l3 = buildCard("L-03", t("lhb.detailTitle"), "g-12", t("lhb.detailSub"));
+    l3.body.id = "l03-body";
+    grid.appendChild(l3.card);
+    // R3-18：机构席位统计（stock_lhb_jgmmtj_em）与活跃营业部（stock_lhb_hyyyb_em）
+    var l4 = buildCard("L-04", t("lhb.instTitle"), "g-7", t("lhb.instSub"));
+    l4.body.id = "l04-body";
+    grid.appendChild(l4.card);
+    var l5 = buildCard("L-05", t("lhb.brokerTitle"), "g-5", t("lhb.brokerSub"));
+    l5.body.id = "l05-body";
+    grid.appendChild(l5.card);
+    page.appendChild(grid);
+    loadNorthbound();
+    loadNorthTop();
+    loadLhb();
+    loadLhbInstitution();
+    loadLhbBroker();
+  }
+
+  /** L-04：龙虎榜机构席位统计（按票汇总买方/卖方机构数与净买额）。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadLhbInstitution() {
+    var body = document.getElementById("l04-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/moneyflow/lhb-institution", { limit: 50 }).then(function (data) {
+      var card = document.getElementById("L-04");
+      // 双徽章：徽章1=源（含 akshare 函数名），徽章2=口径（含统计区间）
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      if (!items.length) {
+        setEmpty(body, data.note || t("lhb.instEmpty"), function () { loadLhbInstitution(); });
+        return;
+      }
+      renderTable(body, [
+        {
+          title: t("watchlist.col.name"), cls: "l",
+          /** 名称列：代码加粗 + 名称。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.code));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          }
+        },
+        { title: t("lhb.col.pct"), num: true, render: function (row) { return el("span", pctClass(row.pct), fmtPct(row.pct)); } },
+        { title: t("lhb.col.buyOrgs"), num: true, render: function (row) { return fmt(row.buy_orgs, 0); } },
+        { title: t("lhb.col.sellOrgs"), num: true, render: function (row) { return fmt(row.sell_orgs, 0); } },
+        { title: t("lhb.col.netBuy"), num: true, render: function (row) { return el("span", pctClass(row.net_buy), fmt(row.net_buy, 2)); } },
+        { title: t("lhb.col.ratio"), num: true, render: function (row) { return row.ratio === null || row.ratio === undefined ? t("value.none") : fmt(row.ratio, 2) + "%"; } },
+        {
+          title: t("lhb.col.reason"), cls: "l",
+          /** 上榜原因：过长时截断由 CSS 处理，title 保完整。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var text = row.reason || t("value.none");
+            var node = el("span", "", text);
+            node.title = text;
+            return node;
+          }
+        }
+      ], items, function (row) {
+        window.location.hash = "#/stock?symbol=" + row.code + "&market=a";
+      });
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadLhbInstitution(); });
+    });
+  }
+
+  /** L-05：龙虎榜活跃营业部（按营业部汇总买卖金额与个股数）。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadLhbBroker() {
+    var body = document.getElementById("l05-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/moneyflow/lhb-broker", { limit: 50 }).then(function (data) {
+      var card = document.getElementById("L-05");
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      if (!items.length) {
+        setEmpty(body, data.note || t("lhb.brokerEmpty"), function () { loadLhbBroker(); });
+        return;
+      }
+      renderTable(body, [
+        {
+          title: t("lhb.col.broker"), cls: "l",
+          /** 营业部名：过长截断，悬停看全称。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var node = el("span", "", row.name || t("value.none"));
+            node.title = row.name || "";
+            return node;
+          }
+        },
+        { title: t("lhb.col.buyCount"), num: true, render: function (row) { return fmt(row.buy_count, 0); } },
+        { title: t("lhb.col.sellCount"), num: true, render: function (row) { return fmt(row.sell_count, 0); } },
+        { title: t("lhb.col.buy"), num: true, render: function (row) { return fmt(row.buy_amount, 2); } },
+        { title: t("lhb.col.sell"), num: true, render: function (row) { return fmt(row.sell_amount, 2); } },
+        { title: t("lhb.col.netBuy"), num: true, render: function (row) { return el("span", pctClass(row.net_buy), fmt(row.net_buy, 2)); } }
+      ], items, null);
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadLhbBroker(); });
+    });
+  }
+
+  /** L-01：北向资金近 20 个有披露交易日净流入柱状图。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadNorthbound() {
+    var body = document.getElementById("l01-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/moneyflow/northbound", { days: 20 }).then(function (data) {
+      var card = document.getElementById("L-01");
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      if (!items.length) {
+        setEmpty(body, data.note || t("state.empty"), function () { loadNorthbound(); });
+        return;
+      }
+      body.innerHTML = "";
+      if (data.note) {
+        body.appendChild(el("div", "pg-card-sub", data.note));
+      }
+      var node = el("div", "pg-chart");
+      node.style.height = "300px";
+      body.appendChild(node);
+      var chart = mountChart(node);
+      if (chart) {
+        var theme = chartTheme();
+        chart.setOption({
+          grid: { left: 48, right: 16, top: 24, bottom: 32 },
+          tooltip: { trigger: "axis" },
+          xAxis: {
+            type: "category",
+            data: items.map(function (item) { return String(item.date).slice(5); }),
+            axisLabel: { color: theme.text }
+          },
+          yAxis: {
+            type: "value",
+            axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border } }
+          },
+          series: [{
+            type: "bar",
+            data: items.map(function (item) {
+              return { value: item.net, itemStyle: { color: item.net >= 0 ? COLOR_UP : COLOR_DOWN } };
+            })
+          }]
+        });
+      }
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadNorthbound(); });
+    });
+  }
+
+  /** L-02：北向个股净买入 Top10（无当日数据时空态 + 说明）。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadNorthTop() {
+    var body = document.getElementById("l02-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/moneyflow/north-top", { limit: 10 }).then(function (data) {
+      var card = document.getElementById("L-02");
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      if (!items.length) {
+        setEmpty(body, data.note || t("state.empty"), function () { loadNorthTop(); });
+        return;
+      }
+      renderTable(body, [
+        {
+          title: t("watchlist.col.name"), cls: "l",
+          /** 名称列：代码加粗 + 名称（北向/龙虎榜通用）。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.code));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          }
+        },
+        { title: t("lhb.col.netBuy"), num: true, render: function (row) { return el("span", pctClass(row.net), fmt(row.net, 2)); } }
+      ], items, function (row) {
+        window.location.hash = "#/stock?symbol=" + row.code + "&market=a";
+      });
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadNorthTop(); });
+    });
+  }
+
+  /** L-03：龙虎榜当日明细（默认最近披露日）。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadLhb() {
+    var body = document.getElementById("l03-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/moneyflow/lhb", { limit: 100 }).then(function (data) {
+      var card = document.getElementById("L-03");
+      setBadges(card, data.source, data.caliber);
+      var items = data.items || [];
+      if (!items.length) {
+        setEmpty(body, data.note || t("lhb.empty"), function () { loadLhb(); });
+        return;
+      }
+      renderTable(body, [
+        { title: t("lhb.col.date"), render: function (row) { return row.date; } },
+        {
+          title: t("watchlist.col.name"), cls: "l",
+          /** 名称列：代码加粗 + 名称（北向/龙虎榜通用）。
+           * @param {Object} row 数据行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.code));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          }
+        },
+        { title: t("lhb.col.reason"), cls: "l", render: function (row) { return row.reason || t("value.none"); } },
+        { title: t("lhb.col.pct"), num: true, render: function (row) { return el("span", pctClass(row.pct), fmtPct(row.pct)); } },
+        { title: t("lhb.col.netBuy"), num: true, render: function (row) { return el("span", pctClass(row.net_buy), fmt(row.net_buy, 2)); } },
+        { title: t("lhb.col.buy"), num: true, render: function (row) { return fmt(row.buy, 2); } },
+        { title: t("lhb.col.sell"), num: true, render: function (row) { return fmt(row.sell, 2); } }
+      ], items, function (row) {
+        window.location.hash = "#/stock?symbol=" + row.code + "&market=a";
+      });
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadLhb(); });
     });
   }
 

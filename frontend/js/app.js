@@ -9,19 +9,24 @@
 (function () {
   "use strict";
 
-  // 页面标题映射：与主菜单 data-view 一一对应
+  // P2-09：共享工具别名（app.js 原本不使用 t，现统一走 i18n）
+  var t = function (key, vars) {
+    return window.I18N ? window.I18N.t(key, vars) : key;
+  };
+
+  // 页面标题映射：与主菜单 data-view 一一对应（P2-09：统一走 i18n）（P2-09：统一走 i18n）
   const VIEW_TITLES = {
-    home: "首页 · 市场总览",
-    charting: "图表分析",
-    news: "新闻资讯",
-    sectors: "板块分析",
-    stock: "个股详情",
-    "sector-val": "单板块估值",
-    fund: "场外基金",
-    portfolio: "持仓管理",
-    yjb: "养基宝绑定",
-    connectors: "数据连接器",
-    settings: "设置"
+    home: t("nav.homeTitle"),
+    charting: t("page.charting"),
+    news: t("page.news"),
+    sectors: t("page.sectors"),
+    stock: t("page.stock"),
+    "sector-val": t("page.sectorVal"),
+    fund: t("page.fund"),
+    portfolio: t("page.portfolio"),
+    yjb: t("page.yjb"),
+    connectors: t("page.connectors"),
+    settings: t("page.settings")
   };
 
   let toastTimer = null;
@@ -39,7 +44,7 @@
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(function () {
       toast.classList.remove("show");
-    }, 3000);
+    }, 2600); // P2-09：统一 toast 超时为 2600ms
   }
 
   /** 应用主题并持久化到 localStorage。
@@ -81,6 +86,26 @@
     drawer.setAttribute("aria-hidden", "true");
   }
 
+  /** R3-28：全局标的代码/市场共享 store。
+   * 三个输入框（mk-symbol / stock-symbol / ch-symbol）通过本 store 互通，
+   * 切换页面时自动带代码，避免用户重复输入。
+   */
+  var _current = { symbol: "600519", market: "a" };
+  window.SymbolStore = {
+    /** 获取当前标的。
+     * @returns {{symbol: string, market: string}} 当前标的代码与市场
+     */
+    get: function () { return { symbol: _current.symbol, market: _current.market }; },
+    /** 设置当前标的。
+     * @param {string} symbol 标的代码
+     * @param {string} market 市场(a/hk/us/fund)
+     */
+    set: function (symbol, market) {
+      _current.symbol = (symbol || "").trim() || _current.symbol;
+      _current.market = market || _current.market;
+    }
+  };
+
   /** 渲染数据源状态列表（只使用 textContent，避免 HTML 注入）。
    * @param {*} sources 数据源列表
    */
@@ -94,7 +119,7 @@
     if (entries.length === 0) {
       const empty = document.createElement("li");
       empty.className = "source-item";
-      empty.textContent = "暂无数据源状态";
+      empty.textContent = t("sys.sourceEmpty");
       list.appendChild(empty);
       return;
     }
@@ -110,7 +135,7 @@
 
       const status = document.createElement("span");
       status.className = "source-status";
-      status.textContent = meta.status || "未知";
+      status.textContent = meta.status || t("sys.unknown");
 
       item.appendChild(name);
       item.appendChild(status);
@@ -130,13 +155,13 @@
     const cache = data.cache || {};
     const ai = data.ai || {};
     const lines = [
-      "应用：" + (app.name || "未知") + " v" + (app.version || "—"),
-      "构建：" + (data.build || "—"),
-      "Python：" + (data.python || "—"),
-      "监听：" + (data.host || "—") + ":" + (data.port || "—"),
-      "缓存：内存 " + (cache.memory || 0) + " 条 / 磁盘 " + (cache.disk || 0) + " 个",
-      "AI 配置：" + (ai.configured ? "已配置（" + (ai.source || "未知来源") + "）" : "未配置"),
-      "服务器时间：" + (data.server_time || "—")
+      t("sys.appLabel") + (app.name || t("sys.unknown")) + " v" + (app.version || t("value.dash")),
+      t("sys.buildLabel") + (data.build || t("value.dash")),
+      t("sys.pythonLabel") + (data.python || t("value.dash")),
+      t("sys.listenLabel") + (data.host || t("value.dash")) + ":" + (data.port || t("value.dash")),
+      t("sys.cacheFormat", { memory: cache.memory || 0, disk: cache.disk || 0 }),
+      ai.configured ? t("sys.aiConfigured", { source: ai.source || t("sys.unknownSource") }) : t("sys.aiNotConfigured"),
+      t("sys.serverTimeLabel") + (data.server_time || t("value.dash"))
     ];
     container.textContent = lines.join("\n");
     container.style.whiteSpace = "pre-line";
@@ -160,11 +185,11 @@
 
   /** 调用 /api/health 并渲染真实返回结果。 */
   async function loadHealth() {
-    setHealthBadge("健康检查中", "");
+    setHealthBadge(t("health.checking"), "");
     try {
       const response = await fetch("/api/health", { cache: "no-store" });
       if (!response.ok) {
-        throw new Error("HTTP " + response.status);
+        throw new Error(t("sys.appNotOk", { code: response.status }));
       }
       const body = await response.json();
       if (body.error) {
@@ -173,20 +198,20 @@
       const data = body.data || {};
       const buildBadge = document.getElementById("build-badge");
       if (buildBadge) {
-        buildBadge.textContent = "构建 " + (data.build || "—");
+        buildBadge.textContent = t("sys.buildBadge", { build: data.build || t("value.dash") });
       }
-      setHealthBadge("服务正常", "ok");
+      setHealthBadge(t("health.ok"), "ok");
       renderSources(data.datasources);
       renderSystemInfo(data);
     } catch (error) {
       // 失败时只展示中文提示，不把英文异常原文暴露给用户
-      setHealthBadge("服务异常", "error");
+      setHealthBadge(t("health.error"), "error");
       renderSources({});
       const container = document.getElementById("system-info");
       if (container) {
-        container.textContent = "健康检查失败：请确认服务已在 127.0.0.1:6900 启动，然后点击「刷新」重试。";
+        container.textContent = t("error.health");
       }
-      showToast("健康检查失败，请确认后端服务已启动。");
+      showToast(t("health.toastFail"));
     }
   }
 
@@ -229,37 +254,60 @@
       window.Pages.reload();
     }
     loadHealth();
-    showToast("已刷新当前视图（" + (VIEW_TITLES[view] || view) + "）。");
+    showToast(t("sys.refreshToast", { view: VIEW_TITLES[view] || view }));
   }
 
-  /** 绑定侧栏项点击：仪表板能力直连，系统项走 hash 路由（P1-07）。 */
+  /** 绑定侧栏项点击：仪表板能力直连，系统项走 hash 路由（P1-07）。
+   * R3-02：改为事件委托 —— 仪表板分组树由 dashboard.js 动态渲染，
+   * 初始化时绑定的监听器覆盖不到后插入的节点。
+   */
   function bindSidebar() {
-    document.querySelectorAll(".sidebar-item").forEach(function (item) {
-      item.addEventListener("click", function () {
+    const sidebar = document.querySelector(".sidebar");
+    if (!sidebar) {
+      return;
+    }
+    sidebar.addEventListener("click", function (event) {
+      const item = event.target.closest(".sidebar-item");
+      if (!item) {
+        return;
+      }
+      {
         const action = item.getAttribute("data-action");
         if (action === "view") {
           const target = item.getAttribute("data-view-target");
+          // W-03：自选分组树节点带 data-group → 进入自选页并预过滤该市场
+          const group = item.getAttribute("data-group");
           if (target) {
-            window.location.hash = "#/" + target;
+            window.location.hash = "#/" + target + (group ? "?group=" + encodeURIComponent(group) : "");
           }
+          return;
+        }
+        if (action === "fs") {
+          // 新增功能 ⑥：侧栏「财报 / 公告搜索」直达唯一实现页（与 N-05 入口卡同跳）
+          window.location.hash = "#/news?fs=1";
           return;
         }
         if (action === "dashboard") {
           const sub = item.getAttribute("data-dashboard");
+          // R3-02：点击分组树里的某个仪表板 → 切为当前并重绘
+          const dashId = item.getAttribute("data-dash-id");
+          if (dashId && window.Dashboard && window.Dashboard.activate) {
+            window.Dashboard.activate(dashId);
+          }
           document.querySelectorAll(".sidebar-item").forEach(function (node) {
             node.classList.toggle("active", node === item);
           });
           // 先确保仪表板已渲染，再执行新建/打开组件库
           const run = function () {
             if (!window.Dashboard) {
-              showToast("仪表板尚未就绪，请稍后重试。");
+              showToast(t("sys.dashboardNotReady"));
               return;
             }
             if (sub === "new" && window.Dashboard.createDashboard) {
               window.Dashboard.createDashboard();
             } else if (sub === "library" && window.Dashboard.openLibrary) {
               window.Dashboard.openLibrary();
-            } else if (window.renderDashboard) {
+            } else if (!dashId && window.renderDashboard) {
               window.renderDashboard();
             }
           };
@@ -270,7 +318,7 @@
             window.setTimeout(run, 260);
           }
         }
-      });
+      }
     });
   }
 
@@ -312,6 +360,14 @@
     }
     applyTheme(savedTheme);
 
+    // R3-13 S-02：恢复持久化的字号档位（sm/md/lg，缺省 md）
+    try {
+      const savedFont = window.localStorage.getItem("openbb-font") || "md";
+      document.documentElement.setAttribute("data-font", savedFont);
+    } catch (error) {
+      // 隐私模式下忽略持久化，使用默认字号
+    }
+
     bindNavigation();
     bindSidebar();
     bindShortcuts();
@@ -344,14 +400,14 @@
         }
         const keyword = search.value.trim();
         if (!keyword) {
-          showToast("请输入股票代码、名称或板块关键词。");
+          showToast(t("sys.inputHint"));
           return;
         }
         if (window.UI && typeof window.UI.openPalette === "function") {
           // 复用命令面板的同一套过滤与键盘导航，并带上关键词（P1-08）
           window.UI.openPalette(keyword);
         } else {
-          showToast("命令面板尚未就绪，请稍后重试。");
+          showToast(t("sys.paletteNotReady"));
         }
       });
     }
