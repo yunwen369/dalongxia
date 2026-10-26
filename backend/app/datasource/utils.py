@@ -47,6 +47,34 @@ def bj_now() -> datetime:
     return datetime.now(BEIJING_TZ).replace(tzinfo=None)
 
 
+def bj_now_aware() -> datetime:
+    """取当前北京时间（**带 tzinfo**）。
+
+    Returns:
+        datetime: 带 ``+08:00`` 偏移的北京时间，适合 ``isoformat()`` 输出。
+
+    Notes:
+        与 :func:`bj_now` 并存是有意为之：``as_of`` 等字段与历史版本逐字节一致
+        必须用 naive 串；而 ``server_time`` / 日志导出文件名需要带偏移，
+        两者不能共用一个返回值，否则要么破坏契约、要么丢掉时区信息。
+    """
+    return datetime.now(BEIJING_TZ)
+
+
+def today_bj() -> date:
+    """取当前北京日期。
+
+    Returns:
+        date: 北京时间的当天日期（不受宿主系统时区影响）。
+
+    Notes:
+        业务取数区间（``date.today()`` 的历史用法）一律改用本入口：
+        在 UTC-5 的机器上，本地日期可能比北京晚一天，直接用 ``date.today()``
+        会把「昨天」当成今天，导致 K 线区间与龙虎榜日期错位。
+    """
+    return bj_now().date()
+
+
 def now_text(dt: Optional[datetime] = None) -> str:
     """当前时间的标准格式字符串（北京时间）。
 
@@ -561,9 +589,13 @@ def normalize_adjust(adjust: str) -> str:
 
 
 def today_text() -> str:
-    """返回今天的 ISO 日期。
+    """返回今天的 ISO 日期（北京时间）。
 
     Returns:
-        str: 今天日期（YYYY-MM-DD）。
+        str: 今天日期（YYYY-MM-DD，按 Asia/Shanghai 计）。
+
+    Notes:
+        原实现为 ``date.today().isoformat()``，在非 UTC+8 宿主上会取到本地日期
+        （UTC-5 时比北京晚一天）。TZ-06 收口后统一走 :func:`today_bj`。
     """
-    return date.today().isoformat()
+    return today_bj().isoformat()

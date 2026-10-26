@@ -16,10 +16,8 @@ from __future__ import annotations
 import logging
 import platform
 import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
-from zoneinfo import ZoneInfo  # 显式北京时区：宿主时区非 UTC+8 时系统时间字段不偏移
 
 from fastapi import APIRouter, Body
 from fastapi.responses import FileResponse
@@ -27,11 +25,11 @@ from fastapi.responses import FileResponse
 from backend.app import config
 from backend.app.core import cache, capabilities
 from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
-# 北京时区常量（UTC+8）：system 域对外时间字段统一按此时区输出，不依赖宿主时区配置
-_BJ_TZ = ZoneInfo("Asia/Shanghai")
+# 对外时间字段统一走 utils.bj_now_aware()（带 +08:00 偏移），不再各模块自建时区常量
 
 router = APIRouter(prefix="/api", tags=["系统"])
 
@@ -68,7 +66,7 @@ def health() -> Dict[str, Any]:
         "cache": cache.stats(),
         # 仅暴露是否已配置与来源，绝不返回密钥内容
         "ai": {"configured": ai_config.configured, "source": ai_config.source},
-        "server_time": datetime.now(_BJ_TZ).isoformat(timespec="seconds"),
+        "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),
     }
     return ok(data)
 
@@ -100,7 +98,7 @@ def cache_stats() -> Dict[str, Any]:
         "layout_kb": round(detail["layout_bytes"] / 1024, 1),
         "source": "本机缓存目录统计（data/cache）",
         "caliber": "内存字节数按 JSON 序列化长度估算，仅表示量级；布局为 data/dashboards.json",
-        "as_of": datetime.now(_BJ_TZ).isoformat(timespec="seconds"),
+        "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
         "is_realtime": True,
     })
 
@@ -177,7 +175,7 @@ def factory_reset(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
                  "yjb_token.json / yjb_secret.json / yjb_state.json（养基宝授权）"],
         "note": "删除后下次进入相关页面会按默认值重建；用户数据与密钥一律保留。",
         "caliber": "本地偏好文件删除（data/），不动已缓存的历史数据与用户数据",
-        "as_of": datetime.now(_BJ_TZ).isoformat(timespec="seconds"),
+        "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
     })
 
 
@@ -198,7 +196,7 @@ def export_logs() -> Any:
     if not log_files:
         return api_error(ErrorCode.NOT_FOUND, "日志目录为空，暂无日志可导出。")
 
-    stamp = datetime.now(_BJ_TZ).strftime("%Y%m%d_%H%M%S")
+    stamp = utils.bj_now_aware().strftime("%Y%m%d_%H%M%S")
     export_dir = config.EXPORT_DIR
     export_dir.mkdir(parents=True, exist_ok=True)
     target = export_dir / f"logs_{stamp}.zip"

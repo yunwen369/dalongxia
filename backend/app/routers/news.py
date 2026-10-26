@@ -381,7 +381,13 @@ def news_ai_feed(
         return _bad("boards 最多支持 6 个板块")
 
     code = str(symbol).strip()
-    key = f"news:aifeed:{region}:{','.join(board_list)}:{limit}:{code}"
+    # 过滤顺序修正（TZ-01 取证时发现）：板块/区域/市场三个过滤都在**截断之后**执行，
+    # 若先只取 60 条再筛，常见板块会一条不剩（实测「科技成长」0/60，页面显示
+    # 「当前板块暂无相关资讯」）。因此过滤开启时先取更大的池，过滤后再截断到 limit。
+    filtering = bool(board_list) or region == "cn" or market != "all"
+    pool_limit = max(limit * 6, 240) if filtering else max(limit, 60)
+    # market 也进缓存键：此前缺失会导致 a/hk/us 三个市场互相命中同一份缓存
+    key = f"news:aifeed:{region}:{market}:{','.join(board_list)}:{limit}:{code}"
 
     def loader() -> Dict[str, Any]:
         """多源池取数（财联社 + 三源全球 + 可选个股）。
@@ -394,7 +400,7 @@ def news_ai_feed(
         """
         return with_fallback(
             [("财联社/东财/新浪/同花顺", "多源合并去重（个股源在指定 symbol 时并入）",
-              lambda: news_provider.build_ai_feed(boards=None, limit=max(limit, 60), symbol=code))],
+              lambda: news_provider.build_ai_feed(boards=None, limit=pool_limit, symbol=code))],
             empty_value={"items": [], "channels": []},
             validator=lambda value: bool(value.get("items")),
         )

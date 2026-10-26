@@ -178,6 +178,57 @@
     return String(text).slice(0, 10);
   }
 
+  /** 时区标注标签：在时间旁统一挂「北京」后缀，悬浮显示完整口径（TZ-01）。
+   * @param {string} tip 附加换算说明（如美股收盘对应北京时间），可为空串
+   * @returns {*} 处理结果
+   */
+  function bjTag(tip) {
+    var full = t("common.time.beijing") + (tip ? "｜" + tip : "");
+    var node = el("span", "tz-tag", t("common.time.bj"));
+    node.title = full;  // 悬浮提示：完整口径 + 跨市场换算，不占用列表宽度
+    return node;
+  }
+
+  /** 按市场给出收盘时间的北京时间换算说明。
+   * @param {string} market 市场标识（a/hk/us）
+   * @returns {string} 提示文案；A 股与未知市场返回空串（本身即北京时间，无需额外说明）
+   */
+  function marketTzTip(market) {
+    var key = String(market || "").toLowerCase();
+    if (key === "us") {
+      return t("common.time.usTip");
+    }
+    if (key === "hk") {
+      return t("common.time.hkTip");
+    }
+    return "";
+  }
+
+  /** 资讯时间：相对时间 + 北京时间标签（悬浮显示绝对北京时间）。
+   * @param {string} text 后端返回的北京 naive 时间串
+   * @returns {*} 处理结果
+   */
+  function newsTime(text) {
+    var wrap = el("span", "pg-news-time", relativeTime(text) + " ");
+    var tag = bjTag("");
+    // 资讯流只给相对时间，悬浮补绝对北京时间，便于核对跨市场发布时点
+    tag.title = t("common.time.beijing") + "｜" + String(text || t("value.none"));
+    wrap.appendChild(tag);
+    return wrap;
+  }
+
+  /** 时间文本 + 北京时间标签的组合节点。
+   * @param {string} text 时间文本（后端北京裸串或相对时间）
+   * @param {string} tip 附加换算说明，可为空串
+   * @param {string} cls 外层类名
+   * @returns {*} 处理结果
+   */
+  function timeWithBj(text, tip, cls) {
+    var wrap = el("span", cls || "pg-card-sub", (text || "") + " ");
+    wrap.appendChild(bjTag(tip));
+    return wrap;
+  }
+
   // api / toast 已提取到 utils.js（P1-13），此处不再重复定义。
 
   // =============================================================
@@ -1320,7 +1371,8 @@
     main.appendChild(el("span", "pg-quote-name", quote.name || t("value.none")));
     main.appendChild(el("span", "pg-quote-price " + pctClass(quote.change), fmt(quote.price, 2)));
     main.appendChild(el("span", pctClass(quote.change), fmt(quote.change, 2) + " / " + fmtPct(quote.pct)));
-    main.appendChild(el("span", "pg-card-sub", quote.quote_time || ""));
+    // TZ-01：报价时间统一标注北京时区；美股/港股在悬浮里给收盘换算说明
+    main.appendChild(timeWithBj(quote.quote_time, marketTzTip(state.stock.market), "pg-card-sub"));
     body.appendChild(main);
     var meta = el("div", "pg-quote-meta");
     [
@@ -1550,7 +1602,7 @@
       var chipClass = item.sentiment === t("stock.sentiment.up") ? "chip up" : item.sentiment === t("stock.sentiment.down") ? "chip down" : "chip";
       li.appendChild(title);
       li.appendChild(el("span", chipClass, item.sentiment || t("stock.sentiment.neutral")));
-      li.appendChild(el("span", "pg-news-time", relativeTime(item.time)));
+      li.appendChild(newsTime(item.time));
       list.appendChild(li);
     });
     body.appendChild(list);
@@ -2728,7 +2780,9 @@
       sub.appendChild(el("span", "fs-tag " + (fsIsReport(item.type) ? "fr" : "ann"), item.type || "其他"));
       sub.appendChild(el("span", "", "来源：" + (item.source || "—")));
       var time = el("span", "fs-time");
-      time.innerHTML = fsEscape(item.pubTime || "—") + ' <span class="tz">' + fsEscape(t("fs.tz")) + "</span>";
+      // TZ-01：财报跨 A股/港股/美股三个市场，时间一律标注北京口径，悬浮给完整说明
+      time.innerHTML = fsEscape(item.pubTime || "—") + ' <span class="tz" title="'
+        + fsEscape(t("fs.tzFull")) + '">' + fsEscape(t("fs.tz")) + "</span>";
       sub.appendChild(time);
       row.appendChild(sub);
 
@@ -2763,7 +2817,7 @@
     meta.appendChild(el("span", "fs-tag " + fsMarketClass(item.market), fsMarketLabel(item.market)));
     meta.appendChild(el("span", "fs-tag " + (fsIsReport(item.type) ? "fr" : "ann"), item.type || "其他"));
     meta.appendChild(el("span", "fs-tag", (item.company || "") + " · " + (item.code || "")));
-    meta.appendChild(el("span", "fs-time", (item.pubTime || "—") + " " + t("fs.tz")));
+    meta.appendChild(el("span", "fs-time", (item.pubTime || "—") + " " + t("fs.tzFull")));
     modal.appendChild(meta);
 
     modal.appendChild(el("div", "m-sec", t("fs.summary")));
@@ -3239,7 +3293,7 @@
       head.appendChild(el("span", chipClass, sentiment.label || t("stock.sentiment.neutral")));
       head.appendChild(el("span", "pg-feed-score", t("news.scoreLabel") + fmt(sentiment.score, 4) + " · " + (sentiment.strength || t("news.weak"))));
       head.appendChild(el("span", "pg-spacer"));
-      head.appendChild(el("span", "pg-news-time", relativeTime(item.time)));
+      head.appendChild(newsTime(item.time));
       box.appendChild(head);
 
       var title = el("div", "pg-feed-title", item.title || t("news.titleMissing"));
@@ -4911,7 +4965,7 @@
       var bar = el("div", "page-toolbar");
       bar.appendChild(yjbEstimateBadge());
       bar.appendChild(el("span", "pg-spacer"));
-      bar.appendChild(el("span", "pg-card-sub", t("yjb.asOfBJ") + (data.as_of || t("value.none"))));
+      bar.appendChild(timeWithBj(t("yjb.asOfBJ") + (data.as_of || t("value.none")), "", "pg-card-sub"));
       body.appendChild(bar);
       var kpis = el("div", "pg-kpis");
       // 总资产：元为主体，附「≈万元」便于快速读数（15.55 万级）；关闭估算不影响该值
@@ -5401,7 +5455,8 @@
     main.appendChild(el("span", "pg-quote-name", quote.name || state.charting.symbol));
     main.appendChild(el("span", "pg-quote-price " + pctClass(quote.change), fmt(quote.price, 2)));
     main.appendChild(el("span", pctClass(quote.change), fmt(quote.change, 2) + " / " + fmtPct(quote.pct)));
-    main.appendChild(el("span", "pg-card-sub", quote.quote_time || ""));
+    // TZ-01：同上，图表页与个股页口径一致
+    main.appendChild(timeWithBj(quote.quote_time, marketTzTip(state.charting.market), "pg-card-sub"));
     body.appendChild(main);
     var meta = el("div", "pg-quote-meta");
     [

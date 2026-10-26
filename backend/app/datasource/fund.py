@@ -722,7 +722,7 @@ def get_holding(code: str) -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    year_now = date.today().year
+    year_now = utils.today_bj().year  # TZ-06：跨年时按北京时间判定年份
     tried: List[str] = []
     for year in (year_now, year_now - 1, year_now - 2):
         try:

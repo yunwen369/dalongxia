@@ -120,7 +120,7 @@ def get_northbound(days: int = 20) -> Dict[str, Any]:
     if not picked:
         raise ValueError("北向资金历史无有效净买额")
     latest = picked[-1]["date"]
-    stale = (date.today() - date.fromisoformat(latest)).days > 30
+    stale = (utils.today_bj() - date.fromisoformat(latest)).days > 30  # TZ-06
     return {
         "items": picked[-max(1, days):],
         "latest_disclosed": latest,
@@ -183,7 +183,7 @@ def get_lhb(day: str = "", limit: int = 100) -> Dict[str, Any]:
     Raises:
         ValueError: 上游返回空表。
     """
-    end = date.fromisoformat(day) if day else date.today()
+    end = date.fromisoformat(day) if day else utils.today_bj()  # TZ-06
     start = end - timedelta(days=LHB_RANGE_DAYS)
     polite_sleep()
     frame = ak.stock_lhb_detail_em(
@@ -251,7 +251,7 @@ def get_lhb_institution(day: str = "", limit: int = 50) -> Dict[str, Any]:
     Raises:
         ValueError: 区间内无机构买卖披露。
     """
-    end = date.fromisoformat(day) if day else date.today()
+    end = date.fromisoformat(day) if day else utils.today_bj()  # TZ-06
     start = end - timedelta(days=LHB_RANGE_DAYS)
     polite_sleep()
     frame = ak.stock_lhb_jgmmtj_em(
@@ -305,7 +305,7 @@ def get_lhb_broker(day: str = "", limit: int = 50) -> Dict[str, Any]:
     Raises:
         ValueError: 区间内无活跃营业部披露。
     """
-    end = date.fromisoformat(day) if day else date.today()
+    end = date.fromisoformat(day) if day else utils.today_bj()  # TZ-06
     start = end - timedelta(days=LHB_RANGE_DAYS)
     polite_sleep()
     frame = ak.stock_lhb_hyyyb_em(

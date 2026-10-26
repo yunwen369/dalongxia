@@ -86,7 +86,7 @@ def _default_range(days: int = 730) -> tuple[str, str]:
     Returns:
         tuple[str, str]: 计算结果。
     """
-    end = date.today()
+    end = utils.today_bj()  # TZ-06：按北京时间取当日，非 UTC+8 宿主不移位
     start = end - timedelta(days=days)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 

@@ -581,7 +581,7 @@ def _default_kline_range(days: int = 400) -> Tuple[str, str]:
     Returns:
         Tuple[str, str]: 计算结果。
     """
-    end = date.today()
+    end = utils.today_bj()  # TZ-06：板块区间按北京时间取当日
     start = end - timedelta(days=days)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 

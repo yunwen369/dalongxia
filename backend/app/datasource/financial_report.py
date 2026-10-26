@@ -19,15 +19,15 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from backend.app import config
 from backend.app.core import cache, netfix
+from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
-# 北京时区（UTC+8）：全模块唯一时间口径，与 datasource/utils.py 保持一致
-_BJ = ZoneInfo("Asia/Shanghai")
+# 北京时区（UTC+8）：全模块唯一时间口径，直接引用 utils 的常量，避免多处各定义一份
+_BJ = utils.BEIJING_TZ
 
 # 列表缓存 5 分钟：财报/公告属事件驱动数据，短 TTL 兼顾时效与源站限频（规范 §6.8）
 _LIST_TTL = 300
@@ -73,7 +73,7 @@ def _bj_now_text() -> str:
     Returns:
         str: ``YYYY-MM-DD HH:MM:SS``（北京时间）。
     """
-    return datetime.now(_BJ).strftime("%Y-%m-%d %H:%M:%S")
+    return utils.now_text()  # TZ-06：统一走 utils 单一助手
 
 
 def _since_start(since: str) -> Optional[date]:
@@ -87,7 +87,7 @@ def _since_start(since: str) -> Optional[date]:
     """
     if since not in SINCE_VALUES or since == "all":
         return None
-    return (datetime.now(_BJ) - timedelta(days=int(since))).date()
+    return (utils.bj_now() - timedelta(days=int(since))).date()
 
 
 def _classify_cn(title: str) -> str:
@@ -269,7 +269,7 @@ def _cninfo_query(
     start = _since_start(since)
     se_date = ""
     if start is not None:
-        se_date = f"{start.isoformat()}~{datetime.now(_BJ).date().isoformat()}"
+        se_date = f"{start.isoformat()}~{utils.today_bj().isoformat()}"
     _cninfo_throttle()
     resp = netfix.http_request(
         "POST",
@@ -532,7 +532,7 @@ def search_hk(*, q: str, type_value: str, since: str, page: int, page_size: int)
     if not target:
         return [], 0, "HKEX披露易", "HKEX 未检索到与该关键词匹配的港股，请检查 5 位代码或公司简称"
 
-    start = _since_start(since) or (datetime.now(_BJ).date() - timedelta(days=365))
+    start = _since_start(since) or (utils.today_bj() - timedelta(days=365))
     resp = netfix.http_request(
         "GET",
         _HKEX_SEARCH,
@@ -544,7 +544,7 @@ def search_hk(*, q: str, type_value: str, since: str, page: int, page_size: int)
             "stockId": target["stockId"],
             "documentType": "-1",
             "fromDate": start.strftime("%Y%m%d"),
-            "toDate": datetime.now(_BJ).strftime("%Y%m%d"),
+            "toDate": utils.bj_now().strftime("%Y%m%d"),
             "title": "",
             "searchType": "0",
             "t1code": "-2",

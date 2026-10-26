@@ -13,16 +13,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict
-from zoneinfo import ZoneInfo
 
 from backend.app import config
 from backend.app.core import cache, netfix
+from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
-
-_BJ = ZoneInfo("Asia/Shanghai")
 
 # 东财指数列表接口：一次拿沪、深两市的涨跌平家数
 _BREADTH_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
@@ -41,7 +38,7 @@ def _load() -> Dict[str, Any]:
     Notes:
         任一市场缺字段即视为不可用，避免只统计一个市场却当成全市场。
     """
-    as_of = datetime.now(_BJ).strftime("%Y-%m-%d %H:%M:%S")
+    as_of = utils.now_text()  # TZ-06：时区口径统一由 utils 单一助手提供
     try:
         resp = netfix.http_request(
             "GET",
