@@ -962,18 +962,18 @@
 .tz-tag {
   margin-left: 4px;
   padding: 0 4px;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 11px;
+  line-height: 15px;
   vertical-align: 1px;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   cursor: help;
   white-space: nowrap;
 }
 .pg-news-time .tz-tag,
 .fs-time .tz {
-  margin-left: 4px;
-  font-size: 10px;
-  color: var(--text-muted);
+  margin-left: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
 }
