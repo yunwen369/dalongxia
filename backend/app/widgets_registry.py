@@ -3,7 +3,8 @@
 对应规范 v7.2 §8.6 与《设计基准说明书_阶段5.1》§1.3 区块编号规则：
 - 每个区块登记 id（S-01 / ST-01 / V-01）、页面、标题、网格跨列、绑定接口、可点击跳转；
 - 前端按 id 渲染，后端按 id 下发，保证 MD 说明书、HTML 工程与接口三方编号一致；
-- 本批只注册阶段 5.1 的 3 个页面（sectors 7 + stock 10 + sector-val 4 = 21 个区块）。
+- 当前注册 9 个页面共 49 个区块：sectors 7 + stock 10 + sector-val 4 + news 5 + fund 6 + portfolio 4 + watchlist 2 + lhb 5 + yjb 6；
+  dashboard/home/charting/yjb/connectors/settings 不走本表（仪表板由 RECIPES 渲染，其余为静态页）。
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ WIDGETS: List[Dict[str, Any]] = [
             desc="切换排行表口径，热力图不强制跟随"),
     _widget("S-03", "#/sectors", "板块热力图", ".g-7", ["/api/sector/heatmap"],
             jump="#/sector-val?board={板块名}&market={市场}",
-            desc="面积=abs(涨跌幅)，颜色与标签用原值，负值不丢面积"),
+            desc="按涨跌幅着色与定面积，负值板块同样可见"),
     _widget("S-04", "#/sectors", "行业板块排行", ".g-5", ["/api/sector/industry"],
             jump="#/sector-val?board={板块名}&market={市场}", desc="sticky 表头，整行可点"),
     _widget("S-05", "#/sectors", "概念板块排行", ".g-5", ["/api/sector/concept"],
@@ -120,6 +121,8 @@ WIDGETS: List[Dict[str, Any]] = [
             desc="温度=50+均分×500，裁剪 0–100；含驱动事件与证据样本"),
     _widget("N-04", "#/news", "AI 复核", ".g-8", ["/api/news/ai-review"],
             desc="用户点击后调用自备 OpenAI 兼容接口；未配置时给出设置引导"),
+    _widget("N-05", "#/news", "财报/公告搜索入口", ".g-12", ["/api/news/financial-search"],
+            jump="#/news?fs=1", desc="进入唯一实现页；A股巨潮→东财、港股HKEX、美股SEC EDGAR"),
 
     # ---------- #/fund（6 个，批次 5.3） ----------
     _widget("F-01", "#/fund", "基金概览", ".g-12", ["/api/fund/info", "/api/fund/realtime"],
@@ -144,6 +147,38 @@ WIDGETS: List[Dict[str, Any]] = [
             jump="#/stock?symbol={代码}&market={市场}", desc="本币与人民币双口径盈亏，支持删除"),
     _widget("P-04", "#/portfolio", "市场分布", ".g-5", ["/api/portfolio/analysis"],
             desc="按人民币市值占比的四市场分布"),
+
+    # ---------- #/watchlist（2 个） ----------
+    _widget("W-01", "#/watchlist", "自选股概览", ".g-12", ["/api/watchlist"],
+            desc="自选清单条数/涨跌分布/四市场占比"),
+    _widget("W-02", "#/watchlist", "自选股行情", ".g-12", ["/api/market/quote"],
+            desc="代码/名称/现价/涨跌/涨幅/成交额/PE，单行失败隔离"),
+
+    # ---------- #/lhb（5 个） ----------
+    _widget("L-01", "#/lhb", "北向资金净流入（近20日）", ".g-7", ["/api/moneyflow/northbound"],
+            desc="每日收盘净买额（亿元），交易所自 2024-08-16 起停止披露"),
+    _widget("L-02", "#/lhb", "北向净买入 Top10", ".g-5", ["/api/moneyflow/north-top"],
+            desc="2024-08-19 起改季度披露，当日无数据时空态+说明，不补零"),
+    _widget("L-03", "#/lhb", "龙虎榜明细", ".g-12", ["/api/moneyflow/lhb"],
+            desc="当日上榜个股净买额/买入额/卖出额（亿元），按上榜日取最新"),
+    _widget("L-04", "#/lhb", "机构席位统计", ".g-7", ["/api/moneyflow/lhb-institution"],
+            desc="东财 stock_lhb_jgmmtj_em：买方/卖方机构数、机构净买额与占比"),
+    _widget("L-05", "#/lhb", "活跃营业部", ".g-5", ["/api/moneyflow/lhb-broker"],
+            desc="东财 stock_lhb_hyyyb_em：营业部买卖金额与上榜个股数"),
+
+    # ---------- #/yjb（6 个） ----------
+    _widget("Y-01", "#/yjb", "养基宝授权告知书", ".g-12", ["/api/fund/yjb/consent"],
+            desc="首次使用必须显式同意；拒绝则不发起任何上游请求"),
+    _widget("Y-02", "#/yjb", "绑定状态", ".g-12", ["/api/fund/yjb/status"],
+            desc="是否已绑定/签名盐是否就绪/通道是否可用（不显示 token 明文）"),
+    _widget("Y-03", "#/yjb", "扫码绑定", ".g-12", ["/api/fund/yjb/qrcode", "/api/fund/yjb/poll"],
+            desc="二维码 2 秒轮询、最长 240 秒；成功后落 DPAPI 加密 token"),
+    _widget("Y-04", "#/yjb", "实时估值", ".g-12", ["/api/fund/yjb/realtime"],
+            desc="持仓基金估算涨跌幅（非官方·拟合估算·仅供参考）"),
+    _widget("Y-05", "#/yjb", "养基宝账户概览", ".g-12", ["/api/fund/yjb/collect"],
+            desc="总资产/今日估算收益/累计持有收益 + 各账户明细（需绑定养基宝）"),
+    _widget("Y-06", "#/yjb", "养基宝持仓与估值", ".g-12", ["/api/fund/yjb/holdings"],
+            desc="持仓市值/持有收益/估算涨跌幅，支持按账户切换（非官方·拟合估算）"),
 ]
 
 

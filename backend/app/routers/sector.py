@@ -17,8 +17,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Query
 
@@ -105,9 +104,9 @@ def _status_now() -> tuple[str, str, bool]:
     Returns:
         tuple[str, str, bool]: 计算结果。
     """
-    now = datetime.now()
+    now = utils.bj_now()  # 显式取北京时间：宿主时区非 UTC+8 时状态判定不偏移
     status, is_realtime = utils.classify_market_status(now, "a")
-    return now.strftime("%Y-%m-%d %H:%M:%S"), status, is_realtime
+    return utils.now_text(now), status, is_realtime
 
 
 def _run_chain(

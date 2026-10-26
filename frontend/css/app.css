@@ -188,7 +188,7 @@ body {
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-size: var(--fs-body);
-  cursor: default;
+  cursor: pointer;
 }
 
 .sidebar-item.active,
@@ -669,3 +669,389 @@ body {
     width: 90px;
   }
 }
+
+/* =============================================================
+   养基宝账户概览（Y-05）：KPI 数字卡 + 账户小卡
+   颜色全部走 theme.css 变量，暗/亮主题自动适配
+   ============================================================= */
+.pg-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pg-kpi {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.pg-kpi-k {
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-kpi-v {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.pg-kpi-x {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.pg-kpi-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.pg-kpi-acc {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.pg-kpi-acc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pg-kpi-acc-name {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-kpi-acc-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.pg-kpi-acc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+
+.pg-kpi-acc-row b {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* 窄屏（<1100px）KPI 折成三列，避免数字挤压 */
+@media (max-width: 1100px) {
+  .pg-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* =============================================================
+   仪表板：键盘兜底按钮 + 改参数弹窗字段
+   ============================================================= */
+/* 宽度档位按钮：鼠标用户默认不可见（正常路径是右下角拖拽手柄），
+   仅键盘聚焦时显形，保证无指针设备仍可调宽 */
+.dash-btn-kb {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s ease;
+}
+
+.dash-widget:focus-within .dash-btn-kb,
+.dash-btn-kb:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ui-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.ui-modal-label {
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+}
+
+/* =============================================================
+   组件库（R3-12 L-02）：预览卡网格 + 缩略预览 + 拖拽入位高亮
+   颜色全部走 theme.css 变量，暗/亮主题自动适配
+   ============================================================= */
+.dash-library {
+  width: min(760px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+
+.dash-lib-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  cursor: grab;
+  transition: border-color .12s ease, transform .12s ease;
+}
+
+.dash-lib-card:hover {
+  border-color: var(--accent);
+}
+
+.dash-lib-card.dragging {
+  opacity: .55;
+  transform: scale(.98);
+}
+
+/* 缩略预览：统一 44px 高，按配方类型画迷你示意 */
+.dash-lib-thumb {
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-deep, var(--bg-panel));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 6px;
+}
+
+.dash-lib-thumb-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.dash-lib-thumb-row {
+  display: flex;
+  gap: 4px;
+}
+
+.dash-lib-thumb-cell {
+  flex: 1;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.dash-lib-thumb-cell.wide {
+  flex: 2;
+  background: var(--text-muted);
+}
+
+.dash-lib-thumb-metric {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dash-lib-thumb-num {
+  width: 26px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.dash-lib-thumb-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.dash-lib-thumb-line {
+  height: 5px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.dash-lib-thumb-line.short {
+  width: 62%;
+}
+
+.dash-lib-thumb-block {
+  height: 12px;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.dash-lib-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dash-lib-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dash-lib-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  flex: none;
+}
+
+.dash-lib-title {
+  font-size: var(--fs-aux);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-lib-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dash-lib-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.dash-lib-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+/* 画布接收拖入时高亮（R3-12） */
+.dash-grid.dash-drop-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
+/* =============================================================
+   危险按钮（删除/恢复出厂等不可逆操作，R3-13）
+   ============================================================= */
+.pg-btn.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.pg-btn.danger:hover {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+/* =============================================================
+   字号档位（R3-13 S-02）：html[data-font] 覆盖 --fs-* 字号变量
+   （全站字号走 theme.css 变量，改这里即整站缩放，不影响布局 px）
+   ============================================================= */
+html[data-font="sm"] {
+  --fs-page-title: 15px;
+  --fs-section: 13px;
+  --fs-body: 12px;
+  --fs-aux: 11px;
+}
+
+html[data-font="lg"] {
+  --fs-page-title: 18px;
+  --fs-section: 15px;
+  --fs-body: 14px;
+  --fs-aux: 13px;
+}
+
+/* =============================================================
+   W-03 侧栏自选分组树（市场分组 + 数量徽章）
+   ============================================================= */
+.sidebar-subtree {
+  margin-top: 2px;
+}
+
+.sidebar-item.sidebar-sub {
+  padding-left: 26px;
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+}
+
+.sidebar-item.sidebar-sub:hover {
+  color: var(--text);
+}
+
+.sidebar-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+/* =============================================================
+ * FN-01：首页「市场情绪 · 涨跌家数」卡（2026-10-26）
+ * 配色全部取 theme.css 变量（红涨绿跌），无第二套色板。
+ * ============================================================= */
+.mk-senti-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: var(--fs-body);
+  margin-bottom: 8px;
+}
+.mk-senti-label { color: var(--text-muted); font-size: var(--fs-aux); }
+.mk-senti-value { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--text); }
+.mk-senti-level { font-size: var(--fs-aux); color: var(--text-dim); }
+.mk-senti-bar {
+  flex: 1 1 120px;
+  height: 6px;
+  min-width: 80px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.mk-senti-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.mk-senti-counts { gap: 14px; font-family: var(--font-mono); font-size: var(--fs-aux); }
+.mk-senti-counts .up { color: var(--up); }
+.mk-senti-counts .down { color: var(--down); }
+.mk-senti-counts .flat { color: var(--text-muted); }
+.mk-senti-note { font-size: 11px; color: var(--text-muted); line-height: 1.6; }

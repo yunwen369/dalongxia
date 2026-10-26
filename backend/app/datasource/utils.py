@@ -9,18 +9,66 @@
 
 from __future__ import annotations
 
+import calendar
+import json
 import logging
 import re
-from datetime import date, datetime, time as clock_time
-from typing import Any, Dict, Optional, Tuple
+from datetime import date, datetime, time as clock_time, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import pandas as pd
+from zoneinfo import ZoneInfo  # 标准库时区库：按 IANA 时区显式取值，摆脱宿主系统时区影响
 
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import UpstreamTimeoutError
 
 logger = logging.getLogger(__name__)
+
+# 中国标准时间格式串（北京时间 YYYY-MM-DD HH:MM:SS），各接口 as_of 统一口径。
+_TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+# 北京时区（UTC+8）：业务时间唯一口径，部署机器时区不同也不偏移（红线「时间一律北京时间」）。
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def bj_now() -> datetime:
+    """取当前北京时间（naive）。
+
+    Returns:
+        datetime: 无 tzinfo 的北京时间，可直接按既有 ``%Y-%m-%d %H:%M:%S`` 口径格式化。
+
+    Notes:
+        后端业务时间（as_of/now_text/时段判定/日志导出文件名）统一走本入口，
+        不再直接调用 datetime.now()，避免宿主系统时区非 UTC+8 时输出偏移。
+        返回值刻意去掉 tzinfo：对外字段格式与历史版本逐字节一致，不改变既有契约。
+    """
+    return datetime.now(BEIJING_TZ).replace(tzinfo=None)
+
+
+def now_text(dt: Optional[datetime] = None) -> str:
+    """当前时间的标准格式字符串（北京时间）。
+
+    Args:
+        dt: 待格式化的时间；缺省取 :func:`bj_now` 的北京时间。
+
+    Returns:
+        str: 格式为 ``%Y-%m-%d %H:%M:%S`` 的字符串。
+    """
+    return (dt or bj_now()).strftime(_TS_FMT)
+
+
+def now_date_text(dt: Optional[datetime] = None) -> str:
+    """当前日期的标准格式字符串（YYYY-MM-DD）。
+
+    Args:
+        dt: 待格式化的时间；缺省取 :func:`bj_now` 的北京时间。
+
+    Returns:
+        str: 格式为 ``%Y-%m-%d`` 的字符串。
+    """
+    return (dt or bj_now()).strftime("%Y-%m-%d")
 
 
 def http_get_text(
@@ -101,8 +149,6 @@ def http_get_json(
         encoding=encoding,
         timeout=timeout,
     )
-    import json
-
     return json.loads(text)
 
 
@@ -143,6 +189,35 @@ def to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
     return int(round(number))
 
 
+def clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
+    """把 DataFrame 转为可 JSON 序列化的 records（NaN→None；日期转 ISO 字符串）。
+
+    注意：`date`/`datetime`/`Timestamp` 若不转字符串，会在缓存落盘时触发
+    `TypeError: Object of type date is not JSON serializable`（同花顺盈利预测的
+    机构明细表含「报告日期」列，实测必现）。
+
+    Args:
+        frame: 源站原始表（pandas DataFrame）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
+    records: List[Dict[str, Any]] = []
+    for raw in frame.to_dict("records"):
+        row: Dict[str, Any] = {}
+        for key, value in raw.items():
+            if pd.isna(value):
+                row[str(key)] = None
+            elif isinstance(value, (datetime, date)):
+                row[str(key)] = value.strftime("%Y-%m-%d")
+            elif hasattr(value, "item"):
+                row[str(key)] = value.item()
+            else:
+                row[str(key)] = value
+        records.append(row)
+    return records
+
+
 def parse_datetime(value: str) -> Optional[datetime]:
     """解析腾讯/新浪/东财常见时间格式。
 
@@ -180,8 +255,6 @@ def _us_dst_offset_hours(value: datetime) -> int:
     Returns:
         int: 12（夏令时）或 13（冬令时）。
     """
-    import calendar
-
     # 3 月第 2 个周日：monthcalendar 每行一周，周一为 0，周日为 6
     march = calendar.monthcalendar(value.year, 3)
     second_sunday = [week[calendar.SUNDAY] for week in march if week[calendar.SUNDAY]][1]
@@ -224,6 +297,68 @@ def us_eastern_to_beijing(value: Optional[datetime]) -> Optional[datetime]:
         return value + timedelta(hours=_us_dst_offset_hours(value))
 
 
+def beijing_to_us_eastern(value: Optional[datetime]) -> Optional[datetime]:
+    """把北京时间换算为美东本地时间（naive）。
+
+    与 :func:`us_eastern_to_beijing` 互逆：优先用 zoneinfo + IANA 时区（自动处理
+    夏令时）；冻结包缺少 tzdata 时按 ``_us_dst_offset_hours`` 规则迭代两级收敛。
+
+    Args:
+        value: 北京时间（naive，无时区信息）。
+
+    Returns:
+        Optional[datetime]: 美东本地时间（naive）；入参为空返回 None。
+    """
+    if value is None:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        beijing = value.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        return beijing.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:  # noqa: BLE001 - 缺 tzdata 时按夏令时规则回退
+        # 先用 12 小时估算美东时间，再用其所属区间的真实偏移复核；两次迭代即收敛
+        guess = value - timedelta(hours=12)
+        for _ in range(2):
+            guess = value - timedelta(hours=_us_dst_offset_hours(guess))
+        return guess
+
+
+def _us_session_phase(as_of: datetime, now: datetime) -> Tuple[str, bool]:
+    """按美东时区判定美股常规时段状态（含周末与夏令时）。
+
+    美股常规时段固定为美东 09:30–16:00（夏令时/冬令时由时区换算自动切换），
+    因此**必须**换算到美东判定，不能用北京时间 21:30–04:00 硬编码：
+    后者在周末会误判「盘中」（周六北京 23:00 对应美东周六 11:00，实为休市）。
+
+    Args:
+        as_of: 报价时间（北京时间）。
+        now: 当前时间（北京时间）。
+
+    Returns:
+        Tuple[str, bool]: (状态文案, 是否盘中实时)。
+    """
+    et_now = beijing_to_us_eastern(now) or now
+    et_as_of = beijing_to_us_eastern(as_of) or as_of
+    if et_now.weekday() >= 5:
+        # 周六/周日：美股常规时段不交易，收盘快照也不得标成盘中
+        return "休市", False
+    current = et_now.time()
+    if clock_time(9, 30) <= current <= clock_time(16, 0):
+        # 盘中：仅当报价时间距今 15 分钟内才标 is_realtime；
+        # 盘中但报价陈旧（>15 分钟）归为收盘快照，防止 stale quote 冒充实时。
+        fresh = abs((et_now - et_as_of).total_seconds()) <= 900
+        if fresh:
+            return "盘中", True
+        return "收盘快照", False
+    if current < clock_time(9, 30):
+        return "盘前", False
+    if et_as_of.date() == et_now.date() and et_as_of.time() >= clock_time(16, 0):
+        # 收盘后且报价时间即本交易日收盘（16:00 ET）：明确标注收盘快照
+        return "收盘快照", False
+    return "盘后", False
+
+
 def classify_market_status(
     as_of: Optional[datetime],
     market: str,
@@ -234,7 +369,7 @@ def classify_market_status(
     Args:
         as_of: 数据时间（北京时间）。
         market: a/hk/us。
-        now: 可注入的当前时间，仅用于测试时段判定；生产缺省 datetime.now()。
+        now: 可注入的当前时间，仅用于测试时段判定；生产缺省取北京时间 :func:`bj_now`。
 
     Returns:
         Tuple[str, bool]: (状态文案, 是否盘中实时)。
@@ -244,14 +379,17 @@ def classify_market_status(
     if as_of is None:
         return "时间未知", False
 
-    now = now or datetime.now()
-    if as_of.date() < now.date():
+    now = now or bj_now()
+    current = now.time()
+    normalized = (market or "a").lower()
+    # 美股跨零点与周末口径由 _us_session_phase 按美东时区独立判定，
+    # 不走这里的「日期早一天即收盘快照」通用分支（否则周六会误标盘中/周日会误标快照）。
+    if normalized != "us" and as_of.date() < now.date():
         return "收盘快照", False
     if as_of.date() > now.date():
         return "数据时间异常", False
-
-    current = now.time()
-    normalized = (market or "a").lower()
+    if normalized == "us":
+        return _us_session_phase(as_of, now)
 
     if normalized == "a":
         morning = clock_time(9, 15) <= current <= clock_time(11, 30)
@@ -277,13 +415,6 @@ def classify_market_status(
             return "休市", False
         return "盘后", False
 
-    if normalized == "us":
-        # 美股常规时段按北京时间 21:30-04:00（夏令时）近似；冬令时顺延 1 小时
-        late_night = current >= clock_time(21, 30) or current <= clock_time(4, 0)
-        if late_night:
-            return "盘中", True
-        return "休市", False
-
     return "快照", False
 
 
@@ -294,7 +425,7 @@ def market_label(market: str) -> str:
         market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
 
     Returns:
-        str: 文本结果。
+        str: 市场中文名（A股/港股/美股/场外基金）；未登记时原样返回。
     """
     return config.MARKETS.get((market or "a").lower(), "A股")
 
@@ -397,7 +528,7 @@ def period_to_tencent(period: str) -> str:
         period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
 
     Returns:
-        str: 文本结果。
+        str: 腾讯 K 线周期参数。
 
     Raises:
         ValueError: period 仅支持 daily/weekly/monthly 或 日k/周k/月k。
@@ -416,7 +547,7 @@ def normalize_adjust(adjust: str) -> str:
         adjust: 复权方式：qfq=前复权 / hfq=后复权 / 空=不复权。
 
     Returns:
-        str: 文本结果。
+        str: 规范后的复权参数（""/qfq/hfq）。
 
     Raises:
         ValueError: adjust 仅支持 qfq/hfq/不复权。
@@ -433,6 +564,6 @@ def today_text() -> str:
     """返回今天的 ISO 日期。
 
     Returns:
-        str: 文本结果。
+        str: 今天日期（YYYY-MM-DD）。
     """
     return date.today().isoformat()

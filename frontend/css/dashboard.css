@@ -13,8 +13,48 @@
 
 .dash-widget {
   min-height: 220px;
+  position: relative;
   transition: outline-color 120ms ease;
   outline: 1px dashed transparent;
+}
+
+/* R3-11：右下角宽度拖拽手柄（斜纹提示可拉伸） */
+.dash-resize-handle {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-right: 2px solid var(--border-strong, var(--border));
+  border-bottom: 2px solid var(--border-strong, var(--border));
+  border-bottom-right-radius: 3px;
+  opacity: 0.55;
+  touch-action: none;
+}
+
+.dash-resize-handle:hover {
+  opacity: 1;
+  border-color: var(--accent-strong);
+}
+
+/* R3-11：下边缘高度拖拽手柄 */
+.dash-height-handle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 44px;
+  height: 8px;
+  margin-left: -22px;
+  cursor: ns-resize;
+  border-bottom: 2px solid var(--border-strong, var(--border));
+  opacity: 0.45;
+  touch-action: none;
+}
+
+.dash-height-handle:hover {
+  opacity: 1;
+  border-color: var(--accent-strong);
 }
 
 .dash-widget[draggable="true"]:active {
@@ -81,6 +121,36 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
+}
+
+/* R3-12：组件库行内的「标题 + 能力说明」双行预览 */
+.dash-lib-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dash-lib-desc {
+  color: var(--text-muted);
+  font-size: var(--fs-aux);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* R3-12：分类筛选 chips 允许横向滚动，避免窄屏挤压 */
+.dash-lib-filters {
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 88px;
+  overflow-y: auto;
+}
+
+.dash-lib-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
 }
 
 /* ---------- 通用浮层 / 模态框 ---------- */
@@ -267,3 +337,10 @@
     max-width: 100%;
   }
 }
+
+/* =============================================================
+ * DS-02：组件库独立页（#/widget-library）容器（2026-10-26）
+ * 复用抽屉同款 .dash-lib-* 卡片样式，仅调整为页内纵向布局。
+ * ============================================================= */
+.dash-lib-page { display: flex; flex-direction: column; gap: 10px; }
+.dash-lib-page .dash-lib-grid { max-height: none; }

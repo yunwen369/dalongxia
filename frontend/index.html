@@ -15,6 +15,8 @@
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
   <!-- 阶段 6：国际化与本地化（最先加载，供后续脚本取词） -->
   <script src="js/i18n.js" defer></script>
+  <!-- P1-13：前段共享工具模块（el/t/toast/fmt/fmtPct/api/renderTable/buildCandlestickOption） -->
+  <script src="js/utils.js" defer></script>
   <script src="vendor/echarts.min.js" defer></script>
   <script src="js/market.js" defer></script>
   <script src="js/app.js" defer></script>
@@ -32,22 +34,23 @@
     <header class="topbar" role="banner">
       <div class="logo">
         <span class="logo-mark" aria-hidden="true">OB</span>
-        <span>OpenBB 中文投研工作台</span>
+        <span data-i18n="app.name">OpenBB 中文投研工作台</span>
       </div>
 
       <nav class="nav" id="main-nav" aria-label="主菜单">
         <button class="nav-item active" type="button" data-view="home" data-i18n="nav.home">首页</button>
         <button class="nav-item" type="button" data-view="dashboard" data-i18n="nav.dashboard">仪表板</button>
+        <!-- R3-31：自选股属高频入口，前移到第三位（与侧栏「我的自选」同一视图） -->
+        <button class="nav-item" type="button" data-view="watchlist" data-i18n="nav.watchlist">自选股</button>
         <button class="nav-item" type="button" data-view="charting" data-i18n="nav.charting">图表</button>
         <button class="nav-item" type="button" data-view="news" data-i18n="nav.news">新闻</button>
         <button class="nav-item" type="button" data-view="sectors" data-i18n="nav.sectors">板块</button>
         <button class="nav-item" type="button" data-view="stock" data-i18n="nav.stock">个股</button>
         <button class="nav-item" type="button" data-view="sector-val" data-i18n="nav.sectorVal">估值</button>
+        <button class="nav-item" type="button" data-view="lhb" data-i18n="nav.lhb">龙虎榜</button>
         <button class="nav-item" type="button" data-view="fund" data-i18n="nav.fund">场外基金</button>
         <button class="nav-item" type="button" data-view="portfolio" data-i18n="nav.portfolio">持仓</button>
         <button class="nav-item" type="button" data-view="yjb" data-i18n="nav.yjb">养基宝</button>
-        <button class="nav-item" type="button" data-view="connectors" data-i18n="nav.connectors">连接器</button>
-        <button class="nav-item" type="button" data-view="settings" data-i18n="nav.settings">设置</button>
       </nav>
 
       <div class="topbar-actions">
@@ -55,79 +58,105 @@
           class="global-search"
           id="global-search"
           type="search"
-          placeholder="搜索代码或名称"
-          title="全局搜索：股票 / 基金 / 板块（Ctrl+K）"
+          placeholder="搜索代码或名称" data-i18n-placeholder="search.placeholder"
+          title="全局搜索：股票 / 基金 / 板块（Ctrl+K）" data-i18n-title="search.globalTitle"
           autocomplete="off"
           aria-label="全局搜索"
         >
-        <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）">主题</button>
-        <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉">AI 助手</button>
+        <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）" data-i18n-title="action.themeToggleTitle">主题</button>
+        <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉" data-i18n-title="copilot.open">AI 助手</button>
       </div>
     </header>
 
     <div class="body">
       <!-- ② 可折叠仪表板侧栏：宽 236px -->
       <aside class="sidebar" role="complementary" aria-label="仪表板侧栏">
-        <div class="sidebar-title">仪表板</div>
-        <div class="sidebar-heading">市场总览</div>
+        <div class="sidebar-title" data-i18n="page.dashboard">仪表板</div>
+        <div class="sidebar-heading" data-i18n="sidebar.myDashboards">我的仪表板</div>
+        <!-- R3-02：分组树由 dashboard.js 动态渲染（含重命名/复制/分组/删除后的即时刷新） -->
+        <ul class="sidebar-list" id="sidebar-dashboards"></ul>
         <ul class="sidebar-list">
-          <li class="sidebar-item active" data-action="dashboard" data-dashboard="overview">市场总览（当前）</li>
-          <li class="sidebar-item" data-action="dashboard" data-dashboard="new">新建仪表板</li>
-          <li class="sidebar-item" data-action="dashboard" data-dashboard="library">组件库</li>
+          <li class="sidebar-item" data-action="dashboard" data-dashboard="new" data-i18n="dashboard.newDash">新建仪表板</li>
+          <!-- DS-01/DS-02：管理页与组件库页改为独立路由（可直达 URL），不再是页内工具栏/抽屉独占 -->
+          <li class="sidebar-item" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
+          <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
         </ul>
         <div class="sidebar-divider"></div>
-        <div class="sidebar-heading">系统</div>
+        <div class="sidebar-heading" data-i18n="nav.watchlist">自选股</div>
         <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view-target="connectors">数据连接器</li>
-          <li class="sidebar-item" data-action="view" data-view-target="settings">设置</li>
+          <li class="sidebar-item" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">我的自选</li>
+        </ul>
+        <!-- W-03：自选分组树（市场分组 + 数量徽章），由 pages.js 按 /api/watchlist 计数动态渲染 -->
+        <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
+        <div class="sidebar-divider"></div>
+        <!-- 新增功能 ⑥：新闻分组（资讯流 + 财报/公告搜索），与新闻页 N-05 入口卡同跳唯一实现页 -->
+        <div class="sidebar-heading" data-i18n="nav.news">新闻</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">资讯流</li>
+          <li class="sidebar-item" id="side-financial-search" data-action="fs" data-i18n="fs.entry.title">财报 / 公告搜索</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="sidebar.system">系统</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">数据连接器</li>
+          <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.settings">设置</li>
         </ul>
       </aside>
 
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
       <main class="workspace" role="main">
         <div class="toolbar">
-          <span class="page-title" id="page-title">首页 · 市场总览</span>
-          <span class="badge" id="build-badge">构建标识加载中</span>
-          <span class="badge" id="health-badge">健康检查中</span>
+          <span class="page-title" id="page-title" data-i18n="page.home">首页 · 市场总览</span>
+          <span class="badge" id="build-badge" data-i18n="health.buildLoading">构建标识加载中</span>
+          <span class="badge" id="health-badge" data-i18n="health.checking">健康检查中</span>
           <span class="toolbar-spacer"></span>
-          <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）">刷新</button>
+          <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）" data-i18n-title="action.refreshTitle">刷新</button>
         </div>
 
         <section class="viewport" id="viewport">
           <div class="market-panel">
             <div class="market-controls">
-              <label>市场
+              <label data-i18n="market.label">市场
                 <select id="mk-market">
                   <option value="a">A股</option>
                   <option value="hk">港股</option>
                   <option value="us">美股</option>
                 </select>
               </label>
-              <label>代码
+              <label data-i18n="mk.codeLabel">代码
                 <input id="mk-symbol" value="600519" autocomplete="off" aria-label="股票代码">
               </label>
-              <button class="icon-button" id="mk-refresh" type="button">刷新</button>
-              <button class="icon-button" id="mk-chart-link" type="button">图表分析 ↗</button>
+              <button class="icon-button" id="mk-refresh" type="button" data-i18n="action.refresh">刷新</button>
+              <button class="icon-button" id="mk-chart-link" type="button" data-i18n="stock.chartLink">图表分析 ↗</button>
               <span class="toolbar-spacer"></span>
-              <span class="badge" id="mk-source">数据源：—</span>
-              <span class="badge" id="mk-caliber">口径：—</span>
-              <span class="badge" id="mk-status">状态：—</span>
-              <span class="badge" id="mk-asof">时间：—</span>
+              <span class="badge" id="mk-source" data-i18n="mk.badgeSource">数据源：—</span>
+              <span class="badge" id="mk-caliber" data-i18n="mk.caliberBadge">口径：—</span>
+              <span class="badge" id="mk-status" data-i18n="mk.badgeStatus">状态：—</span>
+              <span class="badge" id="mk-asof" data-i18n="mk.badgeTime">时间：—</span>
             </div>
 
             <div class="market-grid">
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">核心指数行情</span>
-                  <span class="badge" id="mk-index-badge">加载中</span>
+                  <span class="card-title" data-i18n="market.coreIndex">核心指数行情</span>
+                  <span class="badge" id="mk-index-badge" data-i18n="state.loadingShort">加载中</span>
                 </div>
                 <div class="card-body table-scroll" id="mk-index-table">—</div>
               </article>
 
+              <!-- FN-01：市场情绪温度 + 涨跌家数（复用 /api/sentiment/market，与仪表板 N-03 同源，不另造接口） -->
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">上证指数走势</span>
-                  <span class="badge" id="mk-index-kline-badge">加载中</span>
+                  <span class="card-title" data-i18n="market.sentiTitle">市场情绪 · 涨跌家数</span>
+                  <span class="badge" id="mk-senti-badge" data-i18n="state.loadingShort">加载中</span>
+                </div>
+                <div class="card-body" id="mk-senti-body">—</div>
+              </article>
+
+              <article class="card market-card">
+                <div class="card-header">
+                  <span class="card-title" data-i18n="market.indexTrend">上证指数走势</span>
+                  <span class="badge" id="mk-index-kline-badge" data-i18n="state.loadingShort">加载中</span>
                 </div>
                 <div class="card-body">
                   <div class="market-chart" id="mk-index-chart"></div>
@@ -136,35 +165,35 @@
 
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">实时报价</span>
-                  <span class="badge" id="mk-quote-badge">加载中</span>
+                  <span class="card-title" data-i18n="stock.quoteCard">实时报价</span>
+                  <span class="badge" id="mk-quote-badge" data-i18n="state.loadingShort">加载中</span>
                 </div>
                 <div class="card-body table-scroll" id="mk-quote-table">—</div>
               </article>
 
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">K线 / 分时</span>
-                  <span class="badge">图表分析页提供</span>
+                  <span class="card-title" data-i18n="market.klineMinute">K线 / 分时</span>
+                  <span class="badge" data-i18n="market.chartProvided">图表分析页提供</span>
                 </div>
                 <div class="card-body">
                   <div class="pg-state" id="mk-chart-hint">
-                    <div class="pg-state-title">K 线与分时统一在「图表分析」页提供</div>
-                    <div class="pg-state-hint">功能唯一：周期、复权、指标与画线都在图表页操作，避免两处重复渲染同一数据。</div>
-                    <button class="pg-btn" id="mk-chart-hint-link" type="button">前往图表分析</button>
+                    <div class="pg-state-title" data-i18n="market.unifiedTitle">K 线与分时统一在「图表分析」页提供</div>
+                    <div class="pg-state-hint" data-i18n="market.unifiedHint">功能唯一：周期、复权、指标与画线都在图表页操作，避免两处重复渲染同一数据。</div>
+                    <button class="pg-btn" id="mk-chart-hint-link" type="button" data-i18n="stock.chartLink">前往图表分析</button>
                   </div>
                 </div>
               </article>
 
               <article class="card market-card">
                 <div class="card-header">
-                  <span class="card-title">搜索</span>
-                  <span class="badge" id="mk-search-badge">腾讯智能联想</span>
+                  <span class="card-title" data-i18n="market.search">搜索</span>
+                  <span class="badge" id="mk-search-badge" data-i18n="market.tencentSuggest">腾讯智能联想</span>
                 </div>
                 <div class="card-body">
                   <div class="search-row">
-                    <input id="mk-search-input" placeholder="输入代码 / 名称 / 拼音" autocomplete="off">
-                    <button class="icon-button" id="mk-search-button" type="button">搜索</button>
+                    <input id="mk-search-input" placeholder="输入代码 / 名称 / 拼音" data-i18n-placeholder="market.searchPlaceholder" autocomplete="off">
+                    <button class="icon-button" id="mk-search-button" type="button" data-i18n="action.search">搜索</button>
                   </div>
                   <div class="search-list" id="mk-search-list">—</div>
                 </div>
@@ -172,14 +201,14 @@
 
               <article class="card market-card wide">
                 <div class="card-header">
-                  <span class="card-title">个股概况</span>
-                  <span class="badge" id="mk-profile-badge">加载中</span>
+                  <span class="card-title" data-i18n="mk.profile">个股概况</span>
+                  <span class="badge" id="mk-profile-badge" data-i18n="state.loadingShort">加载中</span>
                 </div>
                 <div class="card-body table-scroll" id="mk-profile-table">—</div>
               </article>
             </div>
 
-            <div class="notice" id="mk-notice">
+            <div class="notice" id="mk-notice" data-i18n="market.notice">
               本页所有数值均来自真实接口；数据源与口径徽章显示实际命中通道。
               休市/盘后显示“收盘快照”，不伪装盘中实时；搜索与概况字段以源站返回为准。
             </div>
@@ -190,6 +219,9 @@
         <!-- #/sectors 板块分析（S-01~S-07） -->
         <!-- #/dashboard 组件化仪表板（阶段 6） -->
         <section class="page-view" id="page-dashboard" hidden aria-label="仪表板"></section>
+        <!-- DS-01/DS-02：仪表板管理与组件库独立路由容器 -->
+        <section class="page-view" id="page-dashboard-manage" hidden aria-label="仪表板管理"></section>
+        <section class="page-view" id="page-widget-library" hidden aria-label="组件库"></section>
         <section class="page-view" id="page-sectors" hidden aria-label="板块分析"></section>
         <!-- #/stock 个股详情 FinScope（ST-01~ST-10） -->
         <section class="page-view" id="page-stock" hidden aria-label="个股详情"></section>
@@ -199,6 +231,10 @@
         <section class="page-view" id="page-news" hidden aria-label="新闻资讯"></section>
         <!-- #/fund 场外基金详情（批次 5.3） -->
         <section class="page-view" id="page-fund" hidden aria-label="场外基金"></section>
+        <!-- #/watchlist 自选股（W-01/W-02，新增功能 20261022） -->
+        <section class="page-view" id="page-watchlist" hidden aria-label="自选股"></section>
+        <!-- #/lhb 龙虎榜·北向资金（L-01~L-03，新增功能 20261022） -->
+        <section class="page-view" id="page-lhb" hidden aria-label="龙虎榜北向资金"></section>
         <!-- #/portfolio 持仓管理（批次 5.3） -->
         <section class="page-view" id="page-portfolio" hidden aria-label="持仓管理"></section>
         <!-- #/connectors 数据连接器（批次 5.4） -->
@@ -216,19 +252,19 @@
   <!-- ④ 右侧 Copilot 抽屉：宽 400px，默认隐藏 -->
   <aside class="copilot" id="copilot" aria-label="AI 助手抽屉" aria-hidden="true">
     <div class="copilot-header">
-      <span>AI 助手 · Copilot</span>
-      <button class="icon-button" id="copilot-close" type="button" title="关闭抽屉（Esc）">关闭</button>
+      <span data-i18n="copilot.headerTitle">AI 助手 · Copilot</span>
+      <button class="icon-button" id="copilot-close" type="button" title="关闭抽屉（Esc）" data-i18n-title="action.closeTitle">关闭</button>
     </div>
     <div class="copilot-body">
-      <p>AI 助手正在初始化…</p>
+      <p data-i18n="copilot.initializing">AI 助手正在初始化…</p>
     </div>
-    <div class="copilot-footer">非投资建议 · 数据以真实接口为准</div>
+    <div class="copilot-footer" data-i18n="copilot.footer">非投资建议 · 数据以真实接口为准</div>
   </aside>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <noscript>
-    <div style="padding:16px;color:#f6f6f6;">当前浏览器禁用了 JavaScript，请启用后重新打开本页。</div>
+    <div style="padding:16px;color:#f6f6f6;" data-i18n="alert.noScript">当前浏览器禁用了 JavaScript，请启用后重新打开本页。</div>
   </noscript>
 </body>
 </html>

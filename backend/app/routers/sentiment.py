@@ -12,14 +12,15 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query
 
 from backend.app import config
+from backend.app.datasource import utils
 from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.datasource import breadth as breadth_provider
 from backend.app.datasource import news as news_provider
 from backend.app.datasource import sentiment as sentiment_engine
 
@@ -56,7 +57,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str] 
     payload.update({
         "source": source,
         "caliber": caliber,
-        "as_of": as_of or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "as_of": as_of or utils.now_text(),
         "market_status": "情绪快照",
         "is_realtime": False,
     })
@@ -193,6 +194,8 @@ def sentiment_market(
     aggregate["samples"] = _samples(items)
     aggregate["region"] = region
     aggregate["board"] = board or None
+    # FN-01：首页「市场情绪」组件复用本接口，附带沪深两市涨跌家数（同页双指标，不另造接口）
+    aggregate["breadth"] = breadth_provider.market_breadth()
     return _pack(
         aggregate,
         "财联社" if region == "cn" else "东财/新浪/同花顺",
@@ -218,21 +221,32 @@ def sentiment_board(
     name = (board or "").strip()
     if not name:
         return _bad("board 参数不可为空")
-    node = news_provider.resolve_board(name)
-    if node is None:
-        return api_error(ErrorCode.NOT_FOUND, "板块不存在，请从板块树中选择。", data={"board": name})
+    # R2-06：板块解析 / 取数 / 打分 / 聚合任一步异常，都必须在路由层收口为
+    # UPSTREAM_ERROR 中文契约（data 非 null），禁止漏成 500 INTERNAL_ERROR。
+    # 同花顺 V8 中途崩溃属 R-012 环境项，但契约不能依赖它「不崩」。
+    try:
+        node = news_provider.resolve_board(name)
+        if node is None:
+            return api_error(ErrorCode.NOT_FOUND, "板块不存在，请从板块树中选择。", data={"board": name})
 
-    def loader() -> Dict[str, Any]:
-        """板块快讯取数。
+        def loader() -> Dict[str, Any]:
+            """板块快讯取数。
 
-        Returns:
-            dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-        """
-        return {"items": news_provider.search_by_sector(name, "time", max(limit, 60)), "error": None}
+            Returns:
+                dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+            """
+            return {"items": news_provider.search_by_sector(name, "time", max(limit, 60)), "error": None}
 
-    cached = cache.get_or_load(f"sentiment:board:{name}:{limit}", config.TTL["news_flash"], loader)
-    items = sentiment_engine.analyze_items(cached.get("items") or [], sectors=news_provider.sector_keywords())
-    aggregate = sentiment_engine.aggregate(items, scope=name)
+        cached = cache.get_or_load(f"sentiment:board:{name}:{limit}", config.TTL["news_flash"], loader)
+        items = sentiment_engine.analyze_items(cached.get("items") or [], sectors=news_provider.sector_keywords())
+        aggregate = sentiment_engine.aggregate(items, scope=name)
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一收敛为契约错误
+        logger.warning("板块情绪计算失败：%s（%s）", name, type(exc).__name__, exc_info=True)
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            "板块情绪计算失败（数据源通道异常），请稍后点击刷新重试。",
+            data={"board": name},
+        )
     aggregate["samples"] = _samples(items)
     aggregate["board"] = name
     aggregate["level"] = node.get("level")

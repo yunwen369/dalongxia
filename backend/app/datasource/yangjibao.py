@@ -16,151 +16,159 @@
 - 老接口 `Request-Sign = md5(路径 + token + 时间戳 + SECRET_OLD)`，`Authorization = token`；
 - 公共头 `Request-Time = 时间戳` + 浏览器 UA。
 
+接口契约（2026-10-25 依据 GitHub 公开实现 `zwls666/yangjibao-edge-extension` 对齐，并已实测签名通过）：
+- 基址：`https://browser-plug-api.yangjibao.com`（原 `wxapp-api` 小程序通道已废弃，会 403）
+- 签名：`Request-Sign = md5(去查询串 path + token + 秒级 Request-Time + SECRET)`，
+  `Authorization` 直接放**原始 token**（无 `ios:` 前缀）；早期假设的「含基址」「毫秒时间戳」均已证伪
+- `GET /qr_code`            → `data.url` / `data.id`（实测：`{"code":200,"data":{"url":"http://weixin.qq.com/q/…","id":"loginQrId…"}}`）
+- `GET /qr_code_state/{id}` → `data.state`：`"2"` 且带 `data.token` = 登录成功；`"3"` = 二维码失效
+- `GET /user_account`       → `data` 为数组或 `{list|accounts}`，账户 id 取 `id` / `account_id`
+- `GET /fund_hold?account_id=` → 持仓（`fund_id` / `money` / `hold_earn` 等）
+- `GET /income_data?account_id=` → 估值列表（`fund_id` / `code` / `short_name`，估算涨跌幅在 `nv_info.vgszzl`）
+
+仍待实测确认（非阻塞）：账户多开时的默认账户选择、`nv_info` 在非交易时段是否置空、
+token 有效期与失效码值。
+
 本模块只做协议、存储与状态机，不拼装 HTTP 响应。
 """
 
 from __future__ import annotations
 
 import base64
-import ctypes
 import hashlib
 import json
 import logging
 import os
-import platform
 import secrets as py_secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from backend.app import config
-from backend.app.core import netfix
-from backend.app.core.errors import NonRetryableError
+from backend.app.core import atomic, netfix, secure_store
 from backend.app.datasource import utils
-
+from backend.app.core.errors import NonRetryableError
 netfix.apply_netfix()
 
 logger = logging.getLogger(__name__)
 
 YJB_TOKEN_FILE = config.DATA_DIR / "yjb_token.json"
 YJB_STATE_FILE = config.DATA_DIR / "yjb_state.json"
+# 签名盐本地加密配置（DPAPI + YJB2 魔数）；环境变量优先，文件仅作本机注入通道
+YJB_SECRET_FILE = config.DATA_DIR / "yjb_secret.json"
+_SECRET_MAGIC = b"YJB2"
 
 BASE_NEW = os.environ.get("YJB_BASE_URL_NEW", "https://app-api.yangjibao.com").rstrip("/")
+# 老接口默认仍为 http 明文（社区逆向得到的唯一入口）；运行时优先尝试 https，
+# 失败再回落 http 并在 status.transport 中如实标注「明文风险」。
 BASE_OLD = os.environ.get("YJB_BASE_URL_OLD", "http://browser-plug-api.yangjibao.com").rstrip("/")
-SECRET_NEW = os.environ.get("YJB_SECRET_NEW", "")
-SECRET_OLD = os.environ.get("YJB_SECRET_OLD", "")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
-# 二维码轮询会话（进程内，2 秒一次；未绑定成功前不落盘）
+# 二维码会话有效期（秒）：真实实现说明「二维码 4 分钟内有效」，故取 240，
+# 后端与前端轮询次数共用同一来源，避免两处硬编码漂移
+QRCODE_TTL = 240
+# 二维码轮询会话（进程内；未绑定成功前 token 不落盘）
+#
+# R4 多 worker 评估：本工具为**本地单用户桌面形态**（desktop_shell 以单进程 uvicorn
+# 启动、不指定 workers），二维码会话只在扫码这 120 秒内需要跨请求共享，因此进程内
+# dict 已满足；若未来改为多 worker/多实例部署，必须改为 `data/yjb_state.json` 或
+# Redis 等共享存储，否则轮询会落到没有会话的 worker 上并恒返回 expired。
+# 为防长时间运行后无界增长，每次创建新会话时按 TTL 清理过期项并限制总量。
 _SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSION_MAX = 32                 # 同时存在的会话上限（本地单用户足够）
+_SESSION_KEEP = QRCODE_TTL * 2    # 会话最长保留：2×TTL（成功会话留给 /bind 使用）
+# 老接口实际可用的传输方案（进程内记忆，避免每次请求都先试 https 再回落）
+_OLD_SCHEME: Dict[str, str] = {}
+# 统一网络会话（trust_env=False + 重试），惰性创建
+_SESSION: Optional[requests.Session] = None
+
+
+def _purge_sessions() -> None:
+    """清理过期二维码会话，并限制会话总量（防进程内 dict 无界增长）。
+
+    保留策略：`created_at` 超过 `2×QRCODE_TTL` 的一律删除；总量超上限时按创建
+    时间淘汰最旧的。成功会话在保留窗内仍可被 `/bind` 使用。
+    """
+    now = time.time()
+    stale = [
+        sid for sid, item in _SESSIONS.items()
+        if now - float(item.get("created_at") or 0) > _SESSION_KEEP
+    ]
+    for sid in stale:
+        _SESSIONS.pop(sid, None)
+    if len(_SESSIONS) > _SESSION_MAX:
+        ordered = sorted(_SESSIONS.items(), key=lambda kv: float(kv[1].get("created_at") or 0))
+        for sid, _ in ordered[: len(_SESSIONS) - _SESSION_MAX]:
+            _SESSIONS.pop(sid, None)
 
 
 # =============================================================
 # 一、DPAPI 加密存储（token 不明文落盘）
 # =============================================================
-class _DataBlob(ctypes.Structure):
-    """Windows DPAPI DATA_BLOB 结构。"""
-
-    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_char))]
+# DPAPI 实现已收口到 backend.app.core.secure_store（P1-15：AI Key 与 token 共用同一机制）。
+# 这里保留同名薄封装，避免调用点与既有测试改动。
+_DataBlob = secure_store._DataBlob  # noqa: SLF001 - 兼容历史引用
 
 
 def _dpapi_available() -> bool:
-    """仅 Windows 且 crypt32 可用时支持加密落盘。
+    """当前环境是否支持 DPAPI 加密（Windows + crypt32）。
 
     Returns:
-        bool: 判定结果。
+        bool: 支持返回 True。
     """
-    if platform.system() != "Windows":
-        return False
-    try:
-        ctypes.windll.crypt32  # noqa: B018 - 探测可用性
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    return secure_store.available()
 
 
 def _dpapi(protect: bool, data: bytes) -> bytes:
-    """调用 DPAPI 加/解密（用户级，绑定当前 Windows 账户）。
+    """调用 DPAPI 加/解密（薄封装，实现见 core.secure_store）。
 
     Args:
-        protect: 保护配置映射。
-        data: 待包装或清洗的数据主体。
+        protect: True=加密，False=解密。
+        data: 待处理字节。
 
     Returns:
-        bytes: 计算结果。
+        bytes: DPAPI 处理后的字节（protect=True 为密文，False 为明文）。
 
     Raises:
-        OSError: DPAPI 操作失败。
+        OSError: DPAPI 调用失败。
     """
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    buffer = ctypes.create_string_buffer(data, len(data))
-    blob_in = _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
-    blob_out = _DataBlob()
-    flags = 0x1 if protect else 0x0  # CRYPTPROTECT_UI_FORBIDDEN
-    ok = crypt32.CryptProtectData(
-        ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)
-    ) if protect else crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)
-    )
-    if not ok:
-        raise OSError("DPAPI 操作失败")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        kernel32.LocalFree(blob_out.pbData)
+    return secure_store._dpapi(protect, data)  # noqa: SLF001 - 复用唯一实现
 
 
 def _write_secure(path: Path, payload: Dict[str, Any]) -> None:
-    """加密写入 JSON；不可加密时拒绝写明文（规范 §12.3）。
+    """加密写入 token 文件（YJB1 格式，DPAPI 不可用时拒绝明文落盘）。
 
     Args:
-        path: 接口路径 / 文件路径。
-        payload: 请求体（JSON 对象）。
+        path: 目标文件路径。
+        payload: 待落盘字典。
 
     Raises:
-        NonRetryableError: 当前系统不支持安全存储（DPAPI 不可用），已拒绝明文落盘。
+        NonRetryableError: DPAPI 不可用，按规范拒绝明文落盘。
     """
-    if not _dpapi_available():
-        raise NonRetryableError("当前系统不支持安全存储（DPAPI 不可用），已拒绝明文落盘")
-    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    encrypted = _dpapi(True, raw)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_bytes(b"YJB1" + base64.b64encode(encrypted))
-    os.replace(temp, path)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        secure_store.write_secure(path, payload, b"YJB1")
+    except OSError as exc:
+        raise NonRetryableError(f"{exc}，已拒绝明文落盘") from exc
 
 
 def _read_secure(path: Path) -> Optional[Dict[str, Any]]:
-    """读取加密 JSON；文件缺失/损坏/非本机账户加密时返回 None。
+    """读取 YJB1 加密文件；缺失/损坏/非本机账户加密时返回 None。
 
     Args:
-        path: 接口路径 / 文件路径。
+        path: 文件路径。
 
     Returns:
-        dict | None: 命中时返回记录，缺失返回 None。
+        Optional[Dict[str, Any]]: 解密后的字典或 None。
     """
-    if not path.exists():
-        return None
-    try:
-        blob = path.read_bytes()
-        if not blob.startswith(b"YJB1"):
-            return None
-        decrypted = _dpapi(False, base64.b64decode(blob[4:]))
-        data = json.loads(decrypted.decode("utf-8"))
-        return data if isinstance(data, dict) else None
-    except Exception as exc:  # noqa: BLE001 - 损坏按未绑定处理
-        logger.warning("养基宝凭据读取失败：%s", type(exc).__name__)
-        return None
+    data = secure_store.read_secure(path, b"YJB1")
+    if data is None and path.exists():
+        logger.warning("养基宝凭据读取失败：文件损坏或非本机账户加密")
+    return data
 
 
 # =============================================================
@@ -170,7 +178,7 @@ def _load_state() -> Dict[str, Any]:
     """读取非敏感状态（告知书确认、增强通道开关）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: 本地状态字典 `{consent, enabled}`（非统一信封，仅内部使用）。
     """
     if not YJB_STATE_FILE.exists():
         return {"consent": None, "enabled": False}
@@ -189,10 +197,8 @@ def _save_state(state: Dict[str, Any]) -> None:
         state: 状态对象（读改写后原样返回）。
     """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp = YJB_STATE_FILE.with_suffix(".json.tmp")
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, ensure_ascii=False, indent=2)
-    os.replace(temp, YJB_STATE_FILE)
+    # 原子写（R3-09 统一助手）：避免进程中断留下半截 JSON
+    atomic.atomic_write_json(YJB_STATE_FILE, state)
 
 
 def accept_consent(accepted: bool) -> Dict[str, Any]:
@@ -202,12 +208,12 @@ def accept_consent(accepted: bool) -> Dict[str, Any]:
         accepted: 是否已确认合规告知书。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: 更新后的本地状态 `{consent, enabled}`（由路由层再包统一信封）。
     """
     state = _load_state()
     state["consent"] = {
         "accepted": bool(accepted),
-        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "at": utils.now_text(),
     } if accepted else None
     if not accepted:
         state["enabled"] = False
@@ -222,7 +228,7 @@ def set_enabled(enabled: bool) -> Dict[str, Any]:
         enabled: 是否启用。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: 更新后的本地状态 `{consent, enabled}`（由路由层再包统一信封）。
 
     Raises:
         PermissionError: 请先阅读并确认《养基宝 / 盘中估值 合规告知书》。
@@ -268,7 +274,7 @@ def save_token(token: str, platform_name: str = "ios") -> None:
     _write_secure(YJB_TOKEN_FILE, {
         "token": token,
         "platform": platform_name,
-        "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "bound_at": utils.now_text(),
     })
     logger.info("养基宝 token 已加密落盘（长度 %d，内容不记录）", len(token))
 
@@ -283,56 +289,173 @@ def clear_token() -> None:
             logger.warning("养基宝 token 清除失败：%s", type(exc).__name__)
 
 
+def _load_secret() -> Tuple[str, str]:
+    """读取签名盐（环境变量优先，其次本地 DPAPI 加密配置）。
+
+    盐属凭据：只允许从环境变量或 DPAPI 加密文件读取，**不得**写入代码、
+    日志、前端或 Git。读取顺序保证运维可用环境变量覆盖本地配置。
+
+    Returns:
+        Tuple[str, str]: (新接口盐, 老接口盐)；未配置时均为空串。
+    """
+    env_new = (os.environ.get("YJB_SECRET_NEW") or "").strip()
+    env_old = (os.environ.get("YJB_SECRET_OLD") or "").strip()
+    if env_new or env_old:
+        return env_new, env_old
+    data = secure_store.read_secure(YJB_SECRET_FILE, _SECRET_MAGIC) or {}
+    return str(data.get("new") or "").strip(), str(data.get("old") or "").strip()
+
+
+def secret_source() -> Optional[str]:
+    """签名盐来源（用于前端提示「盐从哪来」，绝不返回值本身）。
+
+    Returns:
+        Optional[str]: `环境变量` / `本地加密配置` / None（未配置）。
+    """
+    env_new = (os.environ.get("YJB_SECRET_NEW") or "").strip()
+    env_old = (os.environ.get("YJB_SECRET_OLD") or "").strip()
+    if env_new or env_old:
+        return "环境变量"
+    if YJB_SECRET_FILE.exists():
+        new_secret, old_secret = _load_secret()
+        if new_secret or old_secret:
+            return "本地加密配置"
+    return None
+
+
+def set_secret(new_secret: str, old_secret: str) -> bool:
+    """把签名盐以 DPAPI 加密写入本机配置（不落明文、不回显）。
+
+    Args:
+        new_secret: 新接口签名盐（可空）。
+        old_secret: 老接口签名盐（可空）。
+
+    Returns:
+        bool: 是否写入成功；盐全为空时清除本地配置并返回 False。
+
+    Raises:
+        NonRetryableError: DPAPI 不可用（拒绝明文落盘）。
+    """
+    new_value = (new_secret or "").strip()
+    old_value = (old_secret or "").strip()
+    if not (new_value or old_value):
+        clear_secret()
+        return False
+    try:
+        secure_store.write_secure(YJB_SECRET_FILE, {"new": new_value, "old": old_value}, _SECRET_MAGIC)
+    except OSError as exc:
+        raise NonRetryableError(f"{exc}，已拒绝明文落盘签名盐") from exc
+    return True
+
+
+def clear_secret() -> None:
+    """清除本地加密的签名盐（解除配置即回到「待配置」态）。"""
+    if YJB_SECRET_FILE.exists():
+        try:
+            YJB_SECRET_FILE.unlink()
+            logger.info("养基宝签名盐已清除（本地加密配置）")
+        except OSError as exc:
+            logger.warning("养基宝签名盐清除失败：%s", type(exc).__name__)
+
+
 def secret_configured() -> bool:
-    """签名盐是否已通过环境变量配置。
+    """签名盐是否已配置（环境变量或本地加密配置任一命中）。
 
     Returns:
         bool: 判定结果。
     """
-    return bool(SECRET_NEW or SECRET_OLD)
+    new_secret, old_secret = _load_secret()
+    return bool(new_secret or old_secret)
 
 
 # =============================================================
 # 三、协议调用（签名 + 四要件校验）
 # =============================================================
 def sign_new(path: str, token: str, timestamp: str) -> str:
-    """新接口签名：md5(基址+路径+token+SECRET_NEW+时间戳)。
+    """新接口签名：md5(去查询串 path + token + 秒级时间戳 + SECRET_NEW)。
+
+    ⚠️ 当前**未启用**（YJB-04）：本工程全部业务走旧通道 browser-plug-api
+    （`sign_old` + 裸 token Authorization + Chrome UA，已实测 200）。
+    本函数不得用于旧通道；若将来切换 app-api 新通道，必须按
+    《养基宝接口文档_GitHub调研_20261025.md》§3.2 订正为：
+      `md5(NEW_API_BASE + path + token + NEW_SECRET + ts)`
+    且 `Authorization: ios:<token>`、UA 伪装 `YJB/2.0.13 … Alamofire`，
+    与当前实现（不含基址、无 ios: 前缀、浏览器 UA）**三处都不同**。
+    新通道域名 https://app-api.yangjibao.com 的可达性本轮未验证（登记为
+    "未找到/需抓包"项），切换前必须重新实测，不得据本函数直接上线。
 
     Args:
-        path: 接口路径 / 文件路径。
+        path: 接口路径（以 / 开头的相对路径）。
         token: 访问令牌（敏感信息，不落日志）。
-        timestamp: 时间戳（秒）。
+        timestamp: 秒级时间戳字符串。
 
     Returns:
-        str: 文本结果。
+        str: 32 位小写十六进制 MD5 签名。
 
     Raises:
         NonRetryableError: 未配置 YJB_SECRET_NEW，无法调用养基宝新接口。
     """
-    if not SECRET_NEW:
+    secret_new, _ = _load_secret()
+    if not secret_new:
         raise NonRetryableError("未配置 YJB_SECRET_NEW，无法调用养基宝新接口")
-    raw = f"{BASE_NEW}{path}{token}{SECRET_NEW}{timestamp}"
+    # 真实算法（GitHub 公开实现，2026-08 版）：md5(去查询串的 path + token + 秒级时间戳 + SECRET)
+    # 注意：**不含基址**、时间戳为**秒**，两处都与早期逆向假设不同（R8 已按实测修正）
+    plain_path = path.split("?")[0]
+    raw = f"{plain_path}{token}{timestamp}{secret_new}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
 def sign_old(path: str, token: str, timestamp: str) -> str:
-    """老接口签名：md5(路径+token+SECRET_OLD+时间戳)。
+    """老接口签名：md5(去查询串的路径 + token + 秒级时间戳 + SECRET_OLD)。
 
     Args:
-        path: 接口路径 / 文件路径。
+        path: 接口路径（以 / 开头的相对路径）。
         token: 访问令牌（敏感信息，不落日志）。
-        timestamp: 时间戳（秒）。
+        timestamp: 秒级时间戳字符串。
 
     Returns:
-        str: 文本结果。
+        str: 32 位小写十六进制 MD5 签名。
 
     Raises:
         NonRetryableError: 未配置 YJB_SECRET_OLD，无法调用养基宝老接口。
     """
-    if not SECRET_OLD:
+    _, secret_old = _load_secret()
+    if not secret_old:
         raise NonRetryableError("未配置 YJB_SECRET_OLD，无法调用养基宝老接口")
-    raw = f"{path}{token}{SECRET_OLD}{timestamp}"
+    raw = f"{path.split('?')[0]}{token}{timestamp}{secret_old}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def _http_session() -> requests.Session:
+    """统一的养基宝请求会话（trust_env=False + 重试，与其它数据源一致）。
+
+    Returns:
+        requests.Session: 进程内复用同一会话，避免每次请求重建连接池。
+    """
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = netfix.make_session()
+        _SESSION.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    return _SESSION
+
+
+def _old_base_candidates() -> list:
+    """老接口可尝试的基址（https 优先，http 回落）。
+
+    老接口历史只提供 http 明文；若源站支持 https 则优先走加密通道，
+    避免 Authorization 头在明文链路传输（安全登记见接口说明书）。
+
+    Returns:
+        list[str]: 待尝试的基址列表，顺序即优先级。
+    """
+    if BASE_OLD.startswith("https://"):
+        return [BASE_OLD]
+    cached = _OLD_SCHEME.get("base")
+    https_base = "https://" + BASE_OLD.split("://", 1)[-1]
+    if cached == BASE_OLD:
+        # 已确认 https 不可用，直接走 http（避免每次多一次失败请求）
+        return [BASE_OLD]
+    return [https_base, BASE_OLD]
 
 
 def _request(method: str, base: str, path: str, token: str = "", params: Optional[Dict[str, Any]] = None,
@@ -341,29 +464,55 @@ def _request(method: str, base: str, path: str, token: str = "", params: Optiona
 
     Args:
         method: HTTP 方法。
-        base: 基准值。
-        path: 接口路径 / 文件路径。
+        base: 接口基址（新接口 https / 老接口 http）。
+        path: 接口路径。
         token: 访问令牌（敏感信息，不落日志）。
         params: 请求参数（查询串键值对）。
         use_old: 是否使用旧密钥（密钥轮换期）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{status, text, base, scheme}`；status 为 HTTP 状态码，text 为响应正文。
+
+    Raises:
+        NonRetryableError: 签名盐未配置时抛出（不发请求）。
+        requests.exceptions.RequestException: 网络层异常，交由调用方判定是否清 token。
     """
-    timestamp = str(int(time.time() * 1000))
+    # 真实实现用**秒级**时间戳（社区实现 Math.floor(Date.now()/1000)），毫秒会签名不匹配
+    timestamp = str(int(time.time()))
     sign = sign_old(path, token, timestamp) if use_old else sign_new(path, token, timestamp)
     headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json;charset=UTF-8",
         "Request-Time": timestamp,
         "Request-Sign": sign,
-        "Authorization": token if use_old else f"ios:{token}",
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
+        # 真实实现直接放原始 token；早期猜测的 "ios:" 前缀只在微信小程序通道使用
+        "Authorization": token,
     }
-    response = requests.request(
-        method, base + path, params=params, headers=headers,
-        timeout=config.DATASOURCE_TIMEOUT,
-    )
-    return {"status": response.status_code, "text": response.text}
+    session = _http_session()
+    bases = _old_base_candidates() if use_old else [base]
+    last_error: Optional[Exception] = None
+    for index, candidate in enumerate(bases):
+        try:
+            response = session.request(
+                method, candidate + path, params=params, headers=headers,
+                timeout=config.DATASOURCE_TIMEOUT,
+            )
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            # https 失败且还有 http 备选时继续尝试，其余情况原样抛出
+            if index + 1 < len(bases):
+                logger.info("养基宝老接口 https 不可用，回落 http 明文（原因：%s）", type(exc).__name__)
+                continue
+            raise
+        if candidate.startswith("https://"):
+            # 记录**成功的 https 基址**（不能记 BASE_OLD，否则状态会误报「仅 http 明文」）
+            _OLD_SCHEME["base"] = candidate
+            logger.info("养基宝老接口 https 通道可用（已登记进程内复用）")
+        else:
+            _OLD_SCHEME["base"] = candidate
+        return {"status": response.status_code, "text": response.text,
+                "base": candidate, "scheme": candidate.split("://", 1)[0]}
+    raise last_error or requests.exceptions.ConnectionError("养基宝老接口不可达")
 
 
 def verify_token_four_elements(token: str) -> Dict[str, Any]:
@@ -410,7 +559,7 @@ def start_qrcode_session() -> Dict[str, Any]:
     """创建扫码会话：调用 /qr_code 并用 segno 本地生成二维码（base64）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{session_id, qrcode, expires_in, status}`（二维码 base64 与本地会话标识）。
 
     Raises:
         NonRetryableError: 未配置养基宝签名密钥（YJB_SECRET_NEW/OLD），扫码绑定不可用。
@@ -443,9 +592,10 @@ def start_qrcode_session() -> Dict[str, Any]:
         logger.warning("二维码本地生成失败：%s", type(exc).__name__)
         image_base64 = ""
 
+    _purge_sessions()
     _SESSIONS[session_id] = {"created_at": time.time(), "state": "waiting", "token": None}
     return {"session_id": session_id, "url": url, "image_base64": image_base64,
-            "expires_in": 120}
+            "expires_in": QRCODE_TTL}
 
 
 def poll_session(session_id: str) -> Dict[str, Any]:
@@ -458,14 +608,14 @@ def poll_session(session_id: str) -> Dict[str, Any]:
         session_id: 会话标识。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{state, bound?, reason?}`；state ∈ waiting/scanning/success/expired/timeout。
     """
     session = _SESSIONS.get(session_id)
     if not session:
         return {"state": "expired", "message": "二维码会话不存在或已失效，请刷新重扫"}
     if session["state"] == "success":
         return {"state": "success", "message": "绑定成功", "bound": True}
-    if time.time() - session["created_at"] > 120 and session["state"] != "success":
+    if time.time() - session["created_at"] > QRCODE_TTL and session["state"] != "success":
         session["state"] = "timeout"
         return {"state": "timeout", "message": "二维码已超时，请刷新重扫"}
 
@@ -485,18 +635,30 @@ def poll_session(session_id: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         return {"state": session["state"], "message": "状态响应异常，稍后重试"}
 
-    code = body.get("code")
+    # R3-24：原 `code = body.get("code")` 为无用局部变量（轮询只认 data.state/token），已删
     data = body.get("data") or {}
     token = str(data.get("token") or "")
-    if token:
+    state_code = str(data.get("state") if data.get("state") is not None else data.get("status") or "")
+    # 真实契约（GitHub 公开实现，已实测对齐）：
+    #   state == "2" 且带 token → 登录成功（token 即用户凭据）
+    #   state == "3"            → 二维码失效，需重新生成
+    #   其余                    → 等待扫码 / 已扫码待确认
+    if state_code == "2" and token:
         session["state"] = "success"
         session["token"] = token
-        return {"state": "success", "message": "绑定成功", "bound": False}
-    state_code = str(data.get("state") or data.get("status") or "")
-    if state_code in ("2", "scanned", "SCANNED"):
-        session["state"] = "scanning"
-        return {"state": "scanning", "message": "已扫码，请在 App 内确认"}
-    return {"state": "waiting", "message": "等待扫码"}
+        return {"state": "success", "message": "扫码成功", "bound": False}
+    if state_code == "3":
+        session["state"] = "expired"
+        return {"state": "expired", "message": "二维码已失效，请重新生成"}
+    if token:
+        # 兜底：个别版本先下发 token 而 state 未及时更新
+        session["state"] = "success"
+        session["token"] = token
+        return {"state": "success", "message": "扫码成功", "bound": False}
+    if state_code in ("1", "0", ""):
+        return {"state": "waiting", "message": "等待扫码"}
+    session["state"] = "scanning"
+    return {"state": "scanning", "message": "已扫码，请在 App 内确认"}
 
 
 def confirm_bind(session_id: str) -> Dict[str, Any]:
@@ -506,7 +668,7 @@ def confirm_bind(session_id: str) -> Dict[str, Any]:
         session_id: 会话标识。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{bound, platform, bound_at}`（绑定成功后的本地摘要，不含 token）。
 
     Raises:
         PermissionError: 尚未扫码成功，无法绑定。
@@ -519,99 +681,377 @@ def confirm_bind(session_id: str) -> Dict[str, Any]:
     if not check["ok"]:
         raise PermissionError(f"token 校验失败：{check['reason']}")
     save_token(token, "ios")
-    session["token"] = None  # 内存中也不长期保留
+    # 绑定完成即销毁会话：token 已在 DPAPI 文件中，内存与会话表都不再保留
+    _SESSIONS.pop(session_id, None)
     return {"bound": True, "platform": "ios"}
 
 
-def fetch_increase_rate(fund_id: str) -> Dict[str, Any]:
-    """新接口实时涨幅（一级通道）。
+def _plug_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    """调用 browser-plug 接口并解包 `{code,data,message}`。
+
+    统一走 ``use_old=True`` 分支：真实通道（browser-plug-api）用老盐、https 优先。
+    token 为空时也允许（``/qr_code`` 本身无需登录态）。
 
     Args:
-        fund_id: 基金代码。
+        path: 接口路径（可含查询串；签名会自动去除查询串）。
+        params: 查询参数（由 requests 负责编码）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    result = _request("GET", BASE_NEW, "/market/v1/fund/increase-rate",
-                      token=(load_token() or {}).get("token", ""), params={"fund_id": fund_id})
-    return _parse_estimate(result.get("text"), "养基宝/increase-rate")
-
-
-def fetch_gz_data(fund_id: str) -> Dict[str, Any]:
-    """新接口估值明细（一级通道备选）。
-
-    Args:
-        fund_id: 基金代码。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    result = _request("GET", BASE_NEW, "/market/v1/fund/gz-data",
-                      token=(load_token() or {}).get("token", ""), params={"fund_id": fund_id})
-    return _parse_estimate(result.get("text"), "养基宝/gz-data")
-
-
-def _parse_estimate(text: str, source: str) -> Dict[str, Any]:
-    """解析估值响应；缺字段即报错，不猜测。
-
-    Args:
-        text: 待解析或清洗的文本。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        Any: 响应体里的 ``data`` 字段。
 
     Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+        NonRetryableError: 上游返回非 200、非 JSON、或 code != 200。
     """
-    try:
-        body = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise NonRetryableError(f"{source} 返回非 JSON") from exc
-    data = body.get("data") or {}
-    pct = data.get("increase_rate", data.get("rate", data.get("gz")))
-    if pct is None:
-        raise NonRetryableError(f"{source} 未返回涨幅字段")
-    try:
-        value = float(str(pct).replace("%", ""))
-    except ValueError as exc:
-        raise NonRetryableError(f"{source} 涨幅字段无法解析") from exc
-    return {"pct": value, "source": source, "as_of": time.strftime("%Y-%m-%d %H:%M:%S")}
-
-
-def search_fund_id(code: str) -> str:
-    """按基金代码换取养基宝 fund_id（新接口搜索）。
-
-    Args:
-        code: 证券或基金代码。
-
-    Returns:
-        str: 文本结果。
-
-    Raises:
-        NonRetryableError: 未绑定养基宝，无法搜索 fund_id。
-    """
-    token = (load_token() or {}).get("token", "")
-    if not token:
-        raise NonRetryableError("未绑定养基宝，无法搜索 fund_id")
-    result = _request("GET", BASE_NEW, "/market/v1/fund/search", token, params={"keyword": code})
+    token = str((load_token() or {}).get("token") or "")
+    result = _request("GET", BASE_OLD, path, token, params=params, use_old=True)
     if result["status"] != 200:
-        raise NonRetryableError(f"养基宝搜索不可用（HTTP {result['status']}）")
+        raise NonRetryableError(f"养基宝接口不可用（HTTP {result['status']}，{path.split('?')[0]}）")
     try:
         body = json.loads(result["text"])
     except json.JSONDecodeError as exc:
-        raise NonRetryableError("养基宝搜索返回非 JSON") from exc
-    for item in (body.get("data") or {}).get("list") or []:
-        if str(item.get("fd_code") or "") == str(code):
-            return str(item.get("fund_id") or item.get("id") or "")
-    raise NonRetryableError(f"养基宝未找到该基金：{code}")
+        raise NonRetryableError(f"养基宝接口返回非 JSON（{path.split('?')[0]}）") from exc
+    code = body.get("code")
+    if code is not None and str(code) != "200":
+        raise NonRetryableError(f"养基宝返回错误（code={code}）：{body.get('message') or ''}")
+    return body.get("data")
+
+
+def get_accounts() -> Dict[str, Any]:
+    """拉取账户列表（真实接口 ``GET /user_account``）。
+
+    真实响应 ``data``：``{is_single_account_model, target_account_id, list:[{id,title,type}]}``。
+
+    Returns:
+        dict: `{accounts: [{id,title}], target_id: str, single: bool}`。
+
+    Raises:
+        NonRetryableError: 未绑定，或接口不可用。
+    """
+    if not (load_token() or {}).get("token"):
+        raise NonRetryableError("未绑定养基宝，无法读取账户")
+    data = _plug_get("/user_account")
+    items: List[Dict[str, Any]] = []
+    target = ""
+    single = False
+    if isinstance(data, list):
+        items = [item for item in data if isinstance(item, dict)]
+    elif isinstance(data, dict):
+        single = bool(data.get("is_single_account_model"))
+        target = str(data.get("target_account_id") or data.get("account_id") or "")
+        for key in ("list", "accounts", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                items = [item for item in value if isinstance(item, dict)]
+                break
+    accounts = []
+    for item in items:
+        account_id = item.get("id", item.get("account_id"))
+        if account_id in (None, ""):
+            continue
+        accounts.append({"id": str(account_id), "title": str(item.get("title") or "")})
+    return {"accounts": accounts, "target_id": target, "single": single}
+
+
+def resolve_account_id(explicit: str = "") -> str:
+    """解析账户 id：显式传入 > 服务端推荐 ``target_account_id`` > 列表第一个。
+
+    Args:
+        explicit: 用户指定或已保存的账户 id。
+
+    Returns:
+        str: 账户 id。
+
+    Raises:
+        NonRetryableError: 无可用账户。
+    """
+    text = str(explicit or "").strip()
+    if text:
+        return text
+    info = get_accounts()
+    if info["target_id"]:
+        return info["target_id"]
+    if info["accounts"]:
+        return info["accounts"][0]["id"]
+    raise NonRetryableError("登录成功但未找到养基宝账户，请先在养基宝 App 中创建账户")
+
+
+def get_holdings(account_id: str = "") -> List[Dict[str, Any]]:
+    """拉取持仓基金列表（真实接口 ``GET /fund_hold?account_id=``）。
+
+    这是**唯一**带估值信息的接口：每条含 ``fund_id`` / ``code`` / ``short_name`` /
+    ``hold_share`` / ``hold_cost`` / ``hold_sum``，估值在 ``nv_info``
+    （``gszzl`` / ``zsgzzl`` / ``vgszzl`` / ``dwjz`` / ``jzzzl`` / ``gztime`` / ``time``）。
+
+    Args:
+        account_id: 账户 id；为空时自动解析。
+
+    Returns:
+        list[dict]: 持仓基金条目。
+
+    Raises:
+        NonRetryableError: 未绑定或接口不可用。
+    """
+    if not (load_token() or {}).get("token"):
+        raise NonRetryableError("未绑定养基宝，无法读取持仓")
+    data = _plug_get("/fund_hold", {"account_id": resolve_account_id(account_id)})
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("fund_list", "list", "funds", "fund_data", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def get_beat_rate(account_id: str = "") -> Optional[float]:
+    """当日击败基民百分比（真实接口 ``GET /income_data``，返回形如 ``"68.5"``）。
+
+    Args:
+        account_id: 账户 id；为空时自动解析。
+
+    Returns:
+        Optional[float]: 百分比数值；不可用时返回 None（不补 0）。
+    """
+    try:
+        data = _plug_get("/income_data", {"account_id": resolve_account_id(account_id)})
+    except NonRetryableError:
+        return None
+    try:
+        return float(str(data).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """把上游字符串数值安全转为 float（"2.5792" → 2.5792）。
+
+    Args:
+        value: 原始值（可能是字符串、数字或空）。
+
+    Returns:
+        Optional[float]: 数值；空或不可解析返回 None（不补 0）。
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _rate_of(item: Dict[str, Any]) -> Optional[float]:
+    """取估算涨跌幅：``gszzl`` → ``zsgzzl`` → ``vgszzl``（真实字段优先级）。
+
+    QDII / 港股（``market_type=ch_hk``）常无 ``gszzl``，回落到 ``vgszzl``。
+
+    Args:
+        item: 单条持仓记录。
+
+    Returns:
+        Optional[float]: 百分比数值；全空或无法解析时返回 None。
+    """
+    nv = item.get("nv_info") if isinstance(item.get("nv_info"), dict) else {}
+    for key in ("gszzl", "zsgzzl", "vgszzl"):
+        raw = nv.get(key, item.get(key))
+        if raw in (None, ""):
+            continue
+        try:
+            return float(str(raw).replace("%", "").replace("+", "").strip())
+        except ValueError:
+            continue
+    return None
+
+
+def get_collect() -> Dict[str, Any]:
+    """多账户汇总（真实接口 ``GET /account_collect``）。
+
+    返回总资产 / 今日收益（估算）/ 今日收益率 / 累计持有收益 / 各账户明细。
+
+    Returns:
+        dict: `{total_assets, today_income, today_income_rate, hold_income, accounts[]}`。
+
+    Raises:
+        NonRetryableError: 未绑定或接口不可用。
+    """
+    if not (load_token() or {}).get("token"):
+        raise NonRetryableError("未绑定养基宝，无法读取账户汇总")
+    data = _plug_get("/account_collect") or {}
+    if not isinstance(data, dict):
+        data = {}
+    accounts: List[Dict[str, Any]] = []
+    for item in data.get("account_data") or []:
+        if not isinstance(item, dict):
+            continue
+        account_id = item.get("account_id", item.get("id"))
+        if account_id in (None, ""):
+            continue
+        accounts.append({
+            "id": str(account_id),
+            "title": str(item.get("title") or ""),
+            "today_income": _as_float(item.get("today_income")),
+            "today_income_rate": _as_float(item.get("today_income_rate")),
+            "hold_income": _as_float(item.get("hold_income")),
+            "hold_cost": _as_float(item.get("hold_cost")),
+            "up": int(_as_float(item.get("up")) or 0),
+            "down": int(_as_float(item.get("down")) or 0),
+        })
+    return {
+        "total_assets": _as_float(data.get("assets_collect")),
+        "today_income": _as_float(data.get("today_income")),
+        "today_income_rate": _as_float(data.get("today_income_rate")),
+        "hold_income": _as_float(sum(a["hold_income"] or 0 for a in accounts)) if accounts else None,
+        "is_single_account": bool(data.get("is_single_account_model")),
+        "accounts": accounts,
+    }
+
+
+def get_holdings_view(account_id: str = "") -> Dict[str, Any]:
+    """持仓视图（含估值），支持单账户或全部账户合并。
+
+    Args:
+        account_id: 账户 id；传空或 "all" 表示合并全部账户。
+
+    Returns:
+        dict: `{account_id, items[], total, accounts[]}`；items 按估算涨跌幅降序。
+
+    Raises:
+        NonRetryableError: 未绑定或接口不可用。
+    """
+    if not (load_token() or {}).get("token"):
+        raise NonRetryableError("未绑定养基宝，无法读取持仓")
+    info = get_accounts()
+    titles = {str(a["id"]): a["title"] for a in info["accounts"]}
+    wanted = str(account_id or "").strip()
+    targets = [wanted] if wanted and wanted != "all" else [str(a["id"]) for a in info["accounts"]]
+
+    items: List[Dict[str, Any]] = []
+    for current in targets:
+        for raw in get_holdings(current):
+            nv = raw.get("nv_info") if isinstance(raw.get("nv_info"), dict) else {}
+            items.append({
+                "code": str(raw.get("code") or ""),
+                "name": str(raw.get("short_name") or ""),
+                "account_id": current,
+                "account_title": titles.get(current, ""),
+                "share": _as_float(raw.get("hold_share")),
+                "cost": _as_float(raw.get("hold_cost")),
+                "money": _as_float(raw.get("money")),
+                "hold_earn": _as_float(raw.get("hold_earn")),
+                "pct": _rate_of(raw),
+                "nav": _as_float(nv.get("dwjz")),
+                "nav_date": str(nv.get("jzrq") or nv.get("gztime") or "")[:10],
+                "as_of": str(nv.get("gztime") or nv.get("time") or "")[:10],
+                "market_type": str(raw.get("market_type") or ""),
+                "is_fuzzy": bool(raw.get("is_fuzzy")),
+            })
+    items.sort(key=lambda x: (x["pct"] is None, -(x["pct"] or 0)))
+    return {"account_id": wanted or "all", "items": items, "total": len(items),
+            "accounts": [{"id": str(a["id"]), "title": a["title"]} for a in info["accounts"]]}
+
+
+def fetch_increase_rate(fund_id: str) -> Dict[str, Any]:
+    """按 6 位基金代码取盘中估算涨跌幅（一级通道：``/fund_hold``）。
+
+    Args:
+        fund_id: 6 位基金代码。
+
+    Returns:
+        dict: `{pct, source, as_of, name, nav}`。
+
+    Raises:
+        NonRetryableError: 未绑定、接口不可用，或该基金不在持仓列表中。
+    """
+    target = str(fund_id or "").strip()
+    # 多账户：默认账户找不到时遍历其余账户（用户持仓常分散在多个账本）
+    account_ids: List[str] = []
+    try:
+        info = get_accounts()
+        account_ids = [str(a["id"]) for a in info["accounts"]]
+    except NonRetryableError:
+        account_ids = [""]
+    if not account_ids:
+        account_ids = [""]
+    for account_id in account_ids:
+        for item in get_holdings(account_id):
+            if str(item.get("code") or "").strip() != target:
+                continue
+            rate = _rate_of(item)
+            if rate is None:
+                continue
+            nv = item.get("nv_info") if isinstance(item.get("nv_info"), dict) else {}
+            return {
+                "pct": rate,
+                "source": "养基宝/fund_hold",
+                "as_of": str(nv.get("gztime") or nv.get("time") or utils.now_text()),
+                "name": str(item.get("short_name") or ""),
+                # 上游 dwjz 为字符串（"2.5792"），必须转数值，否则下游做算术会 TypeError
+                "nav": _as_float(nv.get("dwjz")),
+                "account_id": account_id,
+            }
+    raise NonRetryableError(f"养基宝持仓列表未包含该基金：{target}")
+
+
+def fetch_gz_data(fund_id: str) -> Dict[str, Any]:
+    """估值明细备选通道（与 increase-rate 同源，口径标识区分）。
+
+    Args:
+        fund_id: 6 位基金代码。
+
+    Returns:
+        dict: `{pct, source, as_of, name, nav}`。
+
+    Raises:
+        NonRetryableError: 同 fetch_increase_rate。
+    """
+    detail = fetch_increase_rate(fund_id)
+    detail["source"] = "养基宝/fund_hold(明细)"
+    return detail
+
+
+def search_fund_id(code: str) -> str:
+    """按 6 位基金代码换取养基宝内部 ``fund_id``（真实接口 ``/search_fund``）。
+
+    先查持仓（免一次请求），未命中再走 ``/search_fund?keyword=&account_id=``。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        str: 养基宝内部 fund_id。
+
+    Raises:
+        NonRetryableError: 未绑定、接口不可用，或未找到该基金。
+    """
+    target = str(code or "").strip()
+    for item in get_holdings():
+        if str(item.get("code") or "").strip() == target:
+            value = item.get("fund_id")
+            if value not in (None, ""):
+                return str(value)
+    data = _plug_get("/search_fund", {"keyword": target, "account_id": resolve_account_id()})
+    items = data if isinstance(data, list) else []
+    if isinstance(data, dict):
+        for key in ("list", "fund_list", "data"):
+            if isinstance(data.get(key), list):
+                items = data[key]
+                break
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("code") or "").strip() == target:
+            value = item.get("id", item.get("fund_id"))
+            if value not in (None, ""):
+                return str(value)
+    raise NonRetryableError(f"养基宝未找到该基金：{target}")
 
 
 def status() -> Dict[str, Any]:
-    """连接器状态（不含 token 内容）。
+    """连接器状态（不含 token 与盐的取值）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{bound, bound_at, platform, consent, enabled, secret_configured,
+        secret_source, secure_storage, channel_available, transport, notice}`。
     """
     state = _load_state()
     token = load_token()
@@ -622,8 +1062,14 @@ def status() -> Dict[str, Any]:
         "consent": state.get("consent"),
         "enabled": bool(state.get("enabled")),
         "secret_configured": secret_configured(),
+        "secret_source": secret_source(),
         "secure_storage": _dpapi_available(),
         "channel_available": bool(token and token.get("token") and secret_configured()),
+        "transport": (
+            "https（已实测可用）" if BASE_OLD.startswith("https://")
+            or str(_OLD_SCHEME.get("base") or "").startswith("https://")
+            else "https 优先尝试（未探测；若不可用回落 http 明文，已登记风险）"
+        ),
         "notice": "非官方通道：接口易变、可能随时失效；仅供本地个人研究，不构成投资建议",
     }
 
@@ -632,6 +1078,6 @@ def new_session_id() -> str:
     """生成备用会话 id（二维码接口不可用时不使用）。
 
     Returns:
-        str: 文本结果。
+        str: 会话 id（loginQrId 前缀 + 随机片段）。
     """
     return py_secrets.token_hex(8)

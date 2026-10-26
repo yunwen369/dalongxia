@@ -10,32 +10,12 @@
 
   const $ = (id) => document.getElementById(id);
 
-  /** 数字格式化：空值统一显示“—”，不补 0。
-   * @param {*} value 待格式化或处理的值
-   * @param {number} digits 小数位数
-   * @returns {*} 处理结果
-   */
-  function fmt(value, digits) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
-    }
-    return Number(value).toLocaleString("zh-CN", {
-      minimumFractionDigits: digits === undefined ? 2 : digits,
-      maximumFractionDigits: digits === undefined ? 2 : digits
-    });
-  }
-
-  /** 涨跌幅格式化：显式带正负号。
-   * @param {*} value 待格式化或处理的值
-   * @returns {*} 处理结果
-   */
-  function fmtPct(value) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
-    }
-    const number = Number(value);
-    return (number > 0 ? "+" : "") + number.toFixed(2) + "%";
-  }
+  // P1-13：共享工具别名（fmt/fmtPct/trendClass/api/t/renderTable 原本各 IIFE 重复定义于此）
+  var fmt = window.Utils.fmt;
+  var fmtPct = window.Utils.fmtPct;
+  var trendClass = window.Utils.trendClass;
+  var api = window.Utils.api;
+  var t = window.Utils.t;
 
   /** 金额格式化：元 → 万/亿/万亿。
    * @param {*} value 待格式化或处理的值
@@ -43,7 +23,7 @@
    */
   function fmtAmount(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
+      return t("value.none"); // P2-09：统一空值为「无数据」
     }
     const number = Number(value);
     if (Math.abs(number) >= 1e12) return (number / 1e12).toFixed(2) + " 万亿";
@@ -58,22 +38,11 @@
    */
   function fmtVolume(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
+      return t("value.none"); // P2-09：统一空值为「无数据」
     }
     const number = Number(value);
     if (Math.abs(number) >= 1e4) return (number / 1e4).toFixed(2) + " 万手";
     return number.toFixed(0) + " 手";
-  }
-
-  /** 根据数值返回涨跌样式类。
-   * @param {*} value 待格式化或处理的值
-   * @returns {string} 处理结果
-   */
-  function trendClass(value) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) return "flat";
-    if (Number(value) > 0) return "up";
-    if (Number(value) < 0) return "down";
-    return "flat";
   }
 
   /** 设置徽章文案与状态。
@@ -94,83 +63,28 @@
    */
   function setGlobalBadges(data) {
     if (!data) return;
-    setBadge("mk-source", "数据源：" + (data.source || "—"), "accent");
-    setBadge("mk-caliber", "口径：" + (data.caliber || "—"));
+    setBadge("mk-source", t("mk.sourceBadge") + (data.source || t("value.dash")), "accent");
+    setBadge("mk-caliber", t("mk.caliberBadge") + (data.caliber || t("value.dash")));
     const realtime = Boolean(data.is_realtime);
     setBadge(
       "mk-status",
-      "状态：" + (data.market_status || "—") + (realtime ? " · 实时" : " · 非实时"),
+      t("mk.statusBadge") + (data.market_status || t("value.dash")) + (realtime ? t("mk.realtime") : t("mk.notRealtime")),
       realtime ? "ok" : ""
     );
-    setBadge("mk-asof", "时间：" + (data.as_of || "—"));
+    setBadge("mk-asof", t("mk.timeBadge") + (data.as_of || t("value.dash")));
   }
 
- /** 统一 fetch：把 {data,error} 转成 data 或抛出中文错误。
-  * @param {string} path 接口路径
-  * @param {Object} params 查询参数对象
-  * @returns {*} 处理结果
-  */
-  async function api(path, params) {
-    const url = new URL(path, window.location.origin);
-    Object.entries(params || {}).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== "") {
-        url.searchParams.set(key, value);
-      }
-    });
-    const response = await fetch(url.toString(), { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error("请求失败（HTTP " + response.status + "）");
-    }
-    const body = await response.json();
-    if (body.error) {
-      const error = new Error(body.error);
-      error.code = body.error_code;
-      throw error;
-    }
-    return body.data;
-  }
-
-  /** 渲染普通表格。
+  /** 渲染普通表格（P1-13 委托 window.Utils.renderTable）。
    * @param {*} containerId 容器元素 id
    * @param {Array} columns 列定义（字段名数组）
    * @param {Array} rows 记录行列表
    */
   function renderTable(containerId, columns, rows) {
-    const container = $(containerId);
-    if (!container) return;
-    container.textContent = "";
-    if (!rows || rows.length === 0) {
-      container.textContent = "无数据";
-      return;
-    }
-    const table = document.createElement("table");
-    table.className = "data-table";
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    columns.forEach((column) => {
-      const th = document.createElement("th");
-      th.textContent = column.label;
-      if (column.num) th.className = "num";
-      headRow.appendChild(th);
+    window.Utils.renderTable(containerId, columns, rows, {
+      tableClass: "data-table",
+      emptyText: t("value.none"),
+      nullText: t("value.none")
     });
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    rows.forEach((row) => {
-      const tr = document.createElement("tr");
-      columns.forEach((column) => {
-        const td = document.createElement("td");
-        const value = column.render ? column.render(row) : row[column.key];
-        td.textContent = value === null || value === undefined ? "—" : String(value);
-        if (column.num) td.classList.add("num");
-        if (column.trend) td.classList.add(trendClass(row[column.trend]));
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    container.appendChild(table);
   }
 
   /** 渲染 key-value 表（报价/概况）。
@@ -189,7 +103,7 @@
       const key = document.createElement("th");
       key.textContent = pair[0];
       const value = document.createElement("td");
-      value.textContent = pair[1] === null || pair[1] === undefined ? "—" : String(pair[1]);
+      value.textContent = pair[1] === null || pair[1] === undefined ? t("value.none") : String(pair[1]); // P2-09：统一空值显示
       if (pair[2]) value.classList.add(pair[2]);
       if (pair[3]) value.classList.add("num");
       tr.appendChild(key);
@@ -331,15 +245,15 @@
     renderTable(
       "mk-index-table",
       [
-        { key: "name", label: "名称" },
-        { key: "code", label: "代码" },
-        { key: "price", label: "最新价", num: true, render: (row) => fmt(row.price) },
-        { key: "change", label: "涨跌额", num: true, trend: "change", render: (row) => fmt(row.change) },
-        { key: "pct", label: "涨跌幅", num: true, trend: "pct", render: (row) => fmtPct(row.pct) },
-        { key: "market_status", label: "状态" }
+        { key: "name", label: t("th.name") },
+        { key: "code", label: t("th.code") },
+        { key: "price", label: t("mk.col.price"), num: true, render: (row) => fmt(row.price) },
+        { key: "change", label: t("mk.col.change"), num: true, trend: "change", render: (row) => fmt(row.change) },
+        { key: "pct", label: t("mk.col.pct"), num: true, trend: "pct", render: (row) => fmtPct(row.pct) },
+        { key: "market_status", label: t("mk.col.status") }
       ],
       items
-    );
+    ); // P2-09：表头走 i18n
   }
 
   /** 渲染报价详情。
@@ -347,21 +261,21 @@
    */
   function renderQuote(quote) {
     renderKV("mk-quote-table", [
-      ["名称 / 代码", (quote.name || "—") + " / " + (quote.symbol || "—")],
-      ["最新价", fmt(quote.price), trendClass(quote.change), true],
-      ["涨跌额 / 涨跌幅", fmt(quote.change) + " / " + fmtPct(quote.pct), trendClass(quote.pct), true],
-      ["今开 / 昨收", fmt(quote.open) + " / " + fmt(quote.prev_close), "", true],
-      ["最高 / 最低", fmt(quote.high) + " / " + fmt(quote.low), "", true],
-      ["成交量", fmtVolume(quote.volume), "", true],
-      ["成交额", fmtAmount(quote.amount), "", true],
-      ["换手率", quote.turnover === null || quote.turnover === undefined ? "—" : fmt(quote.turnover) + "%", "", true],
-      ["市盈率(TTM) / 市净率", fmt(quote.pe_ttm) + " / " + fmt(quote.pb), "", true],
-      ["总市值", fmtAmount(quote.total_market_cap), "", true],
-      ["流通市值", fmtAmount(quote.float_market_cap), "", true],
-      ["买一 / 卖一", (quote.bids && quote.bids[0] ? fmt(quote.bids[0].price) : "—") + " / " + (quote.asks && quote.asks[0] ? fmt(quote.asks[0].price) : "—"), "", true],
-      ["数据时间", quote.quote_time || "—"],
-      ["市场状态", quote.market_status || "—"]
-    ]);
+      [t("mk.kv.nameCode"), (quote.name || t("value.dash")) + " / " + (quote.symbol || t("value.dash"))],
+      [t("mk.kv.price"), fmt(quote.price), trendClass(quote.change), true],
+      [t("mk.kv.changePct"), fmt(quote.change) + " / " + fmtPct(quote.pct), trendClass(quote.pct), true],
+      [t("mk.kv.openPre"), fmt(quote.open) + " / " + fmt(quote.prev_close), "", true],
+      [t("mk.kv.highLow"), fmt(quote.high) + " / " + fmt(quote.low), "", true],
+      [t("mk.kv.volume"), fmtVolume(quote.volume), "", true],
+      [t("mk.kv.amount"), fmtAmount(quote.amount), "", true],
+      [t("mk.kv.turnover"), quote.turnover === null || quote.turnover === undefined ? t("value.none") : fmt(quote.turnover) + "%", "", true],
+      [t("mk.kv.pePb"), fmt(quote.pe_ttm) + " / " + fmt(quote.pb), "", true],
+      [t("mk.kv.totalMarketCap"), fmtAmount(quote.total_market_cap), "", true],
+      [t("mk.kv.floatMarketCap"), fmtAmount(quote.float_market_cap), "", true],
+      [t("mk.kv.bidAsk"), (quote.bids && quote.bids[0] ? fmt(quote.bids[0].price) : t("value.dash")) + " / " + (quote.asks && quote.asks[0] ? fmt(quote.asks[0].price) : t("value.dash")), "", true],
+      [t("mk.kv.dataTime"), quote.quote_time || t("value.dash")],
+      [t("mk.kv.marketStatus"), quote.market_status || t("value.dash")]
+    ]); // P2-09：KV 标签走 i18n，空值统一「无数据」
   }
 
   /** 渲染个股概况。
@@ -369,21 +283,21 @@
    */
   function renderProfile(profile) {
     renderKV("mk-profile-table", [
-      ["公司名称", profile.company_name || profile.name || "—"],
-      ["英文名称", profile.english_name || "—"],
-      ["所属行业", profile.industry || "—"],
-      ["所属市场 / 板块", profile.market_board || "—"],
-      ["上市日期", profile.list_date || "—"],
-      ["法人代表", profile.legal_representative || "—"],
-      ["注册资本", profile.registered_capital ? fmt(profile.registered_capital, 4) + " 万元" : "—"],
-      ["总股本", profile.total_shares ? fmt(profile.total_shares / 1e8, 2) + " 亿股" : "—"],
-      ["流通股本", profile.float_shares ? fmt(profile.float_shares / 1e8, 2) + " 亿股" : "—"],
-      ["总市值", fmtAmount(profile.total_market_cap)],
-      ["流通市值", fmtAmount(profile.float_market_cap)],
-      ["市盈率(TTM) / 市净率", fmt(profile.pe_ttm) + " / " + fmt(profile.pb)],
-      ["公司网站", profile.website || "—"],
-      ["主营业务", profile.main_business || "—"]
-    ]);
+      [t("mk.kv.companyName"), profile.company_name || profile.name || t("value.dash")],
+      [t("mk.kv.engName"), profile.english_name || t("value.dash")],
+      [t("mk.kv.industry"), profile.industry || t("value.dash")],
+      [t("mk.kv.marketBoard"), profile.market_board || t("value.dash")],
+      [t("mk.kv.listDate"), profile.list_date || t("value.dash")],
+      [t("mk.kv.legalRep"), profile.legal_representative || t("value.dash")],
+      [t("mk.kv.registeredCap"), profile.registered_capital ? fmt(profile.registered_capital, 4) + " 万元" : t("value.dash")],
+      [t("mk.kv.totalShares"), profile.total_shares ? fmt(profile.total_shares / 1e8, 2) + " 亿股" : t("value.dash")],
+      [t("mk.kv.floatShares"), profile.float_shares ? fmt(profile.float_shares / 1e8, 2) + " 亿股" : t("value.dash")],
+      [t("mk.kv.totalMarketCap"), fmtAmount(profile.total_market_cap)],
+      [t("mk.kv.floatMarketCap"), fmtAmount(profile.float_market_cap)],
+      [t("mk.kv.pePb"), fmt(profile.pe_ttm) + " / " + fmt(profile.pb)],
+      [t("mk.kv.companyWeb"), profile.website || t("value.dash")],
+      [t("mk.kv.mainBusiness"), profile.main_business || t("value.dash")]
+    ]); // P2-09：KV 标签走 i18n
   }
 
   /** 渲染搜索结果。
@@ -394,7 +308,7 @@
     if (!container) return;
     container.textContent = "";
     if (!items || items.length === 0) {
-      container.textContent = "无匹配结果";
+      container.textContent = t("mk.noMatch");
       return;
     }
     items.forEach((item) => {
@@ -417,16 +331,16 @@
 
   /** 加载核心指数与指数走势。 */
   async function loadIndex() {
-    setBadge("mk-index-badge", "加载中");
-    setBadge("mk-index-kline-badge", "加载中");
+    setBadge("mk-index-badge", t("mk.loading"));
+    setBadge("mk-index-kline-badge", t("mk.loading"));
     try {
       const data = await api("/api/market/index", { market: "all" });
       renderIndexTable(data.items);
       setGlobalBadges(data);
       setBadge("mk-index-badge", data.source + " · " + data.market_status, data.is_realtime ? "ok" : "");
     } catch (error) {
-      $("mk-index-table").textContent = "指数加载失败：" + error.message;
-      setBadge("mk-index-badge", "失败", "error");
+      $("mk-index-table").textContent = t("mk.indexFailed", { error: error.message });
+      setBadge("mk-index-badge", t("mk.failed"), "error");
     }
 
     try {
@@ -438,7 +352,7 @@
       );
       setBadge("mk-index-kline-badge", data.source + " · " + data.caliber, "");
     } catch (error) {
-      setBadge("mk-index-kline-badge", "失败", "error");
+      setBadge("mk-index-kline-badge", t("mk.failed"), "error");
     }
   }
 
@@ -446,14 +360,18 @@
   async function loadSymbol() {
     const market = $("mk-market").value;
     const symbol = $("mk-symbol").value.trim();
+    // R3-28：同步到全局共享 store，跨页带代码
+    if (window.SymbolStore && symbol) {
+      window.SymbolStore.set(symbol, market);
+    }
     if (!symbol) {
-      $("mk-notice").textContent = "请输入股票代码。";
+      $("mk-notice").textContent = t("mk.symbolRequired");
       $("mk-notice").classList.add("error");
       return;
     }
     $("mk-notice").classList.remove("error");
-    $("mk-notice").textContent = "正在请求真实接口：" + symbol + "（" + market + "）...";
-    ["mk-quote-badge", "mk-profile-badge"].forEach((id) => setBadge(id, "加载中"));
+    $("mk-notice").textContent = t("mk.requesting", { symbol: symbol, market: market });
+    ["mk-quote-badge", "mk-profile-badge"].forEach((id) => setBadge(id, t("mk.loading")));
 
     const [quoteResult, profileResult] = await Promise.allSettled([
       api("/api/market/quote", { symbol, market }),
@@ -466,8 +384,8 @@
       setGlobalBadges(data);
       setBadge("mk-quote-badge", data.source + " · " + data.market_status, data.is_realtime ? "ok" : "");
     } else {
-      $("mk-quote-table").textContent = "报价加载失败：" + quoteResult.reason.message;
-      setBadge("mk-quote-badge", "失败", "error");
+      $("mk-quote-table").textContent = t("mk.quoteFailed", { error: quoteResult.reason.message });
+      setBadge("mk-quote-badge", t("mk.failed"), "error");
     }
 
     if (profileResult.status === "fulfilled") {
@@ -475,16 +393,16 @@
       renderProfile(data.profile);
       setBadge("mk-profile-badge", data.source + " · " + data.caliber, "");
     } else {
-      $("mk-profile-table").textContent = "概况加载失败：" + profileResult.reason.message;
-      setBadge("mk-profile-badge", "失败", "error");
+      $("mk-profile-table").textContent = t("mk.profileFailed", { error: profileResult.reason.message });
+      setBadge("mk-profile-badge", t("mk.failed"), "error");
     }
 
     const failures = [quoteResult, profileResult].filter((item) => item.status === "rejected");
     if (failures.length === 0) {
       $("mk-notice").textContent =
-        "真实数据已加载：报价 " + symbol + "；数据源/口径以各卡片徽章为准；休市显示收盘快照，不伪装实时。";
+        t("mk.dataLoaded", { symbol: symbol });
     } else {
-      $("mk-notice").textContent = "部分接口失败：" + failures.map((item) => item.reason.message).join("；");
+      $("mk-notice").textContent = t("mk.partialFail", { errors: failures.map((item) => item.reason.message).join("；") });
       $("mk-notice").classList.add("error");
     }
   }
@@ -493,17 +411,17 @@
   async function doSearch() {
     const keyword = $("mk-search-input").value.trim();
     if (!keyword) {
-      $("mk-search-list").textContent = "请输入关键词";
+      $("mk-search-list").textContent = t("mk.searchKeywordRequired");
       return;
     }
-    setBadge("mk-search-badge", "搜索中");
+    setBadge("mk-search-badge", t("mk.searching"));
     try {
       const data = await api("/api/market/search", { q: keyword, limit: 10 });
       renderSearch(data.items);
       setBadge("mk-search-badge", data.source + " · " + data.caliber, "");
     } catch (error) {
-      $("mk-search-list").textContent = "搜索失败：" + error.message;
-      setBadge("mk-search-badge", "失败", "error");
+      $("mk-search-list").textContent = t("mk.searchFailPrefix") + error.message;
+      setBadge("mk-search-badge", t("mk.failed"), "error");
     }
   }
 
@@ -514,19 +432,92 @@
     } catch (error) {
       /* 清缓存失败不阻断刷新，页面仍会重新请求 */
     }
-    await Promise.all([loadIndex(), loadSymbol()]);
+    await Promise.all([loadIndex(), loadSymbol(), loadSentiment()]);
+  }
+
+  /** 拉取并渲染首页「市场情绪 · 涨跌家数」卡（FN-01）。
+   *
+   * 数据来源：/api/sentiment/market（与仪表板 N-03 同源，复用同一接口，不另造）；
+   * 涨跌家数为该接口附带的 breadth 字段（东财 push2 沪深两市合计），
+   * 不可用时显示空态说明，绝不以 0 代替（红线：不补零）。
+   */
+  async function loadSentiment() {
+    const body = $("mk-senti-body");
+    const badge = $("mk-senti-badge");
+    if (!body) {
+      return;
+    }
+    const el = window.Utils.el;
+    try {
+      const data = await api("/api/sentiment/market", { region: "cn", limit: 60 });
+      const breadth = data.breadth || {};
+      body.textContent = "";
+
+      // 第一行：情绪温度 + 等级 + 进度条（0–100）
+      const tempRow = el("div", "mk-senti-row");
+      tempRow.appendChild(el("span", "mk-senti-label", t("market.sentiTemp")));
+      tempRow.appendChild(el("span", "mk-senti-value", fmt(data.temperature, 1)));
+      tempRow.appendChild(el("span", "mk-senti-level", data.level || t("value.none")));
+      const bar = el("div", "mk-senti-bar");
+      const fill = el("div", "mk-senti-fill");
+      fill.style.width = Math.max(0, Math.min(100, Number(data.temperature) || 0)) + "%";
+      bar.appendChild(fill);
+      tempRow.appendChild(bar);
+      body.appendChild(tempRow);
+
+      // 第二行：涨跌家数（红涨绿跌）；不可用时只给中文说明
+      const countRow = el("div", "mk-senti-row mk-senti-counts");
+      if (breadth.available) {
+        countRow.appendChild(el("span", "up", t("market.sentiUp") + " " + fmt(breadth.up, 0)));
+        countRow.appendChild(el("span", "down", t("market.sentiDown") + " " + fmt(breadth.down, 0)));
+        countRow.appendChild(el("span", "flat", t("market.sentiFlat") + " " + fmt(breadth.flat, 0)));
+      } else {
+        countRow.appendChild(el("span", "flat", breadth.caliber || t("state.empty")));
+      }
+      body.appendChild(countRow);
+
+      // 第三行：口径 + 北京时间（红线：时间一律北京时间并显式标注）
+      body.appendChild(el("div", "mk-senti-note",
+        (breadth.caliber || t("market.sentiCaliber")) + " · " + t("common.bjShort") + " " + (breadth.as_of || "—")));
+      body.setAttribute("data-state", "default");
+      if (badge) {
+        badge.textContent = breadth.available ? t("market.sentiSource") : t("state.errorShort");
+        badge.className = "badge ok";
+      }
+    } catch (error) {
+      body.textContent = "";
+      const box = el("div", "pg-state");
+      box.appendChild(el("div", "pg-state-title", t("state.errorTitle")));
+      box.appendChild(el("div", "pg-state-hint", (error && error.message) || t("state.errorHint")));
+      body.appendChild(box);
+      body.setAttribute("data-state", "error");
+      if (badge) {
+        badge.textContent = t("state.errorShort");
+        badge.className = "badge";
+      }
+    }
   }
 
   /** 跳转图表分析页（携带当前市场/标的，功能唯一，P2-02）。 */
   function gotoCharting() {
     const market = $("mk-market").value;
     const symbol = $("mk-symbol").value.trim() || "600519";
+    // R3-28：跳转前同步共享 store，图表页及其它页面无参进入时带回本次标的
+    if (window.SymbolStore) {
+      window.SymbolStore.set(symbol, market);
+    }
     window.location.hash = "#/charting?symbol=" + encodeURIComponent(symbol) + "&market=" + encodeURIComponent(market);
   }
 
   /** 初始化控件。 */
   function init() {
     if (!$("mk-symbol")) return; // 非行情页
+    // R3-28：若本页输入为空，从共享 store 带出最近一次标的
+    if (!$("mk-symbol").value && window.SymbolStore) {
+      var shared = window.SymbolStore.get();
+      $("mk-symbol").value = shared.symbol || $("mk-symbol").value;
+      $("mk-market").value = shared.market || $("mk-market").value;
+    }
     $("mk-refresh").addEventListener("click", refreshAll);
     const chartLink = $("mk-chart-link");
     if (chartLink) chartLink.addEventListener("click", gotoCharting);
@@ -547,6 +538,7 @@
     });
     loadIndex();
     loadSymbol();
+    loadSentiment();  // FN-01：首页市场情绪 + 涨跌家数
   }
 
   // 供工具栏「刷新当前视图」调用（P2-03）

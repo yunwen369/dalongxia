@@ -8,50 +8,13 @@
 (function () {
   "use strict";
 
-  /** 取翻译（I18N 未加载时兜底返回原文 key）。
-   * @param {string} key 键名 / i18n key
-   * @param {Object} vars 占位符变量表
-   * @returns {*} 处理结果
-   */
-  function t(key, vars) {
-    return window.I18N ? window.I18N.t(key, vars) : key;
-  }
-
-  /** 轻提示：复用页面底部 #toast。
-   * @param {string} message 提示文案（中文）
-   */
-  function toast(message) {
-    var node = document.getElementById("toast");
-    if (!node) {
-      return;
-    }
-    node.textContent = message;
-    node.classList.add("show");
-    window.clearTimeout(toast._timer);
-    toast._timer = window.setTimeout(function () {
-      node.classList.remove("show");
-    }, 2600);
-  }
-
-  /** 创建元素。
-   * @param {string} tag HTML 标签名
-   * @param {string} cls CSS 类名
-   * @param {string} text 文本内容
-   * @returns {*} 处理结果
-   */
-  function el(tag, cls, text) {
-    var node = document.createElement(tag);
-    if (cls) {
-      node.className = cls;
-    }
-    if (text !== undefined && text !== null) {
-      node.textContent = String(text);
-    }
-    return node;
-  }
+  // P1-13：共享工具别名（el / t / toast 原本各 IIFE 重复定义于此）
+  var t = window.Utils.t;
+  var el = window.Utils.el;
+  var toast = window.Utils.toast;
 
   /**
-   * 模态框。
+   * 模态框.
    * options: {title, message, input:bool, defaultValue, confirmText, onConfirm(value), onCancel}
    * @param {*} options 可选项集合
    */
@@ -63,7 +26,25 @@
       box.appendChild(el("div", "ui-modal-message", options.message));
     }
     var input = null;
-    if (options.input) {
+    var fieldInputs = null;
+    if (options.fields && options.fields.length) {
+      // 多字段模式（如卡片「改参数」：标的 + 周期）；onConfirm 收到 {key: value}
+      fieldInputs = {};
+      options.fields.forEach(function (field) {
+        var row = el("div", "ui-modal-field");
+        row.appendChild(el("label", "ui-modal-label", field.label || field.key));
+        var box2 = document.createElement("input");
+        box2.className = "ui-modal-input";
+        box2.value = field.value === undefined || field.value === null ? "" : String(field.value);
+        box2.placeholder = field.placeholder || "";
+        if (field.mono) {
+          box2.style.fontFamily = "var(--font-mono)";
+        }
+        row.appendChild(box2);
+        box.appendChild(row);
+        fieldInputs[field.key] = box2;
+      });
+    } else if (options.input) {
       input = document.createElement("input");
       input.className = "ui-modal-input";
       input.value = options.defaultValue || "";
@@ -72,7 +53,9 @@
     var actions = el("div", "ui-modal-actions");
     var cancel = el("button", "pg-btn", options.cancelText || t("action.cancel"));
     cancel.type = "button";
-    var confirm = el("button", "pg-btn primary", options.confirmText || t("action.confirm"));
+    // danger=true 时确认按钮转为危险样式（删除/恢复出厂等不可逆操作，R3-13）
+    var confirm = el("button", "pg-btn" + (options.danger ? " danger" : " primary"),
+      options.confirmText || t("action.confirm"));
     confirm.type = "button";
     actions.appendChild(cancel);
     actions.appendChild(confirm);
@@ -82,6 +65,12 @@
     if (input) {
       input.focus();
       input.select();
+    } else if (fieldInputs) {
+      var firstKey = Object.keys(fieldInputs)[0];
+      if (firstKey) {
+        fieldInputs[firstKey].focus();
+        fieldInputs[firstKey].select();
+      }
     }
 
     /** 关闭浮层：移除节点并解绑键盘监听（防内存泄漏）。 */
@@ -111,7 +100,15 @@
       }
     });
     confirm.addEventListener("click", function () {
-      var value = input ? input.value.trim() : true;
+      var value;
+      if (fieldInputs) {
+        value = {};
+        Object.keys(fieldInputs).forEach(function (key) {
+          value[key] = fieldInputs[key].value.trim();
+        });
+      } else {
+        value = input ? input.value.trim() : true;
+      }
       close();
       if (options.onConfirm) {
         options.onConfirm(value);
@@ -132,12 +129,18 @@
     return [
       { id: "view:home", group: "palette.views", label: t("nav.home"), run: function () { location.hash = "#/home"; } },
       { id: "view:dashboard", group: "palette.views", label: t("nav.dashboard"), run: function () { location.hash = "#/dashboard"; } },
+      { id: "view:dashboard-manage", group: "palette.views", label: t("nav.dashboardManage"), run: function () { location.hash = "#/dashboard-manage"; } },
+      { id: "view:widget-library", group: "palette.views", label: t("sidebar.library"), run: function () { location.hash = "#/widget-library"; } },
+      { id: "view:charting", group: "palette.views", label: t("nav.charting"), run: function () { location.hash = "#/charting"; } },
       { id: "view:sectors", group: "palette.views", label: t("nav.sectors"), run: function () { location.hash = "#/sectors"; } },
       { id: "view:stock", group: "palette.views", label: t("nav.stock"), run: function () { location.hash = "#/stock?symbol=688012&market=a"; } },
       { id: "view:sector-val", group: "palette.views", label: t("nav.sectorVal"), run: function () { location.hash = "#/sector-val?board=半导体&market=cn"; } },
+      { id: "view:watchlist", group: "palette.views", label: t("nav.watchlist"), run: function () { location.hash = "#/watchlist"; } },
+      { id: "view:lhb", group: "palette.views", label: t("nav.lhb"), run: function () { location.hash = "#/lhb"; } },
       { id: "view:news", group: "palette.views", label: t("nav.news"), run: function () { location.hash = "#/news"; } },
       { id: "view:fund", group: "palette.views", label: t("nav.fund"), run: function () { location.hash = "#/fund?code=017811"; } },
       { id: "view:portfolio", group: "palette.views", label: t("nav.portfolio"), run: function () { location.hash = "#/portfolio"; } },
+      { id: "view:yjb", group: "palette.views", label: t("nav.yjb"), run: function () { location.hash = "#/yjb"; } },
       { id: "view:connectors", group: "palette.views", label: t("nav.connectors"), run: function () { location.hash = "#/connectors"; } },
       { id: "view:settings", group: "palette.views", label: t("nav.settings"), run: function () { location.hash = "#/settings"; } }
     ];
@@ -161,7 +164,7 @@
         }
       },
       {
-        id: "action:theme", group: "palette.actions", label: "切换主题（Ctrl+M）",
+        id: "action:theme", group: "palette.actions", label: t("action.themeToggle"),
         /** 执行主题切换：dark ↔ light，并写入 localStorage 持久化。 */
         run: function () {
           var current = document.documentElement.getAttribute("data-theme") || "dark";
@@ -194,7 +197,7 @@
           .then(function (body) {
             var items = (body.data && body.data.items) || [];
             if (!items.length) {
-              toast("未找到匹配的股票，请换关键词重试。");
+              toast(t("ui.searchNotFound", { q: query }));
               return;
             }
             var first = items[0];
@@ -202,7 +205,7 @@
             var symbol = first.symbol || first.code || "";
             location.hash = "#/stock?symbol=" + encodeURIComponent(symbol) + "&market=" + encodeURIComponent(market);
           })
-          .catch(function () { toast("搜索失败，请稍后重试。"); });
+          .catch(function () { toast(t("error.unknown")); });
       }
     }];
   }
@@ -247,9 +250,9 @@
             }
             window.Dashboard.addWidgetById(item.id, params);
             location.hash = "#/dashboard";
-            toast("已添加：" + item.title);
+            toast(t("dashboard.added", { title: item.title }));
           } else {
-            toast("仪表板尚未就绪，请先打开仪表板页");
+            toast(t("dashboard.notReady"));
           }
         }
       };

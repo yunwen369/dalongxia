@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "1.0.1"  # 语义化版本号：1.0.1 修订版（L-4 板块资金流/K线补纯 HTTP 备源）
-BUILD_TAG = "v1.0.1-20261021"  # 构建标识，写入 /api/health 的 build 字段
+APP_VERSION = "1.0.5"  # 语义化版本号：1.0.5 第五波（养基宝打包闭环 + 安全防护 + 时区收口 + 设计出入 + 财报搜索）
+BUILD_TAG = "v1.0.5-20261026"  # 构建标识，写入 /api/health 的 build 字段
 
 HOST = "127.0.0.1"  # 仅监听本机回环地址，不对外网暴露
 PORT = 6900  # 固定端口，复刻 OpenBB ODP 本地连接器约定，禁止静默更换
@@ -193,6 +193,10 @@ TTL: Dict[str, int] = {
     # 板块成分股属低频数据（申万/新浪按季报与月度维护），
     # 原按 kline 的 60 秒缓存导致每分钟都要重走一次 15 秒级冷启动（P1-04）
     "cons": 3600,  # 板块成分股
+    "watchlist": 15,  # 自选股行情快照（与单只报价同频）
+    "northbound": 3600,  # 北向资金历史（日频）
+    "north_top": 3600,  # 北向个股排行（日频）
+    "lhb": 3600,  # 龙虎榜（盘后披露）
 }
 
 # =============================================================
@@ -205,16 +209,19 @@ MARKETS: Dict[str, str] = {
     "fund": "场外基金",
 }
 
-# stage 取值：installed=依赖已装但业务未接入；pending=尚未接入；disabled=已禁用
+# stage 取值：active=能力可用；degraded=降级可用；unavailable=通道异常；
+# optin=待授权启用；missing=依赖缺失；disabled=已禁用
+# kind 取值：library=pip 依赖；http=外部 HTTP 通道（轻探测）；v8=V8 依赖源；optin=需用户授权
+# 注意：stage/active 仅作兼容字段，真实状态由 core.capabilities 探测后统一产出（P1-05）。
 DATA_SOURCES: Dict[str, Dict[str, Any]] = {
-    "akshare": {"label": "akshare（东财/新浪等）", "module": "akshare", "enabled": True, "stage": "installed", "active": True},
-    "tencent": {"label": "腾讯行情", "module": "requests", "enabled": True, "stage": "installed", "active": True},
-    "eastmoney": {"label": "东方财富", "module": "requests", "enabled": True, "stage": "installed", "active": True},
-    "sina": {"label": "新浪财经", "module": "requests", "enabled": True, "stage": "installed", "active": True},
-    "ths": {"label": "同花顺", "module": None, "enabled": True, "stage": "pending"},
-    "cls": {"label": "财联社", "module": None, "enabled": True, "stage": "pending"},
-    "fund": {"label": "天天基金/蛋卷", "module": None, "enabled": True, "stage": "pending"},
-    "yangjibao": {"label": "养基宝（非官方）", "module": None, "enabled": False, "stage": "disabled"},
+    "akshare": {"label": "akshare（东财/新浪等）", "module": "akshare", "enabled": True, "kind": "library", "stage": "active", "active": True},
+    "tencent": {"label": "腾讯行情", "module": "requests", "enabled": True, "kind": "library", "stage": "active", "active": True},
+    "eastmoney": {"label": "东方财富", "module": "requests", "enabled": True, "kind": "library", "stage": "active", "active": True},
+    "sina": {"label": "新浪财经", "module": "requests", "enabled": True, "kind": "library", "stage": "active", "active": True},
+    "ths": {"label": "同花顺", "module": None, "enabled": True, "kind": "v8", "stage": "active"},
+    "cls": {"label": "财联社", "module": None, "enabled": True, "kind": "http", "stage": "active"},
+    "fund": {"label": "天天基金/蛋卷", "module": None, "enabled": True, "kind": "http", "stage": "active"},
+    "yangjibao": {"label": "养基宝（非官方）", "module": None, "enabled": False, "kind": "optin", "stage": "optin"},
 }
 
 # =============================================================
@@ -295,8 +302,58 @@ def _read_dotenv(path: Path) -> Dict[str, str]:
     return result
 
 
+def _decrypt_file_key(path: Path, payload: Dict[str, Any]) -> str:
+    """从 ai_config.json 取回 API Key：优先 DPAPI 密文，兼容历史明文并就地迁移。
+
+    Args:
+        path: AI 配置文件路径。
+        payload: 已解析的配置字典。
+
+    Returns:
+        str: 明文密钥；未配置或密文不可解（换账户/损坏）时返回空串。
+
+    Notes:
+        P1-15：密钥不得明文落盘。历史版本写入的 ``api_key`` 明文，在 DPAPI 可用时
+        立即改写为 ``api_key_enc`` 密文（原子替换 + 600 权限），失败仅告警不静默。
+    """
+    from backend.app.core import secure_store  # 延迟导入，避免 config 早期加载的循环依赖
+
+    encrypted = payload.get("api_key_enc")
+    if secure_store.is_encrypted(encrypted):
+        plain = secure_store.decrypt_text(str(encrypted))
+        if plain is None:
+            logger.warning("AI 密钥密文无法解密（可能非本机账户加密），按未配置处理")
+            return ""
+        return plain
+
+    legacy = str(payload.get("api_key") or "")
+    if not legacy:
+        return ""
+    if not secure_store.available():
+        logger.warning("当前环境不支持 DPAPI，历史明文密钥无法迁移，请改用环境变量注入")
+        return legacy
+    try:
+        migrated = {
+            "base_url": payload.get("base_url", ""),
+            "api_key_enc": secure_store.encrypt_text(legacy),
+            "model": payload.get("model", ""),
+            "updated_at": payload.get("updated_at", ""),
+            # R3-22：格式串统一走 utils.now_text（延迟导入避免 core.atomic/config 循环依赖）
+            "encrypted_at": __import__("backend.app.datasource.utils", fromlist=["now_text"]).now_text(),
+        }
+        # R3-09：统一原子写助手（fsync + 0o600），替代手写 temp + replace + chmod
+        # 延迟导入避免与 core.atomic 的启动期循环依赖
+        from backend.app.core import atomic
+
+        atomic.atomic_write_json(path, migrated, ensure_ascii=False, indent=2, mode=0o600)
+        logger.info("AI 密钥已由明文迁移为 DPAPI 密文（%s）", path.name)
+    except OSError as exc:
+        logger.warning("AI 密钥明文迁移失败（%s），本次仍按内存可用处理", type(exc).__name__)
+    return legacy
+
+
 def _read_ai_config_file(path: Path) -> Dict[str, Any]:
-    """读取 data/ai_config.json，返回字典。
+    """读取 data/ai_config.json，返回字典（密钥已解密）。
 
     Args:
         path: AI 配置文件路径。
@@ -308,17 +365,25 @@ def _read_ai_config_file(path: Path) -> Dict[str, Any]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("读取 AI 配置失败：%s（%s）", path, type(exc).__name__)
         return {}
+    if not isinstance(payload, dict):
+        return {}
+    key = _decrypt_file_key(path, payload)
+    result = dict(payload)
+    result.pop("api_key_enc", None)
+    result.pop("api_key", None)
+    if key:
+        result["api_key"] = key
+    return result
 
 
 def _first_non_empty(*values: Optional[str]) -> str:
     """返回第一个非空字符串，用于多来源优先级取值。
 
     Returns:
-        str: 文本结果。
+        str: 第一个非空的值；全部为空时返回空串。
     """
     for value in values:
         if value is not None and str(value).strip():
