@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from backend.app import config
+from backend.app.core import atomic
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,6 @@ def _write_disk(key: str, timestamp: float, value: Any) -> bool:
         bool: 判定结果。
     """
     path = _disk_path(key)
-    temp_path = path.with_suffix(".tmp")
     try:
         config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         text = json.dumps(
@@ -103,13 +103,12 @@ def _write_disk(key: str, timestamp: float, value: Any) -> bool:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        temp_path.write_text(text, encoding="utf-8")
-        temp_path.replace(path)  # 原子替换，避免读到半截文件
+        # 统一走 core/atomic：同目录临时文件 + os.replace，与其它落盘点同一实现
+        atomic.atomic_write_text(path, text)
         return True
     except (OSError, TypeError, ValueError) as exc:
         # TypeError 通常来自 DataFrame 等不可序列化对象，仅记录类型不打印值
         logger.warning("写入磁盘缓存失败：%s（%s）", path.name, type(exc).__name__)
-        temp_path.unlink(missing_ok=True)
         return False
 
 
@@ -229,3 +228,65 @@ def stats() -> Dict[str, int]:
         memory_count = len(_MEMORY)
     disk_count = len(list(config.CACHE_DIR.glob("*.json"))) if config.CACHE_DIR.is_dir() else 0
     return {"memory": memory_count, "disk": disk_count}
+
+
+# 缓存 TTL 口径表（R3-13 设置页 S-03 展示；与 07_数据 数据字典 §9 同源，改此处须同步字典）
+CACHE_TTL: tuple = (
+    ("realtime_quote / index_quote", 15, "实时报价（个股/指数）"),
+    ("minute", 30, "分时"),
+    ("kline", 60, "K 线"),
+    ("sector / fund_flow", "30 / 60", "板块与资金流"),
+    ("news_flash / sentiment", "60 / 300", "快讯与情绪"),
+    ("fund_nav", 300, "基金净值"),
+    ("profile / financial / estimates", "3600 / 3600 / 1800", "概况、财报、一致预期"),
+    ("search", 600, "搜索联想"),
+    ("yjb:collect / yjb:holdings:*", 30, "养基宝账户汇总与持仓（账户级接口不宜高频）"),
+)
+
+
+def stats_detail() -> Dict[str, Any]:
+    """返回缓存占用明细（R3-13 设置页 S-03：内存/磁盘/布局字节数与 TTL 表）。
+
+    Returns:
+        Dict[str, Any]: `{memory, disk, memory_bytes, disk_bytes, layout_bytes, ttl_map}`。
+
+    Notes:
+        - 内存字节数按 JSON 序列化长度估算（含 key），只用于展示量级；
+        - 布局字节数取 ``data/dashboards.json``（仪表板布局持久化文件）；
+        - TTL 表取自 :data:`CACHE_TTL`，与数据字典 §9 同源。
+    """
+    with _LOCK:
+        memory_count = len(_MEMORY)
+        memory_bytes = 0
+        for key, payload in _MEMORY.items():
+            try:
+                memory_bytes += len(json.dumps({"k": key, "v": payload}, ensure_ascii=False, default=str))
+            except Exception:  # noqa: BLE001 - 不可序列化条目跳过，不影响统计
+                continue
+
+    disk_count = 0
+    disk_bytes = 0
+    if config.CACHE_DIR.is_dir():
+        for path in config.CACHE_DIR.glob("*.json"):
+            try:
+                disk_bytes += path.stat().st_size
+                disk_count += 1
+            except OSError:
+                continue
+
+    layout_bytes = 0
+    layout_file = config.DATA_DIR / "dashboards.json"
+    if layout_file.is_file():
+        try:
+            layout_bytes = layout_file.stat().st_size
+        except OSError:
+            layout_bytes = 0
+
+    return {
+        "memory": memory_count,
+        "disk": disk_count,
+        "memory_bytes": memory_bytes,
+        "disk_bytes": disk_bytes,
+        "layout_bytes": layout_bytes,
+        "ttl_map": [{"key": key, "ttl": ttl, "note": note} for key, ttl, note in CACHE_TTL],
+    }
