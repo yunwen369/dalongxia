@@ -833,14 +833,19 @@
           var pct = node.pct;
           var color = pct > 0 ? COLOR_UP : pct < 0 ? COLOR_DOWN : COLOR_MUTED;
           var share = (Number(node.value) || 0) / totalValue;
-          // 大面积：板块名 + 涨跌幅两行；中等面积：仅涨跌幅一行；更小：不显示标签（悬浮/点击仍可用）
-          var labelCfg = share >= 0.02
-            ? { show: true, fontSize: 10 }
-            : share >= 0.008
-              ? { show: true, fontSize: 10, formatter: function () {
-                  return pct === null || pct === undefined ? t("value.none") : Number(pct).toFixed(2) + "%";
-                } }
-              : { show: false };
+          // 三档：大块两行（板块名 + 涨跌幅）；中块一行（取整百分比，窄块也放得下）；
+          // 更小面积块**不显示标签、仅着色**——避免 ECharts 把「-1.64%」截成「-1.6…」这种压字残句，
+          // 精确值仍可经悬浮提示与点击进入板块页查看（基准 §3.3：最小 10px + 溢出截断不压字）。
+          var labelCfg;
+          if (share >= 0.02) {
+            labelCfg = { show: true, fontSize: 10 };
+          } else if (share >= 0.012) {
+            labelCfg = { show: true, fontSize: 10, formatter: function () {
+              return pct === null || pct === undefined ? t("value.none") : Math.round(pct) + "%";
+            } };
+          } else {
+            labelCfg = { show: false };
+          }
           return {
             name: node.name,
             value: node.value,
@@ -1268,7 +1273,7 @@
     var container = document.getElementById(VIEW_IDS.stock);
     state.stock.symbol = params.symbol || state.stock.symbol;
     state.stock.market = params.market || state.stock.market;
-    // R3-28：若无 URL 参数，自共享 store 带出最近标的
+    // R3-28/R3-30：若无 URL 参数，自共享 store 带出最近标的
     if (!params.symbol && !params.market && window.SymbolStore) {
       var shared = window.SymbolStore.get();
       state.stock.symbol = shared.symbol || state.stock.symbol;
@@ -1284,6 +1289,18 @@
     }
     if (select) {
       select.value = state.stock.market;
+    }
+    // R3-30：订阅共享 store——切页带代码自动同步到本页输入框
+    if (window.SymbolStore && window.SymbolStore.subscribe && !input.dataset.symbolStoreSubscribed) {
+      input.dataset.symbolStoreSubscribed = "1";
+      window.SymbolStore.subscribe(function (symbol, market) {
+        var inp = document.getElementById("stock-symbol");
+        var sel = document.getElementById("stock-market");
+        if (inp) inp.value = symbol;
+        if (sel) sel.value = market;
+        state.stock.symbol = symbol;
+        state.stock.market = market;
+      });
     }
     syncStockTabs();
     loadStock();
@@ -5373,6 +5390,8 @@
   }
 
   var chartingCache = { kline: null, minute: null, quote: null, lines: [] };
+  // R3-32：请求令牌 —— 切换标的/周期后旧响应不得覆盖新标的的渲染结果
+  var chartingRequestToken = 0;
 
   /** 渲染图表分析页（入口：同步表单 → 拉数）。
    * @param {Object} params 查询参数对象
@@ -5385,7 +5404,7 @@
     if (params && params.market) {
       state.charting.market = params.market;
     }
-    // R3-28：若无 URL 参数，自共享 store 带出最近标的
+    // R3-28/R3-30：若无 URL 参数，自共享 store 带出最近标的
     if ((!params || (!params.symbol && !params.market)) && window.SymbolStore) {
       var shared = window.SymbolStore.get();
       state.charting.symbol = shared.symbol || state.charting.symbol;
@@ -5398,6 +5417,18 @@
     document.getElementById("ch-market").value = state.charting.market;
     document.getElementById("ch-period").value = state.charting.period;
     document.getElementById("ch-adjust").value = state.charting.adjust;
+    // R3-30：订阅共享 store——切页带代码自动同步到本页输入框
+    if (window.SymbolStore && window.SymbolStore.subscribe && !container.dataset.symbolStoreSubscribed) {
+      container.dataset.symbolStoreSubscribed = "1";
+      window.SymbolStore.subscribe(function (symbol, market) {
+        var inp = document.getElementById("ch-symbol");
+        var sel = document.getElementById("ch-market");
+        if (inp) inp.value = symbol;
+        if (sel) sel.value = market;
+        state.charting.symbol = symbol;
+        state.charting.market = market;
+      });
+    }
     syncChartingTabs();
     loadCharting();
   }
@@ -5416,22 +5447,49 @@
       setEmpty(chartBody, t("chart.empty.input"));
       return;
     }
+    // R3-32：CH-01（报价）与 CH-02（K线/分时）**解耦**。
+    // 此前三请求合成一个 Promise.all，最慢的 K 线未回时，报价区块即使数据早已到手也一直挂骨架，
+    // 慢源下表现为「两块 loading 并挂 8-10s」。现改为各自落地：任一源慢只影响自己那张卡，
+    // 页面上最多只剩 1 个真正的等待骨架。
+    chartingRequestToken += 1;
+    var token = chartingRequestToken;
     setLoading(quoteBody);
     setLoading(chartBody);
+
+    api("/api/market/quote", { symbol: symbol, market: market })
+      .then(function (result) {
+        if (token !== chartingRequestToken) {
+          return;  // 标的已切换，丢弃过期响应
+        }
+        // /api/market/quote 的 data 为 {quote:{...}} 嵌套，先解包再入缓存
+        chartingCache.quote = (result && result.quote) || {};
+        paintChartingQuote(chartingCache.quote);
+      })
+      .catch(function (error) {
+        if (token !== chartingRequestToken) {
+          return;
+        }
+        setError(quoteBody, error.message, loadCharting);
+      });
+
+    // K 线与分时同图共存（Tab 切换用的是同一份缓存），仍需一起到位后才能落图
     Promise.all([
       api("/api/market/kline", { symbol: symbol, market: market, period: state.charting.period, adjust: state.charting.adjust }),
-      api("/api/market/minute", { symbol: symbol, market: market, period: "1min" }),
-      api("/api/market/quote", { symbol: symbol, market: market })
+      api("/api/market/minute", { symbol: symbol, market: market, period: "1min" })
     ])
       .then(function (result) {
-        // /api/market/quote 的 data 为 {quote:{...}} 嵌套，先解包再入缓存
-        var quoteData = (result[2] && result[2].quote) || {};
-        chartingCache = { kline: result[0], minute: result[1], quote: quoteData, lines: [] };
-        paintChartingQuote(quoteData);
+        if (token !== chartingRequestToken) {
+          return;
+        }
+        chartingCache.kline = result[0];
+        chartingCache.minute = result[1];
+        chartingCache.lines = [];
         paintChartingChart(result[0], result[1]);
       })
       .catch(function (error) {
-        setError(quoteBody, error.message, loadCharting);
+        if (token !== chartingRequestToken) {
+          return;
+        }
         setError(chartBody, error.message, loadCharting);
       });
   }

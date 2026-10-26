@@ -472,7 +472,9 @@
         countRow.appendChild(el("span", "down", t("market.sentiDown") + " " + fmt(breadth.down, 0)));
         countRow.appendChild(el("span", "flat", t("market.sentiFlat") + " " + fmt(breadth.flat, 0)));
       } else {
-        countRow.appendChild(el("span", "flat", breadth.caliber || t("state.empty")));
+        // r9 修复：不可用时这里只给短标签，详细原因（含「不以 0 代替」）留到下一行的口径说明，
+        // 否则同一句话会连着出现两次（首版实测截图就是这样）
+        countRow.appendChild(el("span", "flat", t("market.sentiUnavailable")));
       }
       body.appendChild(countRow);
 
@@ -482,7 +484,8 @@
       body.setAttribute("data-state", "default");
       if (badge) {
         badge.textContent = breadth.available ? t("market.sentiSource") : t("state.errorShort");
-        badge.className = "badge ok";
+        // r9 修复：不可用时不能挂 ok（绿框「异常」自相矛盾）
+        badge.className = breadth.available ? "badge ok" : "badge error";
       }
     } catch (error) {
       body.textContent = "";
@@ -512,11 +515,20 @@
   /** 初始化控件。 */
   function init() {
     if (!$("mk-symbol")) return; // 非行情页
-    // R3-28：若本页输入为空，从共享 store 带出最近一次标的
+    // R3-28/R3-30：若本页输入为空，从共享 store 带出最近一次标的
     if (!$("mk-symbol").value && window.SymbolStore) {
       var shared = window.SymbolStore.get();
       $("mk-symbol").value = shared.symbol || $("mk-symbol").value;
       $("mk-market").value = shared.market || $("mk-market").value;
+    }
+    // 订阅共享 store：切页带代码自动同步到本页输入框
+    if (window.SymbolStore && window.SymbolStore.subscribe) {
+      window.SymbolStore.subscribe(function (symbol, market) {
+        if ($("mk-symbol")) {
+          $("mk-symbol").value = symbol;
+          $("mk-market").value = market;
+        }
+      });
     }
     $("mk-refresh").addEventListener("click", refreshAll);
     const chartLink = $("mk-chart-link");
@@ -529,6 +541,17 @@
     });
     $("mk-symbol").addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadSymbol();
+    });
+    // 输入框变更时同步回共享 store（保留各页可独立改代码）
+    $("mk-symbol").addEventListener("change", function () {
+      if (window.SymbolStore) {
+        window.SymbolStore.set($("mk-symbol").value, $("mk-market").value);
+      }
+    });
+    $("mk-market").addEventListener("change", function () {
+      if (window.SymbolStore) {
+        window.SymbolStore.set($("mk-symbol").value, $("mk-market").value);
+      }
     });
     window.addEventListener("resize", () => {
       ["mk-index-chart"].forEach((id) => {

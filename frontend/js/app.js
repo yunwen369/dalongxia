@@ -86,23 +86,50 @@
     drawer.setAttribute("aria-hidden", "true");
   }
 
-  /** R3-28：全局标的代码/市场共享 store。
+  /** R3-28/R3-30：全局标的代码/市场共享 store（支持订阅/广播）。
    * 三个输入框（mk-symbol / stock-symbol / ch-symbol）通过本 store 互通，
-   * 切换页面时自动带代码，避免用户重复输入。
+   * 切换页面时自动带代码，避免用户重复输入；各页仍可独立改代码。
+   * 与 ui.js 命令面板的 URL query ?symbol=&market= 统一。
    */
   var _current = { symbol: "600519", market: "a" };
+  var _subscribers = [];  // 订阅回调列表
+
+  function _notify() {
+    _subscribers.forEach(function (cb) {
+      try {
+        cb(_current.symbol, _current.market);
+      } catch (e) {
+        // 订阅回调异常不影响主流程
+      }
+    });
+  }
+
   window.SymbolStore = {
     /** 获取当前标的。
      * @returns {{symbol: string, market: string}} 当前标的代码与市场
      */
     get: function () { return { symbol: _current.symbol, market: _current.market }; },
-    /** 设置当前标的。
+
+    /** 设置当前标的并广播。
      * @param {string} symbol 标的代码
      * @param {string} market 市场(a/hk/us/fund)
      */
     set: function (symbol, market) {
       _current.symbol = (symbol || "").trim() || _current.symbol;
       _current.market = market || _current.market;
+      _notify();
+    },
+
+    /** 订阅标的变更（用于输入框自动同步）。
+     * @param {Function} callback 回调(symbol, market)
+     * @returns {Function} 取消订阅函数
+     */
+    subscribe: function (callback) {
+      _subscribers.push(callback);
+      return function () {
+        var idx = _subscribers.indexOf(callback);
+        if (idx >= 0) _subscribers.splice(idx, 1);
+      };
     }
   };
 

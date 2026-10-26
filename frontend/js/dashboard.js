@@ -323,7 +323,7 @@
     "F-04": { kind: "table", path: "/api/fund/holding", params: { code: "017811" }, cols: ["code", "name", "ratio", "value"] },
     "P-01": { kind: "metrics", path: "/api/portfolio/analysis", params: {}, pick: "totals" },
     "P-03": { kind: "table", path: "/api/portfolio/analysis", params: {}, cols: ["market_label", "symbol", "name", "market_value", "pnl", "pnl_pct"] },
-    "V-01": { kind: "chart", path: "/api/sector/kline", params: { board: "半导体", market: "cn" }, pick: "items", x: "date", y: "close" },
+    "V-01": { kind: "chart", path: "/api/sector/kline", params: { board: t("dashboard.defaultBoard"), market: "cn" }, pick: "items", x: "date", y: "close" },
     // 养基宝（需已绑定；未绑定时后端返回 UPSTREAM_ERROR，卡片走错误态）
     "Y-05": { kind: "yjbCollect", path: "/api/fund/yjb/collect", params: {} },
     "Y-06": { kind: "table", path: "/api/fund/yjb/holdings", params: { account_id: "all" },
@@ -614,8 +614,10 @@
       var sentiment = item.sentiment || {};
       var row = el("article", "pg-feed-item");
       var head = el("div", "pg-feed-head");
-      head.appendChild(el("span", sentiment.label === "利好" ? "chip up" : sentiment.label === "利空" ? "chip down" : "chip",
-        sentiment.label || t("dashboard.sentiment.neutral")));
+      var label = sentiment.label || "";
+      var chipClass = label === t("dashboard.sentiment.up") ? "chip up"
+        : label === t("dashboard.sentiment.down") ? "chip down" : "chip";
+      head.appendChild(el("span", chipClass, label || t("dashboard.sentiment.neutral")));
       head.appendChild(el("span", "pg-feed-score", L().num(sentiment.score, 4)));
       head.appendChild(el("span", "pg-spacer"));
       head.appendChild(el("span", "pg-news-time", L().datetime(item.time)));
@@ -779,6 +781,8 @@
     card.setAttribute("draggable", "true");
     card.dataset.index = String(index);
     card.dataset.widgetId = entry.id;
+    // UI-02：区块编号只作 DOM 定位用（加 `dash-widget-` 前缀，避免与各页面里的 S-03/ST-01 同 id 冲突）
+    card.id = "dash-widget-" + entry.id;
 
     var head = el("div", "pg-card-head");
     head.appendChild(el("span", "pg-card-title", meta.title));
@@ -1165,6 +1169,22 @@
     return text && text !== key ? text : String(page || "");
   }
 
+  /** 组件库分类标签（6 类能力分类；未知分类回退到页面名，再回退到编号）。
+   * @param {Object} item 注册表条目（含 category / page）
+   * @returns {string} 中文分类名
+   */
+  function libraryCategoryLabel(item) {
+    var cat = (item && item.category) || "";
+    if (cat) {
+      var key = "dashboard.libCat." + cat;
+      var text = t(key);
+      if (text && text !== key) {
+        return text;
+      }
+    }
+    return libraryGroupLabel(item && item.page);
+  }
+
   /** 组件缩略预览：按配方渲染类型生成迷你示意（R3-12 L-02）。
    * @param {string} widgetId 组件编号
    * @returns {HTMLElement} 缩略预览节点（高 44px 的迷你图形）
@@ -1258,7 +1278,7 @@
       var cells = [
         { text: id, cls: "mono" },
         { text: item.title || id },
-        { text: libraryGroupLabel(item.page) },
+        { text: libraryCategoryLabel(item) },
         { text: String(item.span || "—") + t("dashboard.libTable.spanUnit") },
         { text: recipe.path || (item.api && item.api[0]) || "—", cls: "mono" },
         { text: item.desc || "—" }
@@ -1300,14 +1320,18 @@
   function renderLibraryGrid(host, opts) {
     var options = opts || {};
     var registry = state.registry || {};
-    var pages = {};
+    // r9：按**能力分类**分组（设计基准 §5.4 L-01 的 6 类），不再按页面路由分组——
+    // 页面分组会把 "#/watchlist" "#/lhb" 这类路由串直接漏成 chips 文案，且与冻结原型不符。
+    var buckets = {};
     Object.keys(registry).forEach(function (id) {
       var item = registry[id];
-      pages[item.page] = pages[item.page] || [];
-      pages[item.page].push(item);
+      var cat = item.category || "table";
+      buckets[cat] = buckets[cat] || [];
+      buckets[cat].push(item);
     });
-    var pageKeys = Object.keys(pages);
-    var activePage = "__all__";
+    var catOrder = ["market", "chart", "table", "news", "fin", "filter"];
+    var catKeys = catOrder.filter(function (cat) { return (buckets[cat] || []).length > 0; });
+    var activeCat = "__all__";
 
     // 搜索框
     var searchRow = el("div", "page-toolbar");
@@ -1336,11 +1360,11 @@
       var keyword = (search.value || "").trim().toLowerCase();
       listHost.innerHTML = "";
       var total = 0;
-      pageKeys.forEach(function (page) {
-        if (activePage !== "__all__" && page !== activePage) {
+      catKeys.forEach(function (cat) {
+        if (activeCat !== "__all__" && cat !== activeCat) {
           return;
         }
-        var items = pages[page].filter(function (item) {
+        var items = buckets[cat].filter(function (item) {
           if (!keyword) {
             return true;
           }
@@ -1400,22 +1424,23 @@
       }
     }
 
-    // 分类 chips：全部 + 各页面
+    // 分类 chips：全部 + 6 个能力分类（设计基准 §5.4 L-01 → 共 7 个 chips）
     var allChip = el("button", "pg-tab active", t("dashboard.libraryAll"));
     allChip.type = "button";
     allChip.addEventListener("click", function () {
-      activePage = "__all__";
+      activeCat = "__all__";
       filterRow.querySelectorAll(".pg-tab").forEach(function (node) {
         node.classList.toggle("active", node === allChip);
       });
       renderList();
     });
     filterRow.appendChild(allChip);
-    pageKeys.forEach(function (page) {
-      var chip = el("button", "pg-tab", libraryGroupLabel(page));
+    catKeys.forEach(function (cat) {
+      var chip = el("button", "pg-tab", libraryCategoryLabel({ category: cat }));
       chip.type = "button";
+      chip.setAttribute("data-cat", cat);
       chip.addEventListener("click", function () {
-        activePage = page;
+        activeCat = cat;
         filterRow.querySelectorAll(".pg-tab").forEach(function (node) {
           node.classList.toggle("active", node === chip);
         });
@@ -1483,9 +1508,29 @@
 
     var host = el("div", "dash-lib-page");
     container.appendChild(host);
-    // 独立页添加后不关页，直接提示；拖拽仍可拖到仪表板画布（需切页）
-    renderLibraryGrid(host, {});
-    container.setAttribute("data-state", "default");
+    // DS-02 缺陷修复（r9）：此前只有仪表板画布 `render()` 会调 `loadRegistry()`，
+    // 直接打开 `#/widget-library`（URL 直达/命令面板/侧栏）时 `state.registry` 仍是 null，
+    // 整页显示「没有可添加的组件」——路由可达但功能为空。现显式 ensure 注册表，
+    // 并按四态给「加载中 / 默认 / 错误」三态（空态由 renderLibraryGrid 内部处理）。
+    container.setAttribute("data-state", "loading");
+    host.appendChild(el("div", "pg-card-sub", t("state.loadingShort")));
+    loadRegistry().then(function () {
+      host.innerHTML = "";
+      renderLibraryGrid(host, {});
+      container.setAttribute("data-state", "default");
+    }).catch(function () {
+      host.innerHTML = "";
+      var box = el("div", "pg-state");
+      box.appendChild(el("div", "pg-state-title", t("dashboard.registryFailed")));
+      var retry = el("button", "pg-btn", t("action.refresh"));
+      retry.type = "button";
+      retry.addEventListener("click", function () {
+        renderLibraryPage(container);
+      });
+      box.appendChild(retry);
+      host.appendChild(box);
+      container.setAttribute("data-state", "error");
+    });
   }
 
   /** 独立路由 #/dashboard-manage：仪表板管理整页（DS-01，7 操作 + 分组树）。

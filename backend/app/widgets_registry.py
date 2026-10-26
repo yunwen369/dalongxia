@@ -5,6 +5,8 @@
 - 前端按 id 渲染，后端按 id 下发，保证 MD 说明书、HTML 工程与接口三方编号一致；
 - 当前注册 9 个页面共 49 个区块：sectors 7 + stock 10 + sector-val 4 + news 5 + fund 6 + portfolio 4 + watchlist 2 + lhb 5 + yjb 6；
   dashboard/home/charting/yjb/connectors/settings 不走本表（仪表板由 RECIPES 渲染，其余为静态页）。
+- 每个区块另带 `category`（组件库 6 分类：行情报价/图表走势/列表表格/资讯舆情/财务分析/控制筛选），
+  组件库 chips 与 L-03 说明表的「分类」列都以此为准，不再用页面路由当分类。
 """
 
 from __future__ import annotations
@@ -22,6 +24,72 @@ GRID_SPAN: Dict[str, int] = {
     ".g-12": 48,
 }
 
+# 组件库分类（设计基准 §5.4 L-01 冻结的 6 个真实分类；前端另加「全部」伪分类 = 7 个 chips）。
+# 早前组件库按**页面**分组，导致 `#/watchlist`、`#/lhb` 这类路由串直接漏到界面 chips 上，
+# 且与冻结原型的「7 分类」不一致；现改为按组件能力分类，页面归属另由 `page` 字段表达。
+LIBRARY_CATEGORIES: Dict[str, str] = {
+    "market": "行情报价",
+    "chart": "图表走势",
+    "table": "列表表格",
+    "news": "资讯舆情",
+    "fin": "财务分析",
+    "filter": "控制筛选",
+}
+
+# 区块编号 → 分类码。逐个人工判定（不按前缀猜），新增区块必须在此登记，
+# 否则 `_widget` 会落 default="table" 并被 test_widget_registry 的分类完备性用例拦下。
+CATEGORY_BY_ID: Dict[str, str] = {
+    "S-01": "filter",   # 市场切换
+    "S-02": "filter",   # 行业/概念切换
+    "S-03": "chart",    # 板块热力图
+    "S-04": "table",    # 行业板块排行
+    "S-05": "table",    # 概念板块排行
+    "S-06": "table",    # 板块摘要（Top3 + 集中度）
+    "S-07": "table",    # 板块资金流向
+    "ST-01": "market",  # 报价大卡
+    "ST-02": "chart",   # K 线图
+    "ST-03": "chart",   # 分时图
+    "ST-04": "chart",   # 资金分布（环形）
+    "ST-05": "news",    # 相关新闻
+    "ST-06": "table",   # 机构预测
+    "ST-07": "news",    # 舆情面板
+    "ST-08": "table",   # 公司概况
+    "ST-09": "fin",     # 财务页签区
+    "ST-10": "fin",     # 十大股东
+    "V-01": "chart",    # 板块 K 线
+    "V-02": "table",    # 板块估值指标
+    "V-03": "table",    # 成分股表
+    "V-04": "news",     # 板块精准资讯
+    "N-01": "filter",   # 三级板块树
+    "N-02": "news",     # 资讯流
+    "N-03": "news",     # 情绪温度
+    "N-04": "news",     # AI 复核
+    "N-05": "fin",      # 财报/公告搜索入口
+    "F-01": "market",   # 基金概览
+    "F-02": "chart",    # 净值与回撤
+    "F-03": "table",    # 阶段业绩
+    "F-04": "table",    # 重仓股
+    "F-05": "table",    # 档案与分红
+    "F-06": "chart",    # 持仓分布
+    "P-01": "table",    # 持仓汇总
+    "P-02": "filter",   # 新增持仓表单
+    "P-03": "table",    # 持仓明细
+    "P-04": "chart",    # 市场分布
+    "W-01": "table",    # 自选股概览
+    "W-02": "market",   # 自选股行情
+    "L-01": "chart",    # 北向资金净流入（近20日）
+    "L-02": "table",    # 北向净买入 Top10
+    "L-03": "table",    # 龙虎榜明细
+    "L-04": "table",    # 机构席位统计
+    "L-05": "table",    # 活跃营业部
+    "Y-01": "filter",   # 授权告知书
+    "Y-02": "filter",   # 绑定状态
+    "Y-03": "filter",   # 扫码绑定
+    "Y-04": "table",    # 实时估值
+    "Y-05": "market",   # 账户概览
+    "Y-06": "table",    # 持仓与估值
+}
+
 
 def _widget(
     widget_id: str,
@@ -32,6 +100,7 @@ def _widget(
     *,
     jump: str = "",
     desc: str = "",
+    category: str = "",
 ) -> Dict[str, Any]:
     """构造单个组件元数据。
 
@@ -42,11 +111,13 @@ def _widget(
         grid: 网格类名（.g-7 等）。
         api: 绑定的接口路径列表。
         jump: 跳转目标路由（无跳转留空）。
-        desc: 口径说明。
+        desc: 口径说明（**面向用户**，不得写内部实现口径）。
+        category: 组件库分类码；留空时按 `CATEGORY_BY_ID` 查表。
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
+    cat = category or CATEGORY_BY_ID.get(widget_id, "table")
     return {
         "id": widget_id,
         "page": page,
@@ -56,6 +127,8 @@ def _widget(
         "api": api,
         "jump": jump,
         "desc": desc,
+        "category": cat,
+        "category_label": LIBRARY_CATEGORIES.get(cat, ""),
     }
 
 
