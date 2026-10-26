@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app import config
-from backend.app.core import netfix
+from backend.app.core import atomic, netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.datasource import tencent, utils
 
@@ -69,18 +67,22 @@ def load() -> Dict[str, Any]:
 
 
 def save(payload: Dict[str, Any]) -> None:
-    """原子写入持仓文件（先写 .tmp 再替换），并更新时间戳。
+    """原子写入持仓文件（统一原子写助手），并更新时间戳。
 
     Args:
-        payload: 请求体（JSON 对象）。
+        payload: 持仓文件内容（items 列表 + 可选字段）。
+
+    Raises:
+        NonRetryableError: 磁盘不可写 / 权限不足等确定性失败（转中文给调用方）。
     """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
-    payload["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    temp_path = PORTFOLIO_FILE.with_suffix(".json.tmp")
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-    os.replace(temp_path, PORTFOLIO_FILE)
+    payload["updated_at"] = utils.now_text()
+    # R3-09：统一原子写助手（fsync + 失败清理临时文件），替代手写 temp + os.replace
+    try:
+        atomic.atomic_write_json(PORTFOLIO_FILE, payload, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        raise NonRetryableError(f"持仓写入失败：{exc}") from exc
 
 
 def _validate(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -118,7 +120,7 @@ def _validate(payload: Dict[str, Any]) -> Dict[str, Any]:
         "shares": round(shares, 4),
         "cost": round(cost, 4),
         "note": str(payload.get("note") or "").strip(),
-        "created_at": payload.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": payload.get("created_at") or utils.now_text(),
     }
 
 

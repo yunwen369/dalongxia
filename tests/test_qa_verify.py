@@ -1385,8 +1385,13 @@ def test_p101_us_quote_time_is_beijing() -> None:
         f"quote_time={quote['quote_time']} 不在最近美股收盘 {expected:%Y-%m-%d %H:%M:%S} 附近"
         f"（偏差 {drift / 3600:.2f} 小时，疑似未做美东→北京换算）"
     )
-    assert quote["market_status"] in {"休市", "盘后", "收盘快照"}, (
-        f"非盘中应为休市/盘后/收盘快照，实际 {quote['market_status']}"
+    # 非盘中允许的状态：休市 / 盘后 / 收盘快照 / 盘前。
+    # 「盘前」是 2026-10-26 12:20（北京）= 00:20（美东，周一）实测暴露的口径缺口：
+    # 项目 `_us_session_phase` 对「常规时段开始前」一律标盘前（含 00:00–04:00 ET 隔夜），
+    # 该分支本身正确（时区换算已由上面的 drift 与下面的时段窗断言双重把关），
+    # 是原断言的状态集合漏枚举，故补齐，不改应用行为。
+    assert quote["market_status"] in {"休市", "盘后", "收盘快照", "盘前"}, (
+        f"非盘中应为休市/盘后/收盘快照/盘前，实际 {quote['market_status']}"
     )
     assert quote["is_realtime"] is False, "非盘中数据不得标记为实时"
     # 时段窗断言：北京时刻必须落在美股常规时段收盘窗内（夏令时 04:00 / 冬令时 05:00）

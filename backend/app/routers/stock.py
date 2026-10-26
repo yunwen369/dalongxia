@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -26,7 +25,7 @@ from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import stock as stock_provider
-from backend.app.datasource import tencent, utils
+from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +124,7 @@ def _quote_status(quote: Optional[Dict[str, Any]]) -> tuple[Optional[str], str, 
     """
     if quote:
         return quote.get("quote_time"), quote.get("market_status") or "快照", bool(quote.get("is_realtime"))
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = utils.now_text()
     return now, "快照", False
 
 

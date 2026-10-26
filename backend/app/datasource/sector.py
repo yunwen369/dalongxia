@@ -28,7 +28,6 @@ import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
 
 from backend.app import config
 from backend.app.core import netfix
@@ -108,29 +107,6 @@ def _call_ths(func) -> Any:
     return _call(guard_v8(func))
 
 
-def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """DataFrame → 可 JSON 序列化 records（NaN→None，numpy 标量→Python）。
-
-    Args:
-        frame: 源站原始表（pandas DataFrame）。
-
-    Returns:
-        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
-    """
-    records: List[Dict[str, Any]] = []
-    for raw in frame.to_dict("records"):
-        row: Dict[str, Any] = {}
-        for key, value in raw.items():
-            if pd.isna(value):
-                row[str(key)] = None
-            elif hasattr(value, "item"):
-                row[str(key)] = value.item()
-            else:
-                row[str(key)] = value
-        records.append(row)
-    return records
-
-
 def _num(value: Any) -> Optional[float]:
     """安全转 float，None/空串/NaN 一律返回 None（空值不补 0）。
 
@@ -154,6 +130,25 @@ def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
         float | None: 数值；无法解析时返回 None（不补 0）。
     """
     return None if value is None else round(value, digits)
+
+
+def _maybe_zero_none(value: Any, threshold: float = 0.0) -> Optional[float]:
+    """把 0 / 零值 当作 None（量额为 0 意味着不可用，非真实缺量）。
+
+    R3-07：同花顺 K 线在字段错位/备源无量时返回 volume=0、amount=25-29 个位数，
+    这些零值或误值必须显式 null，禁止让前端显示 0 或假的个位数。
+
+    Args:
+        value: 原始值。
+        threshold: 判零阈（默认 0，amount 可传 1 过滤疑似错位的个位数）。
+
+    Returns:
+        Optional[float]: 非零有效值原样返回；零值 / 不可解析返回 None。
+    """
+    num = _num(value)
+    if num is None or num <= threshold:
+        return None
+    return num
 
 
 # 名称→代码/标签的映射表变化极慢，进程内缓存 1 小时，避免每次 /cons 重复拉全表
@@ -200,7 +195,7 @@ def _industry_ths() -> List[Dict[str, Any]]:
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_board_industry_summary_ths())
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         name = str(row.get("板块") or "").strip()
         if not name:
             continue
@@ -241,7 +236,7 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
     _ensure_enabled()
     frame = _call(lambda: ak.stock_sector_spot(indicator=indicator))
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         name = str(row.get("板块") or "").strip()
         if not name:
             continue
@@ -278,7 +273,7 @@ def _concept_ths_names() -> List[Dict[str, Any]]:
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_board_concept_name_ths())
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         name = str(row.get("name") or "").strip()
         if not name:
             continue
@@ -613,7 +608,7 @@ def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
     func = ak.stock_board_industry_index_ths if kind == "industry" else ak.stock_board_concept_index_ths
     frame = _call_ths(lambda: func(symbol=board, start_date=start_text, end_date=end_text))
     rows: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         rows.append(
             {
                 "date": str(row.get("日期"))[:10],
@@ -621,8 +616,9 @@ def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
                 "high": _round(_num(row.get("最高价"))),
                 "low": _round(_num(row.get("最低价"))),
                 "close": _round(_num(row.get("收盘价"))),
-                "volume": _round(_num(row.get("成交量")), 0),
-                "amount": _round(_num(row.get("成交额")), 0),
+                # R3-07：volume/amount 零值 → None，避免前端显示 0 或假的个位数
+                "volume": _round(_maybe_zero_none(row.get("成交量")), 0),
+                "amount": _round(_maybe_zero_none(row.get("成交额"), threshold=1.0), 0),
             }
         )
     if not rows:
@@ -651,7 +647,7 @@ def _aggregate_period(rows: List[Dict[str, Any]], period: str) -> List[Dict[str,
             date_text: 日期文本。
 
         Returns:
-            str: 文本结果。
+            str: 分组键（如 2026-W43 / 2026-10）。
         """
         try:
             day = date.fromisoformat(date_text)
@@ -676,8 +672,8 @@ def _aggregate_period(rows: List[Dict[str, Any]], period: str) -> List[Dict[str,
                 "high": max((_num(item["high"]) or 0.0) for item in group),
                 "low": min((_num(item["low"]) or 0.0) for item in group),
                 "close": last["close"],
-                "volume": sum((_num(item["volume"]) or 0.0) for item in group),
-                "amount": sum((_num(item["amount"]) or 0.0) for item in group),
+                "volume": _round(_maybe_zero_none(sum((_num(item["volume"]) or 0.0) for item in group)), 0),
+                "amount": _round(_maybe_zero_none(sum((_num(item["amount"]) or 0.0) for item in group), threshold=1.0), 0),
             }
         )
     return result
@@ -754,7 +750,7 @@ def _kline_sw(board: str, period: str) -> List[Dict[str, Any]]:
     symbol = code.split(".")[0]
     frame = _call(lambda: ak.index_hist_sw(symbol=symbol, period="day"))
     rows: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         rows.append(
             {
                 "date": str(row.get("日期"))[:10],
@@ -762,8 +758,9 @@ def _kline_sw(board: str, period: str) -> List[Dict[str, Any]]:
                 "high": _round(_num(row.get("最高"))),
                 "low": _round(_num(row.get("最低"))),
                 "close": _round(_num(row.get("收盘"))),
-                "volume": _round(_num(row.get("成交量")), 0),
-                "amount": _round(_num(row.get("成交额")), 0),
+                # R3-07：volume/amount 零值 → None，避免前端显示 0 或假的个位数
+                "volume": _round(_maybe_zero_none(row.get("成交量")), 0),
+                "amount": _round(_maybe_zero_none(row.get("成交额"), threshold=1.0), 0),
             }
         )
     if not rows:
@@ -795,7 +792,7 @@ def _sina_label(board: str) -> Optional[str]:
                 frame = _call(lambda: ak.stock_sector_spot(indicator=indicator))
             except Exception:  # noqa: BLE001 - 单个分类失败不影响整体映射
                 continue
-            for row in _clean_records(frame):
+            for row in utils.clean_records(frame):
                 name = str(row.get("板块") or "").strip()
                 label = str(row.get("label") or "").strip()
                 if name and label and name not in mapping:
@@ -826,7 +823,7 @@ def _cons_sina(board: str) -> List[Dict[str, Any]]:
         raise ValueError(f"新浪板块列表未找到：{board}")
     _ensure_enabled()
     frame = _call(lambda: ak.stock_sector_detail(sector=label))
-    raw_rows = _clean_records(frame)
+    raw_rows = utils.clean_records(frame)
     total_nmc = sum((_num(row.get("nmc")) or 0.0) for row in raw_rows)
     items: List[Dict[str, Any]] = []
     for row in raw_rows:
@@ -888,7 +885,7 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
             (ak.sw_index_second_info, "二级"),
         ):
             try:
-                info = _clean_records(_call(loader))
+                info = utils.clean_records(_call(loader))
             except Exception as exc:  # noqa: BLE001 - 单级失败继续下一级
                 logger.info("申万%s名录暂不可用（%s）", level, type(exc).__name__)
                 continue
@@ -914,7 +911,7 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         """
         mapping: Dict[str, str] = {}
         try:
-            info = _clean_records(_call(ak.sw_index_third_info))
+            info = utils.clean_records(_call(ak.sw_index_third_info))
         except Exception as exc:  # noqa: BLE001 - 统一转为可降级异常
             raise ValueError(f"申万三级名录暂不可用：{type(exc).__name__}") from exc
         for row in info or []:
@@ -946,10 +943,21 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         _BOARD_MISS[board] = time.time() + 600
         raise ValueError(f"申万行业未找到：{board}")
 
-    # 申万成分页对连续请求敏感（返回空表），按规范要求串行+退避，禁止高频重试
-    polite_sleep()
-    frame = retry_call(lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0))
-    rows = _clean_records(frame)
+    # 申万成分页对连续请求敏感（返回空表）：akshare 空表**不抛异常**，
+    # 单靠 retry_call 无法覆盖，故对「空表」单独退避重试（1.0s / 2.5s），
+    # 三次仍空才判定通道异常（R2-03 回归中被真实触发，属数据可用性缺陷）。
+    rows: List[Dict[str, Any]] = []
+    for attempt, wait in enumerate((0.0, 1.0, 2.5)):
+        if wait:
+            time.sleep(wait)
+        polite_sleep()
+        frame = retry_call(
+            lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0)
+        )
+        rows = utils.clean_records(frame)
+        if rows:
+            break
+        logger.warning("申万成分为空（第 %d/3 次尝试）：%s", attempt + 1, board)
     if not rows:
         raise ValueError(f"申万成分为空：{board}")
     total_cap = sum((_num(row.get("市值")) or 0.0) for row in rows)
@@ -985,7 +993,7 @@ def _cons_em(board: str) -> List[Dict[str, Any]]:
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_board_industry_cons_em(symbol=board))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     total_cap = sum((_num(row.get("流通市值")) or 0.0) for row in rows)
     items: List[Dict[str, Any]] = []
     for row in rows:
@@ -1026,6 +1034,7 @@ def get_cons_sina(board: str) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
+    _ensure_board_known(board)
     return {"board": board, "items": _sort_cons(_cons_sina(board)), "source_hint": "新浪"}
 
 
@@ -1038,6 +1047,7 @@ def get_cons_sw(board: str) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
+    _ensure_board_known(board)
     return {"board": board, "items": _sort_cons(_cons_sw(board)), "source_hint": "申万"}
 
 
@@ -1050,6 +1060,7 @@ def get_cons_em(board: str) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
+    _ensure_board_known(board)
     return {"board": board, "items": _sort_cons(_cons_em(board)), "source_hint": "东财"}
 
 
@@ -1087,6 +1098,69 @@ def get_cons(board: str, market: str = "cn") -> Dict[str, Any]:
     raise ValueError("板块成分全部通道失败：" + "，".join(errors))
 
 
+# 板块成分「不存在/暂无」冷却表（R2-10）：与 P1-03 同策略——先做本地存在性闸门，
+# 不存在立即失败，不再让三个源各等满超时（原实测 12.4s）。
+_CONS_MISS: Dict[str, float] = {}
+_KNOWN_NAMES_KEY = "sector:known-names"
+
+def _known_board_names() -> set:
+    """汇总可判定的板块名（申万名录 + 本地板块树 + 同花顺行业/概念）。
+
+    Returns:
+        set: 板块名集合（空串已剔除）。
+    """
+    names = set(SW_INDEX_CODE)
+    try:
+        from backend.app.datasource.news import BOARD_TREE  # 延迟导入避免循环依赖
+
+        for level1 in BOARD_TREE:
+            names.add(level1["name"])
+            for level2 in level1["children"]:
+                names.add(level2["name"])
+                for leaf in level2["children"]:
+                    names.add(leaf["name"])
+    except Exception:  # noqa: BLE001 - 板块树不可用时仅靠申万名录
+        pass
+    for getter in (get_industry, get_concept):
+        try:
+            for row in getter("cn"):
+                # 同花顺行业/概念行字段为 name；申万等其他源可能用 名称
+                names.add(str(row.get("name") or row.get("名称") or "").strip())
+        except Exception:  # noqa: BLE001 - 单个列表失败不影响判定
+            continue
+    return {name for name in names if name}
+
+
+def _note_cons_miss(board: str) -> None:
+    """记录板块成分失败冷却（R2-10）：10 分钟内同板块直接快速失败。
+
+    Args:
+        board: 板块名称。
+
+    Returns:
+        None: 仅更新进程内状态。
+    """
+    _CONS_MISS[board] = time.time() + 600
+
+
+def _ensure_board_known(board: str) -> None:
+    """板块存在性闸门（R2-10）：不存在直接快速失败，命中冷却表则立即返回。
+
+    Args:
+        board: 板块名称。
+
+    Raises:
+        ValueError: 板块不在任何已知名录中，或处于冷却期。
+    """
+    if _CONS_MISS.get(board, 0.0) > time.time():
+        raise ValueError(f"板块成分为空或不存在（冷却中）：{board}")
+    names = _lookup(_KNOWN_NAMES_KEY, 60, _known_board_names)
+    if board not in names:
+        _CONS_MISS[board] = time.time() + 600
+        logger.info("板块不存在，成分请求快速失败：%s", board)
+        raise ValueError(f"板块不存在或暂无成分数据：{board}")
+
+
 # =============================================================
 # 四、板块资金流 / 趋势对比
 # =============================================================
@@ -1110,7 +1184,7 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     _ensure_enabled()
     frame = _call_ths(lambda: ak.stock_fund_flow_industry(symbol="即时"))
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         name = str(row.get("行业") or "").strip()
         if not name:
             continue

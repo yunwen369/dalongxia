@@ -919,3 +919,40 @@
 }
 .fund-search-item:hover { background: var(--bg-hover); color: var(--text); }
 .fund-search-item .code { font-family: var(--font-mono); color: var(--text); }
+
+/* =============================================================
+ * 第六波：养基宝首启向导（Y-00）与估算口径角标（2026-10-26）
+ * 仅用 theme.css 变量，不新增配色；红涨绿跌语义仍由 .up/.down 承担。
+ * ============================================================= */
+.yjb-wizard-steps {
+  margin: 8px 0 10px;
+  padding-left: 20px;
+  color: var(--text-dim);
+  font-size: var(--fs-aux);
+  line-height: 1.9;
+}
+.yjb-wizard-steps li { list-style: decimal; }
+
+/* 角标容器：常驻在 Y-05/Y-06 工具栏首项，窄屏可换行 */
+.yjb-est-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 一键关闭/恢复：小尺寸描边按钮，不抢主操作视觉 */
+.yjb-est-close {
+  padding: 1px 7px;
+  font-size: var(--fs-aux);
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.yjb-est-close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}

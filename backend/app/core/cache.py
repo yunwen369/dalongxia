@@ -166,19 +166,24 @@ def set(key: str, value: Any, ttl: Optional[int] = None) -> bool:  # noqa: ARG00
     return True
 
 
-def get_or_load(key: str, ttl: int, loader: Callable[[], Any]) -> Any:
+def get_or_load(key: str, ttl: int, loader: Callable[[], Any],
+                stale_ok: Optional[Callable[[BaseException], bool]] = None) -> Any:
     """缓存优先读取；未命中时调用 loader，失败则回退磁盘旧值。
 
     Args:
         key: 缓存键。
         ttl: 有效期（秒）。
         loader: 上游取数函数，无参数、返回可缓存值。
+        stale_ok: 可选判定函数，入参为 loader 抛出的异常，返回 False 表示
+            **禁止**用磁盘旧值兜底。用于「凭据失效」这类必须让用户看见的错误：
+            拿旧数据糊过去会让用户误以为仍处于正常状态（§3.4 401 需引导重新授权）。
 
     Returns:
         Any: 缓存值或 loader 返回值。
 
     Raises:
-        Exception: 上游失败且无可用磁盘兜底时，原样抛出由路由层统一处理。
+        Exception: 上游失败且（无可用磁盘兜底 或 被 `stale_ok` 拒绝）时，
+            原样抛出由路由层统一处理。
     """
     cached = get(key, ttl)
     if cached is not None:
@@ -186,7 +191,9 @@ def get_or_load(key: str, ttl: int, loader: Callable[[], Any]) -> Any:
 
     try:
         value = loader()
-    except Exception:
+    except Exception as exc:
+        if stale_ok is not None and not stale_ok(exc):
+            raise
         stale = get(key, ttl, allow_stale=True)
         if stale is not None:
             logger.warning("上游取数失败，已使用磁盘缓存兜底：key=%s", key)

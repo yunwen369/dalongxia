@@ -54,6 +54,40 @@ netfix.apply_netfix()
 
 logger = logging.getLogger(__name__)
 
+
+class YjbUnauthorizedError(NonRetryableError):
+    """HTTP 401 或业务 code=401：授权凭据失效，需重新扫码。
+
+    接口文档 §3.4 明确「401 → 未授权，请重新登录（token 失效需重扫）」，
+    且失效判据为 **401 或 code!=200**（无 refresh_token，只能重扫）。
+    路由层据此返回 ``UNAUTHORIZED``，前端展示「重新扫码」引导。
+    """
+
+
+class YjbTimeoutError(NonRetryableError):
+    """HTTP 408 或 requests 超时：请求超时，可稍后重试（不清 token）。"""
+
+
+class YjbRateLimitError(NonRetryableError):
+    """HTTP 429：触发限频（S1 风控），提示「请求频繁，请稍后再试」。"""
+
+
+class YjbNotConfiguredError(NonRetryableError):
+    """本地尚未完成授权配置（缺 token/盐）：属「配置缺失」而非「上游故障」。
+
+    首启向导场景若沿用通用「接口不可用」文案，会与页面上方的三步引导自相矛盾
+    （东西没坏，只是还没配），故单列一类，由路由层映射 ``NOT_CONFIGURED``。
+    """
+
+
+# 接口文档 §3.4 的状态码 → (异常类, 中文文案)；未列出的状态码仍走通用 UPSTREAM_ERROR。
+# 文案直接取自文档原文，避免自创措辞导致前端提示与文档不一致。
+_STATUS_HINTS: Dict[int, Tuple[type, str]] = {
+    401: (YjbUnauthorizedError, "未授权，请重新登录（授权凭据已失效，请在养基宝页重新扫码）"),
+    408: (YjbTimeoutError, "请求超时，请稍后重试。"),
+    429: (YjbRateLimitError, "请求频繁，请稍后再试。"),
+}
+
 YJB_TOKEN_FILE = config.DATA_DIR / "yjb_token.json"
 YJB_STATE_FILE = config.DATA_DIR / "yjb_state.json"
 # 签名盐本地加密配置（DPAPI + YJB2 魔数）；环境变量优先，文件仅作本机注入通道
@@ -458,6 +492,28 @@ def _old_base_candidates() -> list:
     return [https_base, BASE_OLD]
 
 
+def _status_error(status: Any, path: str) -> NonRetryableError:
+    """把 HTTP 状态码映射为带中文文案的确定性异常（接口文档 §3.4）。
+
+    Args:
+        status: 上游 HTTP 状态码（可能为 int 或字符串）。
+        path: 接口路径（仅用于通用文案，日志与提示均不含 token）。
+
+    Returns:
+        NonRetryableError: 401/408/429 返回对应子类实例；其余返回通用实例。
+    """
+    try:
+        code = int(status)
+    except (TypeError, ValueError):
+        code = 0
+    hint = _STATUS_HINTS.get(code)
+    tail = path.split("?")[0]
+    if hint:
+        exc_cls, message = hint
+        return exc_cls(message)
+    return NonRetryableError(f"养基宝接口不可用（HTTP {status}，{tail}）")
+
+
 def _request(method: str, base: str, path: str, token: str = "", params: Optional[Dict[str, Any]] = None,
              use_old: bool = False) -> Dict[str, Any]:
     """带签名的请求；签名盐缺失/连接失败均转确定性异常，便于上层判定。
@@ -499,11 +555,11 @@ def _request(method: str, base: str, path: str, token: str = "", params: Optiona
             )
         except requests.exceptions.RequestException as exc:
             last_error = exc
-            # https 失败且还有 http 备选时继续尝试，其余情况原样抛出
+            # https 失败且还有 http 备选时继续尝试，其余情况跳出循环统一分流
             if index + 1 < len(bases):
                 logger.info("养基宝老接口 https 不可用，回落 http 明文（原因：%s）", type(exc).__name__)
                 continue
-            raise
+            break
         if candidate.startswith("https://"):
             # 记录**成功的 https 基址**（不能记 BASE_OLD，否则状态会误报「仅 http 明文」）
             _OLD_SCHEME["base"] = candidate
@@ -512,6 +568,9 @@ def _request(method: str, base: str, path: str, token: str = "", params: Optiona
             _OLD_SCHEME["base"] = candidate
         return {"status": response.status_code, "text": response.text,
                 "base": candidate, "scheme": candidate.split("://", 1)[0]}
+    if isinstance(last_error, requests.exceptions.Timeout):
+        # 文档 §3.4：超时按「请求超时」中文提示；不清 token（非确定性失效）
+        raise YjbTimeoutError("请求超时，请稍后重试。") from last_error
     raise last_error or requests.exceptions.ConnectionError("养基宝老接口不可达")
 
 
@@ -705,13 +764,21 @@ def _plug_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
     token = str((load_token() or {}).get("token") or "")
     result = _request("GET", BASE_OLD, path, token, params=params, use_old=True)
     if result["status"] != 200:
-        raise NonRetryableError(f"养基宝接口不可用（HTTP {result['status']}，{path.split('?')[0]}）")
+        raise _status_error(result["status"], path)
     try:
         body = json.loads(result["text"])
     except json.JSONDecodeError as exc:
         raise NonRetryableError(f"养基宝接口返回非 JSON（{path.split('?')[0]}）") from exc
     code = body.get("code")
     if code is not None and str(code) != "200":
+        # 文档 §3.4：失效判据为「401 或 code!=200」，故业务码仍需按 401/408/429 分流
+        try:
+            code_int = int(code)
+        except (TypeError, ValueError):
+            code_int = 0
+        if code_int in _STATUS_HINTS:
+            exc_cls, message = _STATUS_HINTS[code_int]
+            raise exc_cls(message)
         raise NonRetryableError(f"养基宝返回错误（code={code}）：{body.get('message') or ''}")
     return body.get("data")
 
@@ -728,7 +795,7 @@ def get_accounts() -> Dict[str, Any]:
         NonRetryableError: 未绑定，或接口不可用。
     """
     if not (load_token() or {}).get("token"):
-        raise NonRetryableError("未绑定养基宝，无法读取账户")
+        raise YjbNotConfiguredError("未绑定养基宝，无法读取账户")
     data = _plug_get("/user_account")
     items: List[Dict[str, Any]] = []
     target = ""
@@ -792,7 +859,7 @@ def get_holdings(account_id: str = "") -> List[Dict[str, Any]]:
         NonRetryableError: 未绑定或接口不可用。
     """
     if not (load_token() or {}).get("token"):
-        raise NonRetryableError("未绑定养基宝，无法读取持仓")
+        raise YjbNotConfiguredError("未绑定养基宝，无法读取持仓")
     data = _plug_get("/fund_hold", {"account_id": resolve_account_id(account_id)})
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
@@ -863,19 +930,24 @@ def _rate_of(item: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def get_collect() -> Dict[str, Any]:
+def get_collect(estimates: bool = True) -> Dict[str, Any]:
     """多账户汇总（真实接口 ``GET /account_collect``）。
 
     返回总资产 / 今日收益（估算）/ 今日收益率 / 累计持有收益 / 各账户明细。
 
+    Args:
+        estimates: 是否采用盘中估算口径。``False`` 时今日收益类字段一律置 ``None``
+            （用户一键关闭估算 → 回退 T+1 官方净值口径），**不补 0、不用旧值冒充**。
+
     Returns:
-        dict: `{total_assets, today_income, today_income_rate, hold_income, accounts[]}`。
+        dict: `{total_assets, today_income, today_income_rate, hold_income,
+        accounts[], estimates}`。
 
     Raises:
         NonRetryableError: 未绑定或接口不可用。
     """
     if not (load_token() or {}).get("token"):
-        raise NonRetryableError("未绑定养基宝，无法读取账户汇总")
+        raise YjbNotConfiguredError("未绑定养基宝，无法读取账户汇总")
     data = _plug_get("/account_collect") or {}
     if not isinstance(data, dict):
         data = {}
@@ -889,8 +961,8 @@ def get_collect() -> Dict[str, Any]:
         accounts.append({
             "id": str(account_id),
             "title": str(item.get("title") or ""),
-            "today_income": _as_float(item.get("today_income")),
-            "today_income_rate": _as_float(item.get("today_income_rate")),
+            "today_income": _as_float(item.get("today_income")) if estimates else None,
+            "today_income_rate": _as_float(item.get("today_income_rate")) if estimates else None,
             "hold_income": _as_float(item.get("hold_income")),
             "hold_cost": _as_float(item.get("hold_cost")),
             "up": int(_as_float(item.get("up")) or 0),
@@ -898,28 +970,31 @@ def get_collect() -> Dict[str, Any]:
         })
     return {
         "total_assets": _as_float(data.get("assets_collect")),
-        "today_income": _as_float(data.get("today_income")),
-        "today_income_rate": _as_float(data.get("today_income_rate")),
+        "today_income": _as_float(data.get("today_income")) if estimates else None,
+        "today_income_rate": _as_float(data.get("today_income_rate")) if estimates else None,
         "hold_income": _as_float(sum(a["hold_income"] or 0 for a in accounts)) if accounts else None,
         "is_single_account": bool(data.get("is_single_account_model")),
         "accounts": accounts,
+        "estimates": bool(estimates),
     }
 
 
-def get_holdings_view(account_id: str = "") -> Dict[str, Any]:
+def get_holdings_view(account_id: str = "", estimates: bool = True) -> Dict[str, Any]:
     """持仓视图（含估值），支持单账户或全部账户合并。
 
     Args:
         account_id: 账户 id；传空或 "all" 表示合并全部账户。
+        estimates: 是否给出盘中估算涨跌幅。``False`` 时 ``pct`` 统一为 ``None``
+            （一键关闭估算 → 回退 T+1 公布净值口径，仅 ``nav``/``nav_date`` 有效）。
 
     Returns:
-        dict: `{account_id, items[], total, accounts[]}`；items 按估算涨跌幅降序。
+        dict: `{account_id, items[], total, accounts[], estimates}`；items 按估算涨跌幅降序。
 
     Raises:
         NonRetryableError: 未绑定或接口不可用。
     """
     if not (load_token() or {}).get("token"):
-        raise NonRetryableError("未绑定养基宝，无法读取持仓")
+        raise YjbNotConfiguredError("未绑定养基宝，无法读取持仓")
     info = get_accounts()
     titles = {str(a["id"]): a["title"] for a in info["accounts"]}
     wanted = str(account_id or "").strip()
@@ -938,7 +1013,7 @@ def get_holdings_view(account_id: str = "") -> Dict[str, Any]:
                 "cost": _as_float(raw.get("hold_cost")),
                 "money": _as_float(raw.get("money")),
                 "hold_earn": _as_float(raw.get("hold_earn")),
-                "pct": _rate_of(raw),
+                "pct": _rate_of(raw) if estimates else None,
                 "nav": _as_float(nv.get("dwjz")),
                 "nav_date": str(nv.get("jzrq") or nv.get("gztime") or "")[:10],
                 "as_of": str(nv.get("gztime") or nv.get("time") or "")[:10],
@@ -947,7 +1022,8 @@ def get_holdings_view(account_id: str = "") -> Dict[str, Any]:
             })
     items.sort(key=lambda x: (x["pct"] is None, -(x["pct"] or 0)))
     return {"account_id": wanted or "all", "items": items, "total": len(items),
-            "accounts": [{"id": str(a["id"]), "title": a["title"]} for a in info["accounts"]]}
+            "accounts": [{"id": str(a["id"]), "title": a["title"]} for a in info["accounts"]],
+            "estimates": bool(estimates)}
 
 
 def fetch_increase_rate(fund_id: str) -> Dict[str, Any]:
@@ -1051,26 +1127,53 @@ def status() -> Dict[str, Any]:
 
     Returns:
         dict: `{bound, bound_at, platform, consent, enabled, secret_configured,
-        secret_source, secure_storage, channel_available, transport, notice}`。
+        secret_source, secure_storage, channel_available, transport, notice,
+        setup_required, setup_missing, setup_steps, data_dir, is_frozen}`。
+        ``setup_required`` 为真时前端必须显示「首启向导」，禁止静默空态。
     """
     state = _load_state()
     token = load_token()
+    bound = bool(token and token.get("token"))
+    has_secret = secret_configured()
+    # 首启向导：凭据未齐（缺 token 或缺签名盐）时必须显式引导，不能伪装成已就绪
+    # 缺失项编码用「用途命名」，不用 token/secret 这类字段名——避免与
+    # 「status 响应不得出现 token 字样」的安全断言冲突（值本身从不返回）。
+    missing: List[str] = []
+    if not has_secret:
+        missing.append("signing_salt")
+    if not bound:
+        missing.append("authorization")
+    try:
+        data_dir = str(config.DATA_DIR)
+        is_frozen = bool(getattr(config, "IS_FROZEN", False))
+    except Exception:  # noqa: BLE001 - 配置不可用时不影响状态返回
+        data_dir = ""
+        is_frozen = False
     return {
-        "bound": bool(token and token.get("token")),
+        "bound": bound,
         "bound_at": (token or {}).get("bound_at"),
         "platform": (token or {}).get("platform"),
         "consent": state.get("consent"),
         "enabled": bool(state.get("enabled")),
-        "secret_configured": secret_configured(),
+        "secret_configured": has_secret,
         "secret_source": secret_source(),
         "secure_storage": _dpapi_available(),
-        "channel_available": bool(token and token.get("token") and secret_configured()),
+        "channel_available": bool(bound and has_secret),
         "transport": (
             "https（已实测可用）" if BASE_OLD.startswith("https://")
             or str(_OLD_SCHEME.get("base") or "").startswith("https://")
             else "https 优先尝试（未探测；若不可用回落 http 明文，已登记风险）"
         ),
         "notice": "非官方通道：接口易变、可能随时失效；仅供本地个人研究，不构成投资建议",
+        "setup_required": bool(missing),
+        "setup_missing": missing,
+        "setup_steps": [
+            "打开 #/settings → 「养基宝连接」→ 注入签名盐（DPAPI 加密，仅本机可解）",
+            "回到本页 Y-03 → 点击「生成二维码」→ 用养基宝 App 扫码授权",
+            "授权成功后自动写入 token，Y-05/Y-06 立即显示账户汇总与持仓",
+        ],
+        "data_dir": data_dir,
+        "is_frozen": is_frozen,
     }
 
 

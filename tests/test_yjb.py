@@ -391,11 +391,15 @@ def test_qrcode_parses_real_response_shape(monkeypatch) -> None:
 # 工作台数据接入（Y-05 账户概览 / Y-06 持仓估值）
 # =============================================================
 def test_collect_unbound_degrades(monkeypatch) -> None:
-    """未绑定：/collect 与 /holdings 都返回 UPSTREAM_ERROR，不得返回假数据。
+    """未绑定：/collect 与 /holdings 返回 NOT_CONFIGURED，不得返回假数据。
 
     说明：本文件的 autouse 夹具把 YJB_TOKEN_FILE 重定向到 tmp_path，
     因此这里天然处于「未绑定」态——正好用来验证降级契约。
     真实账号的字段契约见 test_qa_verify.py（那里不隔离 token）。
+
+    口径调整（本轮）：未绑定属「本地没配置」而非「上游坏了」，且首启向导就在
+    页面顶部，故错误码由 UPSTREAM_ERROR 改为 NOT_CONFIGURED，文案改为引导配置，
+    避免出现「接口不可用」与「请按三步配置」并存的矛盾提示。
     """
     from backend.app.core import cache
 
@@ -403,7 +407,220 @@ def test_collect_unbound_degrades(monkeypatch) -> None:
     cache.clear_cache()
     for path in ("/api/fund/yjb/collect", "/api/fund/yjb/holdings"):
         body = client.get(path).json()
-        assert body["error_code"] == "UPSTREAM_ERROR", f"{path} 实际 {body['error_code']}"
-        assert body["error"] and "未绑定" in body["error"]
+        assert body["error_code"] == "NOT_CONFIGURED", f"{path} 实际 {body['error_code']}"
+        assert body["error"] and "尚未完成授权" in body["error"]
         assert not (body.get("data") or {}).get("total_assets")
+    cache.clear_cache()
+
+
+def test_status_exposes_first_run_setup_fields() -> None:
+    """首启向导：status 必须显式给出 setup_required/setup_missing/setup_steps。
+
+    冻结包 data 缺 token 或签名盐时，前端据此渲染 Y-00 向导，不得静默空态、
+    也不得把「未就绪」显示成「已绑定」（第六波 P0-2b）。
+    """
+    data = client.get("/api/fund/yjb/status").json()["data"]
+    for key in ("setup_required", "setup_missing", "setup_steps", "data_dir", "is_frozen"):
+        assert key in data, f"status 缺少 {key}"
+    # 缺失项编码用「用途命名」，不得出现 token/secret 字段名（避免与安全断言冲突）
+    assert set(data["setup_missing"]) <= {"signing_salt", "authorization"}
+    assert isinstance(data["setup_steps"], list) and len(data["setup_steps"]) == 3
+    # 本夹具下既无 token 也无盐 → 必须要求走向导，且不得自称 channel_available
+    assert data["setup_required"] is True
+    assert data["channel_available"] is False
+    assert data["setup_missing"] == ["signing_salt", "authorization"]
+
+
+def test_estimates_off_falls_back_to_t1(monkeypatch) -> None:
+    """一键关闭估算（estimates=0）：今日收益与估算涨跌幅一律置 None，不补 0。"""
+    monkeypatch.setattr(yjb, "load_token", lambda: {"token": "t"})
+    monkeypatch.setattr(yjb, "get_accounts", lambda: {
+        "accounts": [{"id": "a1", "title": "账户1"}], "default_account_id": "a1"})
+    monkeypatch.setattr(yjb, "get_holdings", lambda account_id="": [
+        {"code": "017811", "short_name": "测试基金", "hold_share": "100", "money": "1000",
+         "nv_info": {"gszzl": "1.23", "dwjz": "2.5792", "jzrq": "2026-10-24"}},
+    ])
+
+    def fake_plug(path):
+        """模拟 /account_collect 原始响应。"""
+        return {"assets_collect": "155518.87", "today_income": "2058.37",
+                "today_income_rate": "1.34", "is_single_account_model": True,
+                "account_data": [{"account_id": "a1", "title": "账户1",
+                                  "today_income": "2058.37", "today_income_rate": "1.34",
+                                  "hold_income": "5000", "hold_cost": "100", "up": 3, "down": 1}]}
+
+    monkeypatch.setattr(yjb, "_plug_get", fake_plug)
+    on = yjb.get_collect(estimates=True)
+    assert on["total_assets"] == 155518.87
+    assert on["today_income"] == 2058.37
+    assert on["estimates"] is True
+
+    off = yjb.get_collect(estimates=False)
+    # 总资产属账户事实，不随估算开关变化；今日收益属估算，必须留空
+    assert off["total_assets"] == 155518.87
+    assert off["today_income"] is None
+    assert off["today_income_rate"] is None
+    assert off["accounts"][0]["today_income"] is None
+    assert off["estimates"] is False
+
+    hold_on = yjb.get_holdings_view("all", estimates=True)
+    assert hold_on["items"][0]["pct"] == 1.23
+    assert hold_on["items"][0]["nav"] == 2.5792
+    hold_off = yjb.get_holdings_view("all", estimates=False)
+    assert hold_off["items"][0]["pct"] is None
+    # T+1 公布净值仍须保留（回退口径下唯一有效数值）
+    assert hold_off["items"][0]["nav"] == 2.5792
+    assert hold_off["estimates"] is False
+
+
+def test_router_estimates_param_caliber(monkeypatch) -> None:
+    """路由层：estimates=0 时口径文案必须说明「已关闭盘中估算」，且参数越界被拒。"""
+    monkeypatch.setattr(yjb, "load_token", lambda: {"token": "t"})
+    monkeypatch.setattr(yjb, "get_accounts", lambda: {
+        "accounts": [{"id": "a1", "title": "账户1"}], "default_account_id": "a1"})
+    monkeypatch.setattr(yjb, "get_holdings", lambda account_id="": [
+        {"code": "017811", "short_name": "测试基金", "nv_info": {"gszzl": "1.23", "dwjz": "2.5"}},
+    ])
+    monkeypatch.setattr(yjb, "_plug_get", lambda path: {
+        "assets_collect": "1000", "today_income": "10", "account_data": []})
+    cache.clear_cache()
+    plain = client.get("/api/fund/yjb/collect?estimates=0").json()
+    assert plain["data"]["today_income"] is None
+    assert "关闭盘中估算" in plain["data"]["caliber"]
+    cache.clear_cache()
+    hold = client.get("/api/fund/yjb/holdings?account_id=all&estimates=0").json()
+    assert hold["data"]["items"][0]["pct"] is None
+    assert "关闭盘中估算" in hold["data"]["caliber"]
+    cache.clear_cache()
+    # 参数校验失败走统一错误信封（本应用约定 API 不裸抛 4xx/5xx）：
+    # 仍返回 HTTP 200，但 error/error_code 必须表明参数非法
+    bad = client.get("/api/fund/yjb/collect?estimates=2").json()
+    assert bad["error"], "estimates 越界必须给出中文错误说明"
+    assert bad["error_code"] == "INVALID_PARAM", f"实际 {bad['error_code']}"
+    cache.clear_cache()
+
+
+def test_http_status_maps_to_chinese_hints(monkeypatch) -> None:
+    """接口文档 §3.4：401/408/429 必须映射为对应异常与中文文案（不自创措辞）。"""
+    monkeypatch.setattr(yjb, "load_token", lambda: {"token": "t"})
+
+    monkeypatch.setattr(yjb, "_request", lambda *a, **k: {"status": 401, "text": ""})
+    with pytest.raises(yjb.YjbUnauthorizedError) as exc401:
+        yjb._plug_get("/user_account")
+    assert "未授权，请重新登录" in str(exc401.value)
+    assert "重新扫码" in str(exc401.value)
+
+    monkeypatch.setattr(yjb, "_request", lambda *a, **k: {"status": 408, "text": ""})
+    with pytest.raises(yjb.YjbTimeoutError) as exc408:
+        yjb._plug_get("/user_account")
+    assert "请求超时" in str(exc408.value)
+
+    monkeypatch.setattr(yjb, "_request", lambda *a, **k: {"status": 429, "text": ""})
+    with pytest.raises(yjb.YjbRateLimitError) as exc429:
+        yjb._plug_get("/user_account")
+    assert "请求频繁，请稍后再试" in str(exc429.value)
+
+    # 业务码同口径：HTTP 200 但 body code=401 也是失效判据
+    monkeypatch.setattr(yjb, "_request", lambda *a, **k: {
+        "status": 200, "text": json.dumps({"code": 401, "message": "unauthorized"})})
+    with pytest.raises(yjb.YjbUnauthorizedError):
+        yjb._plug_get("/user_account")
+
+    # 未列出的状态码仍走通用中文文案，且不得泄露 token/堆栈
+    monkeypatch.setattr(yjb, "_request", lambda *a, **k: {"status": 500, "text": ""})
+    with pytest.raises(yjb.NonRetryableError) as exc500:
+        yjb._plug_get("/user_account")
+    assert "养基宝接口不可用（HTTP 500" in str(exc500.value)
+
+
+def test_request_timeout_becomes_chinese_timeout_error(monkeypatch) -> None:
+    """requests 超时 → YjbTimeoutError（中文），不落成英文异常原文。"""
+    def boom(*args, **kwargs):
+        raise requests.exceptions.ReadTimeout("read timed out")
+
+    monkeypatch.setattr(yjb, "_http_session", lambda: type("S", (), {"request": boom})())
+    monkeypatch.setattr(yjb, "_load_secret", lambda: ("fake-new", "fake-old"))
+    with pytest.raises(yjb.YjbTimeoutError) as exc:
+        yjb._request("GET", yjb.BASE_OLD, "/user_account", "t", use_old=True)
+    assert "请求超时" in str(exc.value)
+
+
+def test_router_maps_401_to_unauthorized_code(monkeypatch) -> None:
+    """路由层：401 → UNAUTHORIZED，429/408 → 限频/超时中文，均含 data 空结构。"""
+    monkeypatch.setattr(yjb, "load_token", lambda: {"token": "t"})
+
+    def raise_401(path):
+        raise yjb.YjbUnauthorizedError("未授权，请重新登录（授权凭据已失效，请在养基宝页重新扫码）")
+
+    cache.clear_cache()
+    monkeypatch.setattr(yjb, "_plug_get", raise_401)
+    resp = client.get("/api/fund/yjb/collect").json()
+    assert resp["error_code"] == "UNAUTHORIZED"
+    assert "重新扫码" in resp["error"]
+
+    cache.clear_cache()
+    monkeypatch.setattr(yjb, "_plug_get",
+                        lambda path: (_ for _ in ()).throw(yjb.YjbRateLimitError("请求频繁，请稍后再试。")))
+    resp = client.get("/api/fund/yjb/holdings?account_id=all").json()
+    assert resp["error_code"] == "UPSTREAM_ERROR"
+    assert "请求频繁" in resp["error"]
+
+    cache.clear_cache()
+    monkeypatch.setattr(yjb, "_plug_get",
+                        lambda path: (_ for _ in ()).throw(yjb.YjbTimeoutError("请求超时，请稍后重试。")))
+    resp = client.get("/api/fund/yjb/collect").json()
+    assert resp["error_code"] == "UPSTREAM_TIMEOUT"
+    assert "请求超时" in resp["error"]
+    cache.clear_cache()
+
+
+def test_cache_stale_gate_can_be_disabled() -> None:
+    """`cache.get_or_load` 的 stale_ok 门禁：默认允许旧值兜底，被拒时原样抛错。"""
+    cache.clear_cache()
+    cache.set("unit:stale", {"v": 1})
+
+    def boom() -> dict:
+        raise ValueError("upstream down")
+
+    # ttl=0 → 新鲜读必然过期；allow_stale 仍能命中磁盘旧值
+    assert cache.get_or_load("unit:stale", 0, boom) == {"v": 1}
+    with pytest.raises(ValueError):
+        cache.get_or_load("unit:stale", 0, boom, stale_ok=lambda exc: False)
+    cache.clear_cache()
+
+
+def test_unauthorized_is_not_masked_by_stale_cache(monkeypatch) -> None:
+    """401 不得被磁盘旧值掩盖：否则用户看到过期收益却以为仍已绑定。
+
+    对照：限频/超时这类非确定性错误仍允许旧值兜底（保住可用性），
+    只有凭据失效必须把错误暴露到界面（§3.4 引导重新扫码）。
+    """
+    cache.clear_cache()
+    monkeypatch.setattr(yjb, "load_token", lambda: {"token": "t"})
+    monkeypatch.setattr(yjb, "_plug_get", lambda path: {
+        "assets_collect": "1000", "today_income": "10", "account_data": []})
+    assert client.get("/api/fund/yjb/collect").json()["data"]["total_assets"] == 1000.0
+
+    # 让「新鲜读」永远 miss，但 allow_stale 仍可命中刚写入的磁盘旧值
+    real_get = cache.get
+    monkeypatch.setattr(
+        cache, "get",
+        lambda key, ttl, allow_stale=False: real_get(key, 10 ** 9) if allow_stale else None,
+    )
+
+    def raise_401(path):
+        raise yjb.YjbUnauthorizedError("未授权，请重新登录（授权凭据已失效，请在养基宝页重新扫码）")
+
+    monkeypatch.setattr(yjb, "_plug_get", raise_401)
+    masked = client.get("/api/fund/yjb/collect").json()
+    assert masked["error_code"] == "UNAUTHORIZED", "401 绝不能被旧值兜底掩盖"
+
+    # 对照组：限频允许旧值兜底 → 仍返回数据（保住可用性），error_code 为空
+    def raise_429(path):
+        raise yjb.YjbRateLimitError("请求频繁，请稍后再试。")
+
+    monkeypatch.setattr(yjb, "_plug_get", raise_429)
+    degraded = client.get("/api/fund/yjb/collect").json()
+    assert degraded["error_code"] is None, "限频应允许旧值兜底，不必打断用户"
+    assert degraded["data"]["total_assets"] == 1000.0
     cache.clear_cache()

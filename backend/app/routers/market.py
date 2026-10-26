@@ -16,16 +16,16 @@ market_status/is_realtime，前端据此渲染双徽章，不把收盘快照伪�
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query
 
 from backend.app import config
+from backend.app.datasource import utils
 from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
 from backend.app.core.resilient import circuit_open, trip_circuit, with_fallback
-from backend.app.datasource import ashare, overseas, tencent, utils
+from backend.app.datasource import ashare, overseas, tencent
 
 logger = logging.getLogger(__name__)
 
@@ -559,7 +559,7 @@ def market_search(
         {"items": result["data"], "query": keyword},
         result["source"] or "",
         result["caliber"] or "",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        utils.now_text(),
         "搜索",
         False,
     )

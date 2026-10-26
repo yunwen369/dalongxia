@@ -148,9 +148,22 @@ def probe_page(cdp: CDP) -> dict:
 def main() -> int:
     """启动服务 + Edge，逐视口逐页取证。
 
+    可用 ``--out`` 指定归档目录、``--base`` 指定被测服务地址（默认沿用 r5 口径）。
+
     Returns:
         int: 退出码。
     """
+    global OUT, BASE, PORT
+    import argparse
+
+    parser = argparse.ArgumentParser(description="多视口 UI 回归取证（CDP）")
+    parser.add_argument("--out", default=str(OUT), help="截图与 JSON 输出目录")
+    parser.add_argument("--base", default=BASE, help="被测服务基址（默认自起 6913）")
+    parser.add_argument("--cdp-port", type=int, default=PORT, help="Edge 远程调试端口")
+    args = parser.parse_args()
+    OUT = pathlib.Path(args.out)
+    BASE = args.base
+    PORT = args.cdp_port
     OUT.mkdir(parents=True, exist_ok=True)
     py = ROOT / ".venv" / "Scripts" / "python.exe"
     log = open(OUT / "_vp_server.log", "ab")

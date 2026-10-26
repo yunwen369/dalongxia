@@ -563,7 +563,7 @@
     rightStack.style.gap = "16px";
 
     var rank = buildCard("S-04", t("sectors.rankIndustry"), "", "");
-    rank.card.setAttribute("data-block", "rank"); // 稳定锚点：id 会在 S-04/S-05 间切换
+    rank.card.setAttribute("data-block", "rank"); // 行业排行（常驻，不再与 S-05 互换身份）
     rank.body.id = "s04-body";
     var rankBody = rank.body;
     rankBody.classList.add("short");
@@ -573,6 +573,13 @@
     summary.body.id = "s06-body";
     rightStack.appendChild(summary.card);
     grid.appendChild(rightStack);
+
+    // S-05 概念排行：DS-07 整改——独立第二表（基准 §3.1：S-05 概念排行 .g-12 或 .g-7），
+    // 此前与 S-04 共用同一张卡的 identity（id 在 S-04/S-05 间切换），概念口径要看就得切走行业口径。
+    var concept = buildCard("S-05", t("sectors.rankConcept"), "g-12", t("sectors.rankConceptSub"));
+    concept.body.id = "s05-body";
+    concept.body.classList.add("short");
+    grid.appendChild(concept.card);
 
     // S-07 资金流向通栏
     var flow = buildCard("S-07", t("sectors.flowTitle"), "g-12", t("sectors.flowSub"));
@@ -655,26 +662,21 @@
     var cacheKey = market + "|" + kind;
     var cards = {
       s03: document.getElementById("S-03"),
-      // 排行卡 id 会在 S-04 / S-05 间切换，故用稳定锚点定位
-      s04: document.querySelector('[data-block="rank"]'),
+      s04: document.getElementById("S-04"),
+      s05: document.getElementById("S-05"),
       s06: document.getElementById("S-06"),
       s07: document.getElementById("S-07")
     };
     var bodies = {
       s03: document.getElementById("s03-body"),
       s04: document.getElementById("s04-body"),
+      s05: document.getElementById("s05-body"),
       s06: document.getElementById("s06-body"),
       s07: document.getElementById("s07-body")
     };
     if (!bodies.s03) {
       return;
     }
-    // 排行卡标题随口径变化（S-04 行业 / S-05 概念同源切换）
-    var rankTitle = cards.s04.querySelector(".pg-card-title");
-    if (rankTitle) {
-      rankTitle.textContent = kind === "concept" ? t("sectors.rankConcept") : t("sectors.rankIndustry");
-    }
-    cards.s04.id = kind === "concept" ? "S-05" : "S-04";
 
     if (force) {
       sectorsCache = {};
@@ -685,16 +687,22 @@
     }
     setLoading(bodies.s03);
     setLoading(bodies.s04);
+    setLoading(bodies.s05);
     setLoading(bodies.s06);
     setLoading(bodies.s07);
 
-    var listPath = kind === "concept" ? "/api/sector/concept" : "/api/sector/industry";
-    // 资金流仅 A股有免费通道；港美股不发请求，避免整页因单块 4xx 业务错误被判为失败
-    var flowTask = market === "cn" && kind === "industry"
+    // DS-07：行业与概念两张排行表各自独立取数、同时常驻，互不替代；
+    // S-02 的行业/概念切换只决定 S-03 热力图口径（基准 §3.4 两表分别绑定 industry/concept 接口）。
+    var conceptTask = market === "cn"
+      ? api("/api/sector/concept", { market: "cn" })
+      : Promise.resolve(null);
+    // 资金流仅 A股有免费通道（同花顺行业资金流）；港美股不发请求，避免整页因单块 4xx 被判失败
+    var flowTask = market === "cn"
       ? api("/api/sector/fundflow", { market: market })
       : Promise.resolve(null);
     Promise.all([
-      api(listPath, { market: market }),
+      api("/api/sector/industry", { market: market }),
+      conceptTask,
       api("/api/sector/heatmap", { market: market, kind: kind }),
       api("/api/sector/summary", { market: market }),
       flowTask
@@ -704,9 +712,10 @@
           market: market,
           kind: kind,
           list: result[0],
-          heat: result[1],
-          summary: result[2],
-          flow: result[3]
+          concept: result[1],
+          heat: result[2],
+          summary: result[3],
+          flow: result[4]
         };
         sectorsCache[cacheKey] = payload;
         paintSectors(payload);
@@ -717,6 +726,7 @@
         };
         setError(bodies.s03, error.message, retry);
         setError(bodies.s04, error.message, retry);
+        setError(bodies.s05, error.message, retry);
         setError(bodies.s06, error.message, retry);
         setError(bodies.s07, error.message, retry);
       });
@@ -731,12 +741,14 @@
     var bodies = {
       s03: document.getElementById("s03-body"),
       s04: document.getElementById("s04-body"),
+      s05: document.getElementById("s05-body"),
       s06: document.getElementById("s06-body"),
       s07: document.getElementById("s07-body")
     };
     var cards = {
       s03: document.getElementById("S-03"),
-      s04: document.getElementById("S-05") || document.getElementById("S-04"),
+      s04: document.getElementById("S-04"),
+      s05: document.getElementById("S-05"),
       s06: document.getElementById("S-06"),
       s07: document.getElementById("S-07")
     };
@@ -761,15 +773,30 @@
       bodies.s03.appendChild(chartBox);
       var chart = mountChart(chartBox);
       if (chart) {
+        // UI-03 整改：按面积占比分档控制标签，小面积块不再压字
+        // （基准 §3.3「最小字号 10px，溢出 2 行截断不压字」）
+        var totalValue = nodes.reduce(function (sum, node) {
+          return sum + (Number(node.value) || 0);
+        }, 0) || 1;
         var data = nodes.map(function (node) {
           var pct = node.pct;
           var color = pct > 0 ? COLOR_UP : pct < 0 ? COLOR_DOWN : COLOR_MUTED;
+          var share = (Number(node.value) || 0) / totalValue;
+          // 大面积：板块名 + 涨跌幅两行；中等面积：仅涨跌幅一行；更小：不显示标签（悬浮/点击仍可用）
+          var labelCfg = share >= 0.02
+            ? { show: true, fontSize: 10 }
+            : share >= 0.008
+              ? { show: true, fontSize: 10, formatter: function () {
+                  return pct === null || pct === undefined ? t("value.none") : Number(pct).toFixed(2) + "%";
+                } }
+              : { show: false };
           return {
             name: node.name,
             value: node.value,
             pct: pct,
             amount: node.amount,
             lead: node.lead_stock,
+            label: labelCfg,
             itemStyle: { color: color, borderColor: "#0b0b0c", borderWidth: 1 }
           };
         });
@@ -802,7 +829,10 @@
                 show: true,
                 fontSize: 10,
                 color: "#fff",
+                // 两行上限 + 截断省略，避免长板块名在小块里挤成两三行压字
                 overflow: "truncate",
+                lineOverflow: "truncate",
+                ellipsis: "…",
                 lineHeight: 12,
                 /** 热力图块内标签：板块名换行 + 涨跌幅百分比（缺值显示「无数据」）。
                  * @param {*} info 信息对象
@@ -827,41 +857,28 @@
       bodies.s03.setAttribute("data-state", "default");
     }
 
-    // ---- S-04 / S-05 排行表 ----
-    setBadges(cards.s04, payload.list.source, payload.list.caliber, degrade);
-    var rows = payload.list.items || [];
-    renderTable(
-      bodies.s04,
-      [
-        { title: t("sectors.col.board"), key: "name", cls: "name" },
-        { title: t("sectors.pctCol"), cls: "num", render: function (row) { return pctNode(row.pct); } },
-        { title: t("sectors.amountCol"), cls: "num", render: function (row) { return fmt(row.amount); } },
-        { title: t("sectors.col.lead"), key: "lead_stock" },
-        { title: t("sectors.col.leadPct"), cls: "num", render: function (row) { return pctNode(row.lead_pct); } }
-      ],
-      rows,
-      function (row) {
-        jumpToSectorVal(row.name, market);
-      },
-      "short"
-    );
+    // ---- S-04 行业排行表 ----
+    paintRankTable(bodies.s04, cards.s04, payload.list, market, degrade);
+    // ---- S-05 概念排行表（DS-07：独立第二表，不再与 S-04 互换） ----
+    if (payload.concept) {
+      paintRankTable(bodies.s05, cards.s05, payload.concept, market,
+        payload.concept.source && payload.concept.source !== "同花顺" && market === "cn");
+    } else {
+      setBadges(cards.s05, "", "", false);
+      setEmpty(bodies.s05, t("sectors.conceptOverseas"), function () {
+        loadSectors(true);
+      });
+    }
 
     // ---- S-06 摘要 ----
     setBadges(cards.s06, payload.summary.source, payload.summary.caliber, degrade);
     paintSummary(bodies.s06, payload.summary);
 
-    // ---- S-07 资金流向 ----
+    // ---- S-07 资金流向（行业口径常驻：概念板块无免费资金流口径，不在两张排行表之间切换） ----
     if (market !== "cn") {
       setBadges(cards.s07, "", "", false);
       setEmpty(bodies.s07, t("sectors.overseasFlow"), function () {
         loadSectors(true);
-      });
-    } else if (payload.kind === "concept") {
-      setBadges(cards.s07, "", "", false);
-      setEmpty(bodies.s07, t("sectors.conceptFlow"), function () {
-        state.sectors.kind = "industry";
-        syncSectorTabs();
-        loadSectors();
       });
     } else if (payload.flow) {
       setBadges(cards.s07, payload.flow.source, payload.flow.caliber, degrade);
@@ -883,6 +900,45 @@
         null
       );
     }
+  }
+
+  /** 渲染一张板块排行表（S-04 行业 / S-05 概念共用同一渲染契约）。
+   * @param {HTMLElement} body 区块容器（.pg-body，四态 data-state 挂在此节点）
+   * @param {HTMLElement} card 卡片根节点（右上角双徽章挂这里）
+   * @param {Object} list 接口 data 段（source/caliber/items）
+   * @param {string} market 市场标识（cn/hk/us），跳转时带上
+   * @param {boolean} degrade 是否降级（源非首选）
+   * @returns {void} 无返回值
+   */
+  function paintRankTable(body, card, list, market, degrade) {
+    if (!body || !list) {
+      return;
+    }
+    setBadges(card, list.source, list.caliber, degrade);
+    if (list.error) {
+      setError(body, list.error, function () { loadSectors(true); });
+      return;
+    }
+    var rows = list.items || [];
+    if (!rows.length) {
+      setEmpty(body, t("state.empty"), function () { loadSectors(true); });
+      return;
+    }
+    renderTable(
+      body,
+      [
+        { title: t("sectors.col.board"), key: "name", cls: "name" },
+        { title: t("sectors.pctCol"), cls: "num", render: function (row) { return pctNode(row.pct); } },
+        { title: t("sectors.amountCol"), cls: "num", render: function (row) { return fmt(row.amount); } },
+        { title: t("sectors.col.lead"), key: "lead_stock" },
+        { title: t("sectors.col.leadPct"), cls: "num", render: function (row) { return pctNode(row.lead_pct); } }
+      ],
+      rows,
+      function (row) {
+        jumpToSectorVal(row.name, market);
+      },
+      "short"
+    );
   }
 
   /** 摘要卡：领涨/领跌/净流入 Top3 + 集中度。
@@ -2323,6 +2379,7 @@
   // =============================================================
   var newsState = {
     mode: "feed", // feed=多源资讯流，stock=个股新闻
+    src: "feed", // 资讯源：feed=综合资讯流 / flash=7×24 快讯 / global=全球三源 / sector=板块命中
     symbol: "",
     board: "科技成长",
     sort: "relevance",
@@ -2819,6 +2876,19 @@
     });
     toolbar.appendChild(modeTabs);
 
+    // 资讯源切换（FN-03 整改）：把此前无界面入口的三个端点接上——
+    // 综合=/api/news/ai-feed、快讯=/api/news/flash、全球=/api/news/global、板块=/api/news/sector-search
+    var srcTabs = el("div", "pg-tabs");
+    srcTabs.id = "N-src";
+    [["feed", t("news.src.feed")], ["flash", t("news.src.flash")],
+     ["global", t("news.src.global")], ["sector", t("news.src.sector")]].forEach(function (item) {
+      var button = el("button", "pg-tab", item[1]);
+      button.type = "button";
+      button.setAttribute("data-src", item[0]);
+      srcTabs.appendChild(button);
+    });
+    toolbar.appendChild(srcTabs);
+
     // 排序切换
     var sortTabs = el("div", "pg-tabs");
     sortTabs.id = "N-sort";
@@ -2890,6 +2960,16 @@
     grid.appendChild(feedCard.card);
     container.appendChild(grid);
 
+    srcTabs.addEventListener("click", function (event) {
+      var button = event.target.closest(".pg-tab");
+      if (!button) {
+        return;
+      }
+      newsState.src = button.getAttribute("data-src") || "feed";
+      newsState.mode = "feed"; // 任意资讯源都属于资讯流模式，个股模式需重新带 symbol
+      syncNewsTabs();
+      loadNews(true);
+    });
     modeTabs.addEventListener("click", function (event) {
       var button = event.target.closest(".pg-tab");
       if (!button) {
@@ -2932,16 +3012,25 @@
   function syncNewsTabs() {
     var modeBox = document.getElementById("N-mode");
     var regionBox = document.getElementById("N-region");
+    var srcBox = document.getElementById("N-src");
     if (modeBox) {
       modeBox.querySelectorAll(".pg-tab").forEach(function (button) {
         button.classList.toggle("active", button.getAttribute("data-mode") === newsState.mode);
+      });
+    }
+    if (srcBox) {
+      // 资讯源只在资讯流模式下有意义（个股新闻固定一个源）
+      srcBox.hidden = newsState.mode !== "feed";
+      srcBox.querySelectorAll(".pg-tab").forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-src") === newsState.src);
       });
     }
     document.querySelectorAll("#N-sort .pg-tab").forEach(function (button) {
       button.classList.toggle("active", button.getAttribute("data-sort") === newsState.sort);
     });
     if (regionBox) {
-      regionBox.hidden = newsState.mode !== "feed";
+      // 区域只影响「综合资讯流」这一源，切到快讯/全球/板块时隐藏，避免无效控件
+      regionBox.hidden = newsState.mode !== "feed" || newsState.src !== "feed";
       regionBox.querySelectorAll(".pg-tab").forEach(function (button) {
         button.classList.toggle("active", button.getAttribute("data-region") === newsState.region);
       });
@@ -2997,15 +3086,28 @@
     var treeTask = newsState.tree
       ? Promise.resolve(newsState.tree)
       : api("/api/news/board-tree", {});
-    var feedTask =
-      newsState.mode === "stock"
-        ? api("/api/news/stock", { symbol: newsState.symbol, limit: 30 })
-        : api("/api/news/ai-feed", {
-            boards: newsState.board,
-            sort: newsState.sort,
-            limit: 40,
-            region: newsState.region
-          });
+    var feedTask;
+    if (newsState.mode === "stock") {
+      feedTask = api("/api/news/stock", { symbol: newsState.symbol, limit: 30 });
+    } else if (newsState.src === "flash") {
+      // FN-03：7×24 快讯（财联社，不可用回退东财/新浪）
+      feedTask = api("/api/news/flash", { limit: 40, sort: "time" });
+    } else if (newsState.src === "global") {
+      // FN-03：全球快讯三源合并去重
+      feedTask = api("/api/news/global", { limit: 60 });
+    } else if (newsState.src === "sector") {
+      // FN-03：板块命中检索（当前板块树选中项）
+      feedTask = api("/api/news/sector-search", {
+        sector: newsState.board, sort: newsState.sort, limit: 40
+      });
+    } else {
+      feedTask = api("/api/news/ai-feed", {
+        boards: newsState.board,
+        sort: newsState.sort,
+        limit: 40,
+        region: newsState.region
+      });
+    }
     var sentiTask =
       newsState.mode === "stock"
         ? api("/api/sentiment/stock", { symbol: newsState.symbol })
@@ -4065,6 +4167,11 @@
     var card = buildCard("C-01", t("connectors.cardTitle"), "g-12", t("connectors.cardSub"));
     card.body.id = "c01-body";
     grid.appendChild(card.card);
+    // LG-01 整改：C-02 明细表独立成卡（基准 §五5.6：C-01 g-12 / C-02 g-12 / C-03 g-6 / C-04 g-6），
+    // 此前折叠在 C-01 body 内导致"统计+缓存+源表"挤在一卡，网格结构偏离设计基准。
+    var tableCard = buildCard("C-02", t("connectors.tableTitle"), "g-12", t("connectors.tableSub"));
+    tableCard.body.id = "c02-body";
+    grid.appendChild(tableCard.card);
     var chainCard = buildCard("C-03", t("connectors.chainTitle"), "g-6", t("connectors.chainSub"));
     chainCard.body.id = "c03-body";
     grid.appendChild(chainCard.card);
@@ -4075,6 +4182,7 @@
 
     var body = document.getElementById("c01-body");
     setLoading(body);
+    setLoading(document.getElementById("c02-body"));
     document.getElementById("c03-body").setAttribute("data-state", "default");
     document.getElementById("c03-body").appendChild(el("div", "pg-card-sub", t("connectors.chainNote")));
     document.getElementById("c04-body").setAttribute("data-state", "default");
@@ -4135,8 +4243,11 @@
         body.appendChild(cacheRow);
 
         // C-02：源表格（状态 pill / 启停 / 密钥 / 测试 / 限流 / TTL / 降级链）
+        var tableBody = document.getElementById("c02-body");
+        setBadges(tableCard.card, data.source, data.caliber, false);
+        tableBody.innerHTML = "";
         var tableHost = el("div", "");
-        body.appendChild(tableHost);
+        tableBody.appendChild(tableHost);
         var rows = sources.map(function (item) {
           var userDisabled = !!disabledSet[item.label];
           return {
@@ -4263,7 +4374,8 @@
             }
           }
         ], rows, null, "tall");
-        body.appendChild(el("div", "pg-card-sub", t("connectors.keyNote")));
+        tableBody.appendChild(el("div", "pg-card-sub", t("connectors.keyNote")));
+        tableBody.setAttribute("data-state", "default");
 
         // C-03：三级降级链说明
         var chainBody = document.getElementById("c03-body");
@@ -4333,6 +4445,12 @@
         setError(body, error.message, function () {
           renderConnectors();
         });
+        var tableBody = document.getElementById("c02-body");
+        if (tableBody) {
+          setError(tableBody, error.message, function () {
+            renderConnectors();
+          });
+        }
       });
   }
 
@@ -4341,12 +4459,122 @@
   // 合规告知书 → 扫码绑定（2s 轮询）→ 增强开关 → 解绑；token 前端不可见
   // =============================================================
   var yjbTimer = null;
+  // 估算展示偏好（Y-05/Y-06 角标「一键关闭」）：true=盘中估算口径，false=回退 T+1 官方净值。
+  // 只影响展示口径，不关闭数据通道；持久化在本机 localStorage，用户可随时恢复。
+  var yjbPrefs = { estimates: true };
+  try {
+    yjbPrefs.estimates = window.localStorage.getItem("openbb-yjb-estimates") !== "0";
+  } catch (error) {
+    yjbPrefs.estimates = true; // 隐私模式/禁用存储时退回默认（开启估算）
+  }
+
+  /** 写入估算展示偏好。
+   * @param {boolean} enabled 是否启用盘中估算口径
+   * @returns {void} 无返回值
+   */
+  function setYjbEstimates(enabled) {
+    yjbPrefs.estimates = !!enabled;
+    try {
+      window.localStorage.setItem("openbb-yjb-estimates", yjbPrefs.estimates ? "1" : "0");
+    } catch (error) {
+      // 存储不可用不影响本次会话的展示口径
+    }
+  }
+
+  /** 估算口径角标（常驻）：非官方·拟合估算·仅供参考 + 一键切换 T+1。
+   * 关闭后 Y-05 今日收益、Y-06 涨跌幅列一律留空（不补 0），并标注 T+1 官方净值为准。
+   * @returns {HTMLElement} 角标节点
+   */
+  function yjbEstimateBadge() {
+    var wrap = el("span", "yjb-est-badge");
+    var text = yjbPrefs.estimates ? t("yjb.estimates.badge") : t("yjb.estimates.offBadge");
+    wrap.appendChild(el("span", "badge-src " + (yjbPrefs.estimates ? "state-degraded" : ""), text));
+    var button = el("button", "yjb-est-close", yjbPrefs.estimates ? t("yjb.estimates.close") : t("yjb.estimates.restore"));
+    button.type = "button";
+    button.title = yjbPrefs.estimates ? t("yjb.estimates.closeTip") : t("yjb.estimates.restoreTip");
+    button.addEventListener("click", function () {
+      setYjbEstimates(!yjbPrefs.estimates);
+      toast(yjbPrefs.estimates ? t("yjb.estimates.onToast") : t("yjb.estimates.offToast"));
+      loadYjbCollect();
+      loadYjbHoldings("all");
+    });
+    wrap.appendChild(button);
+    return wrap;
+  }
+
+  /** 首启向导（Y-00）：冻结包 data 缺 token/签名盐时显式引导，禁止静默空态。
+   * 「不得显示已绑定」由 status.bound 决定；本卡只在 setup_required 时出现。
+   * @param {Object} data /api/fund/yjb/status 的 data 段
+   * @returns {void} 无返回值
+   */
+  function paintYjbWizard(data) {
+    var card = document.getElementById("Y-00");
+    var body = document.getElementById("y00-body");
+    if (!card || !body) {
+      return;
+    }
+    if (!data || !data.setup_required) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    body.innerHTML = "";
+    var missing = data.setup_missing || [];
+    var missText = missing.map(function (key) {
+      return key === "signing_salt" ? t("yjb.wizard.missSecret") : t("yjb.wizard.missToken");
+    }).join(t("yjb.wizard.and"));
+    body.appendChild(el("div", "pg-state-title", t("yjb.wizard.title") + " " + missText));
+    body.appendChild(el("div", "pg-state-hint", t("yjb.wizard.desc")));
+    var list = el("ol", "yjb-wizard-steps");
+    (data.setup_steps || []).forEach(function (step) {
+      list.appendChild(el("li", "", step));
+    });
+    body.appendChild(list);
+    var row = el("div", "page-toolbar");
+    // 第一步：注入签名盐（走设置页，DPAPI 加密，掩码输入）
+    var toSettings = el("button", "pg-btn primary", t("yjb.wizard.toSettings"));
+    toSettings.type = "button";
+    toSettings.addEventListener("click", function () {
+      window.__yjbFocusSecret = true; // 设置页渲染后自动滚动到「养基宝连接」并聚焦密码框
+      window.location.hash = "#/settings";
+    });
+    row.appendChild(toSettings);
+    // 第二步：扫码授权（签名盐已配置才可用，避免点了必然失败）
+    var toScan = el("button", "pg-btn", t("yjb.wizard.toScan"));
+    toScan.type = "button";
+    if (!data.secret_configured) {
+      toScan.disabled = true;
+      toScan.title = t("yjb.wizard.needSecretFirst");
+    }
+    toScan.addEventListener("click", function () {
+      var target = document.getElementById("Y-03");
+      if (target && target.scrollIntoView) {
+        target.scrollIntoView({ block: "start" });
+      }
+      var qr = document.querySelector("#y03-body .pg-btn");
+      if (qr && !qr.disabled) {
+        qr.click();
+      }
+    });
+    row.appendChild(toScan);
+    row.appendChild(el("span", "pg-spacer"));
+    if (data.data_dir) {
+      row.appendChild(el("span", "pg-card-sub", t("yjb.wizard.dataDir") + data.data_dir));
+    }
+    body.appendChild(row);
+    body.setAttribute("data-state", "empty");
+  }
 
   /** 渲染养基宝页。 */
   function renderYjb() {
     var container = document.getElementById(VIEW_IDS.yjb);
     container.innerHTML = "";
     var grid = el("div", "pg-grid");
+    // Y-00 首启向导：仅当凭据未齐（缺 token 或缺签名盐）时显示，默认隐藏
+    var g0 = buildCard("Y-00", t("yjb.wizard.cardTitle"), "g-12", t("yjb.wizard.cardSub"));
+    g0.body.id = "y00-body";
+    g0.card.hidden = true;
+    grid.appendChild(g0.card);
     var g1 = buildCard("Y-01", t("yjb.consentTitle"), "g-4", t("yjb.consentSub"));
     g1.body.id = "y01-body";
     var g2 = buildCard("Y-02", t("yjb.statusTitle"), "g-4", t("yjb.statusSub"));
@@ -4393,12 +4621,23 @@
   function loadYjbStatus() {
     api("/api/fund/yjb/status", {})
       .then(function (data) {
-        paintYjbConsent(data);
-        paintYjbStatus(data);
-        paintYjbBind(data);
+        // 首启向导先出：凭据未齐时用户第一眼就能看到"该做什么"，而不是空白区块
+        paintYjbWizard(data);
+        if (document.getElementById("y01-body")) {
+          paintYjbConsent(data);
+        }
+        if (document.getElementById("y02-body")) {
+          paintYjbStatus(data);
+        }
+        if (document.getElementById("y03-body")) {
+          paintYjbBind(data);
+        }
       })
       .catch(function (error) {
-        setError(document.getElementById("y02-body"), error.message, renderYjb);
+        var target = document.getElementById("y02-body") || document.getElementById("set-yjb-body");
+        if (target) {
+          setError(target, error.message, loadYjbStatus);
+        }
       });
   }
 
@@ -4492,10 +4731,11 @@
    * RT-01 整改：已配置时追加「清除签名盐」危险按钮（二次确认 + confirm=true）。
    * @param {HTMLElement} host 容器节点
    * @param {boolean} [secretConfigured] 当前是否已配置签名盐（决定是否显示清除按钮）
-   * @param {Function} [onCleared] 清除成功后的回调（默认刷新状态）
+   * @param {Function} [onCleared] 清除成功后的回调（默认刷新养基宝页状态）
+   * @param {Function} [onSaved] 保存成功后的回调（默认刷新养基宝页状态）
    * @returns {void} 无返回值
    */
-  function buildYjbSecretForm(host, secretConfigured, onCleared) {
+  function buildYjbSecretForm(host, secretConfigured, onCleared, onSaved) {
     host.innerHTML = "";
     var row = el("div", "page-toolbar");
     var newInput = document.createElement("input");
@@ -4525,7 +4765,11 @@
         newInput.value = "";
         oldInput.value = "";
         toast(t("yjb.secret.saved"));
-        loadYjbStatus();
+        if (typeof onSaved === "function") {
+          onSaved();
+        } else {
+          loadYjbStatus();
+        }
       }).catch(function (error) {
         save.disabled = false;
         toast(t("yjb.secret.saveFailed") + (error.message || ""));
@@ -4554,7 +4798,7 @@
           onConfirm: function () {
             apiSend("POST", "/api/fund/yjb/secret", { confirm: true }).then(function () {
               toast(t("yjb.secret.clearToast"));
-              if (typeof onCleared === "function") { onCleared(); }
+              if (typeof onCleared === "function") { onCleared(); } else { loadYjbStatus(); }
             }).catch(function (error) { toast(t("yjb.secret.clearFailed") + (error.message || "")); });
           }
         });
@@ -4655,7 +4899,7 @@
       return;
     }
     setLoading(body);
-    api("/api/fund/yjb/collect", {}).then(function (data) {
+    api("/api/fund/yjb/collect", { estimates: yjbPrefs.estimates ? 1 : 0 }).then(function (data) {
       var card = document.getElementById("Y-05");
       setBadges(card, data.source, data.caliber);
       var accounts = data.accounts || [];
@@ -4664,11 +4908,24 @@
         return;
       }
       body.innerHTML = "";
+      var bar = el("div", "page-toolbar");
+      bar.appendChild(yjbEstimateBadge());
+      bar.appendChild(el("span", "pg-spacer"));
+      bar.appendChild(el("span", "pg-card-sub", t("yjb.asOfBJ") + (data.as_of || t("value.none"))));
+      body.appendChild(bar);
       var kpis = el("div", "pg-kpis");
+      // 总资产：元为主体，附「≈万元」便于快速读数（15.55 万级）；关闭估算不影响该值
+      var totalAssets = data.total_assets;
+      var wanText = (totalAssets === null || totalAssets === undefined)
+        ? "" : t("yjb.kpi.approxWan") + fmt(totalAssets / 10000, 2) + t("yjb.kpi.wanUnit");
       var items = [
-        [t("yjb.kpi.totalAssets"), fmt(data.total_assets, 2), "flat", t("yjb.kpi.yuan")],
-        [t("yjb.kpi.todayIncome"), (data.today_income > 0 ? "+" : "") + fmt(data.today_income, 2),
-          pctClass(data.today_income), t("yjb.kpi.estimateTag")],
+        [t("yjb.kpi.totalAssets"), fmt(totalAssets, 2), "flat", t("yjb.kpi.yuan") + (wanText ? " ｜ " + wanText : "")],
+        [t("yjb.kpi.todayIncome"),
+          data.today_income === null || data.today_income === undefined
+            ? t("value.none")
+            : (data.today_income > 0 ? "+" : "") + fmt(data.today_income, 2),
+          data.today_income === null || data.today_income === undefined ? "flat" : pctClass(data.today_income),
+          yjbPrefs.estimates ? t("yjb.kpi.estimateTag") : t("yjb.kpi.estimateOffTag")],
         [t("yjb.kpi.todayRate"), fmtPct(data.today_income_rate), pctClass(data.today_income_rate), ""],
         [t("yjb.kpi.holdIncome"), (data.hold_income > 0 ? "+" : "") + fmt(data.hold_income, 2),
           pctClass(data.hold_income), t("yjb.kpi.yuan")],
@@ -4725,12 +4982,16 @@
       return;
     }
     setLoading(body);
-    api("/api/fund/yjb/holdings", { account_id: accountId || "all" }).then(function (data) {
+    api("/api/fund/yjb/holdings", {
+      account_id: accountId || "all",
+      estimates: yjbPrefs.estimates ? 1 : 0
+    }).then(function (data) {
       var card = document.getElementById("Y-06");
       setBadges(card, data.source, data.caliber);
       var items = data.items || [];
       body.innerHTML = "";
       var bar = el("div", "page-toolbar");
+      bar.appendChild(yjbEstimateBadge());
       var tabs = [{ id: "all", title: t("yjb.hold.all"), n: data.total }];
       (data.accounts || []).forEach(function (acc) {
         var n = items.filter(function (x) { return x.account_id === acc.id; }).length;
@@ -4752,7 +5013,11 @@
         setEmpty(body, t("yjb.hold.empty"), function () { loadYjbHoldings(current); });
         return;
       }
-      renderTable(body, [
+      // 表格必须渲染到子容器：renderTable 会清空目标容器 innerHTML，
+      // 若直接传 body，上面的工具栏（账户 Tab / 角标 / 一键关闭）会被一并清掉。
+      var tableHost = el("div", "");
+      body.appendChild(tableHost);
+      renderTable(tableHost, [
         {
           title: t("yjb.hold.col.fund"), cls: "l",
           /** 基金名称列：代码 + 简称。
@@ -4766,7 +5031,17 @@
             return box;
           }
         },
-        { title: t("yjb.hold.col.pct"), num: true, render: function (row) { return el("span", pctClass(row.pct), fmtPct(row.pct)); } },
+        {
+          title: yjbPrefs.estimates ? t("yjb.hold.col.pct") : t("yjb.hold.col.pctT1"),
+          num: true,
+          render: function (row) {
+            // 关闭估算：估算涨跌幅一律留空（不用 T+1 净值涨幅冒充盘中估算）
+            if (row.pct === null || row.pct === undefined) {
+              return el("span", "flat", t("value.none"));
+            }
+            return el("span", pctClass(row.pct), fmtPct(row.pct));
+          }
+        },
         { title: t("yjb.hold.col.nav"), num: true, render: function (row) { return row.nav === null ? t("value.none") : fmt(row.nav, 4); } },
         { title: t("yjb.hold.col.share"), num: true, render: function (row) { return row.share === null ? t("value.none") : fmt(row.share, 2); } },
         { title: t("yjb.hold.col.cost"), num: true, render: function (row) { return row.cost === null ? t("value.none") : fmt(row.cost, 4); } },
@@ -4777,6 +5052,11 @@
       ], items, function (row) {
         window.location.hash = "#/fund?code=" + row.code;
       });
+      if (!yjbPrefs.estimates) {
+        // 关闭估算后明确告知口径回退，避免用户误以为"数据丢了"
+        // 注意：必须放在 renderTable 之后（renderTable 会清空容器 innerHTML）
+        body.appendChild(el("div", "pg-card-sub", t("yjb.hold.t1Hint")));
+      }
       body.setAttribute("data-state", "default");
     }).catch(function (error) {
       setError(body, error.message || t("state.errorHint"), function () { loadYjbHoldings(accountId); });
@@ -5363,10 +5643,15 @@
     cacheCard.body.id = "set-cache-body";
     grid.appendChild(cacheCard.card);
 
-    // —— S-04 数据与合规卡（R3-13）：盘中估值 + 养基宝增强通道两个 opt-in 开关 ——
+    // —— ST-CP 数据与合规卡（R3-13）：盘中估值 + 养基宝增强通道两个 opt-in 开关 ——
     var complianceCard = buildCard("ST-CP", t("set.card.compliance"), "g-12", t("set.card.complianceSub"));
     complianceCard.body.id = "set-compliance-body";
     grid.appendChild(complianceCard.card);
+
+    // —— ST-YJ 养基宝连接卡（首启向导兜底）：注入签名盐（DPAPI/掩码）+ 绑定状态 + 去扫码 ——
+    var yjbCard = buildCard("ST-YJ", t("set.card.yjb"), "g-12", t("set.card.yjbSub"));
+    yjbCard.body.id = "set-yjb-body";
+    grid.appendChild(yjbCard.card);
 
     // —— S-05 关于卡：版本/许可证/数据源数 + 日志导出 + 恢复出厂 ——
     var aboutCard = buildCard("ST-AB", t("set.card.about"), "g-12", t("set.card.aboutSub"));
@@ -5849,6 +6134,70 @@
     paintSettingsCache();
     paintSettingsAbout();
     paintSettingsCompliance();
+    paintSettingsYjb();
+  }
+
+  /** 渲染「养基宝连接」卡：绑定/盐/安全存储三态 + 掩码注入签名盐 + 去扫码。
+   * 首启向导（Y-00）的第二步落到这里：冻结包 data 缺盐时用户可在设置页补盐，
+   * 全程 DPAPI 加密落盘，输入框 type=password 且提交后立即清空，不回显明文。
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintSettingsYjb() {
+    var body = document.getElementById("set-yjb-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/fund/yjb/status", {}).then(function (data) {
+      body.innerHTML = "";
+      var chips = el("div", "page-toolbar");
+      [
+        [t("set.yjb.chip.bound"), data.bound],
+        [t("set.yjb.chip.secret"), data.secret_configured],
+        [t("set.yjb.chip.secure"), data.secure_storage]
+      ].forEach(function (pair) {
+        chips.appendChild(el("span", "chip " + (pair[1] ? "" : "down"),
+          pair[0] + "：" + (pair[1] ? t("set.yjb.ok") : t("set.yjb.missing"))));
+      });
+      chips.appendChild(el("span", "pg-spacer"));
+      var goFund = el("button", "pg-btn", t("set.yjb.goScan"));
+      goFund.type = "button";
+      goFund.addEventListener("click", function () { window.location.hash = "#/yjb"; });
+      chips.appendChild(goFund);
+      body.appendChild(chips);
+
+      if (data.setup_required) {
+        body.appendChild(el("div", "pg-card-sub", t("set.yjb.setupHint")));
+      }
+      var formHost = el("div", "");
+      formHost.id = "set-yjb-secret";
+      buildYjbSecretForm(formHost, data.secret_configured, null, function () {
+        // 保存/清除成功后只刷新本卡，不依赖养基宝页 DOM 是否在场
+        paintSettingsYjb();
+        if (document.getElementById("y00-body")) {
+          loadYjbStatus();
+        }
+      });
+      body.appendChild(formHost);
+      body.appendChild(el("div", "pg-card-sub", t("set.yjb.maskNote")));
+      if (data.is_frozen && data.data_dir) {
+        body.appendChild(el("div", "pg-card-sub", t("set.yjb.dataDir") + data.data_dir));
+      }
+      body.setAttribute("data-state", "default");
+      // 从首启向导跳来：滚动到本卡并聚焦签名盐输入框
+      if (window.__yjbFocusSecret) {
+        window.__yjbFocusSecret = false;
+        if (body.scrollIntoView) {
+          body.scrollIntoView({ block: "center" });
+        }
+        var input = document.querySelector("#set-yjb-secret input[type=password]");
+        if (input) {
+          input.focus();
+        }
+      }
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintSettingsYjb);
+    });
   }
 
   // =============================================================

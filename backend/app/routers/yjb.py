@@ -81,7 +81,26 @@ def _cached_load(key: str, loader, source: str, caliber: str) -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`。
     """
     try:
-        data = cache.get_or_load(f"yjb:{key}", 30, loader)
+        # 凭据失效（401）不得用磁盘旧值兜底：否则用户看到的是过期收益，
+        # 却以为仍处于已绑定正常状态（§3.4 要求引导重新授权）
+        data = cache.get_or_load(
+            f"yjb:{key}", 30, loader,
+            stale_ok=lambda exc: not isinstance(exc, yangjibao.YjbUnauthorizedError),
+        )
+    except yangjibao.YjbUnauthorizedError as exc:
+        # 接口文档 §3.4：401 属凭据失效，前端应引导重新扫码而非提示「稍后重试」
+        return api_error(ErrorCode.UNAUTHORIZED, str(exc))
+    except yangjibao.YjbNotConfiguredError:
+        # 首启态：页面顶部已有三步向导，这里给「未配置」而非「接口不可用」，
+        # 避免与向导自相矛盾，也让用户知道点「重试」不会有变化，需要先配置。
+        return api_error(
+            ErrorCode.NOT_CONFIGURED,
+            "养基宝尚未完成授权：请按页面顶部三步完成配置（注入签名盐 → 扫码授权）后重试。",
+        )
+    except yangjibao.YjbTimeoutError as exc:
+        return api_error(ErrorCode.UPSTREAM_TIMEOUT, str(exc))
+    except yangjibao.YjbRateLimitError as exc:
+        return api_error(ErrorCode.UPSTREAM_ERROR, str(exc))
     except NonRetryableError as exc:
         return api_error(ErrorCode.UPSTREAM_ERROR, f"养基宝接口不可用：{exc}")
     except Exception as exc:  # noqa: BLE001 - 上游异常统一降级
@@ -317,31 +336,44 @@ def yjb_unbind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 
 @router.get("/collect")
-def yjb_collect() -> Dict[str, Any]:
+def yjb_collect(estimates: int = Query(1, ge=0, le=1,
+                                       description="1=采用盘中估算口径；0=回退 T+1 官方净值口径")) -> Dict[str, Any]:
     """多账户汇总：总资产 / 今日估算收益 / 累计持有收益 / 各账户明细。
 
+    Args:
+        estimates: 1（默认）给出盘中估算收益；0 表示用户已一键关闭估算，
+            今日收益类字段返回 null（回退 T+1 净值口径，不补 0、不用旧值冒充）。
+
     Returns:
-        dict: 统一返回结构；data 内含 accounts 数组。
+        dict: 统一返回结构；data 内含 accounts 数组与 estimates 标记。
     """
-    return _cached_load("collect", lambda: yangjibao.get_collect(),
-                        "养基宝/browser-plug-api account_collect",
-                        "账户级汇总；今日收益为估算值，非官方净值")
+    use_estimates = bool(estimates)
+    caliber = ("账户级汇总；今日收益为估算值，非官方净值" if use_estimates
+               else "账户级汇总；已按用户设置关闭盘中估算，今日收益不展示（T+1 官方净值口径）")
+    return _cached_load(f"collect:{int(use_estimates)}",
+                        lambda: yangjibao.get_collect(estimates=use_estimates),
+                        "养基宝/browser-plug-api account_collect", caliber)
 
 
 @router.get("/holdings")
-def yjb_holdings(account_id: str = Query("", description="账户 id；留空=全部账户")) -> Dict[str, Any]:
+def yjb_holdings(account_id: str = Query("", description="账户 id；留空=全部账户"),
+                 estimates: int = Query(1, ge=0, le=1,
+                                        description="1=含估算涨跌幅；0=仅 T+1 公布净值")):
     """持仓与估值列表（可按账户过滤）。
 
     Args:
         account_id: 账户 id；留空或 all 表示合并全部账户。
+        estimates: 1（默认）返回估算涨跌幅；0 时 ``pct`` 为 null（T+1 口径）。
 
     Returns:
         dict: 统一返回结构；data 内含 items / accounts。
     """
-    key = f"holdings:{account_id or 'all'}"
-    return _cached_load(key, lambda: yangjibao.get_holdings_view(account_id),
-                        "养基宝/browser-plug-api fund_hold",
-                        "持仓市值与持有收益为账户口径；估算涨跌幅非官方净值")
+    use_estimates = bool(estimates)
+    key = f"holdings:{account_id or 'all'}:{int(use_estimates)}"
+    caliber = ("持仓市值与持有收益为账户口径；估算涨跌幅非官方净值" if use_estimates
+               else "持仓市值与持有收益为账户口径；已关闭盘中估算，涨跌幅列留空（T+1 公布净值为准）")
+    return _cached_load(key, lambda: yangjibao.get_holdings_view(account_id, estimates=use_estimates),
+                        "养基宝/browser-plug-api fund_hold", caliber)
 
 
 @router.get("/realtime")

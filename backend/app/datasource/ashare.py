@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-import pandas as pd
 import requests
 
 from backend.app import config
@@ -62,29 +61,6 @@ def _ensure_enabled(source: str) -> None:
         raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
-def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """把 DataFrame 转为可 JSON 序列化的 records（NaN→None，numpy 标量→Python）。
-
-    Args:
-        frame: 源站原始表（pandas DataFrame）。
-
-    Returns:
-        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
-    """
-    records: List[Dict[str, Any]] = []
-    for raw in frame.to_dict("records"):
-        row: Dict[str, Any] = {}
-        for key, value in raw.items():
-            if pd.isna(value):
-                row[str(key)] = None
-            elif hasattr(value, "item"):
-                row[str(key)] = value.item()
-            else:
-                row[str(key)] = value
-        records.append(row)
-    return records
-
-
 def _date_text(value: Any) -> str:
     """把日期/时间列统一为字符串。
 
@@ -92,7 +68,7 @@ def _date_text(value: Any) -> str:
         value: 待处理值（类型由调用方约定）。
 
     Returns:
-        str: 文本结果。
+        str: 统一格式的日期字符串；无法解析时原样转字符串。
     """
     if value is None:
         return ""
@@ -122,7 +98,7 @@ def _period_to_ak(period: str) -> str:
         period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
 
     Returns:
-        str: 文本结果。
+        str: akshare 的周期参数（如 daily / weekly）。
 
     Raises:
         ValueError: period 仅支持 daily/weekly/monthly。
@@ -165,7 +141,7 @@ def get_kline_em(symbol: str, period: str = "daily", adjust: str = "qfq") -> Lis
     if frame is None or frame.empty:
         raise ValueError("东财K线返回空数据")
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         items.append(
             {
                 "date": _date_text(row.get("日期")),
@@ -217,7 +193,7 @@ def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> L
     if frame is None or frame.empty:
         raise ValueError("新浪K线返回空数据")
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         items.append(
             {
                 "date": _date_text(row.get("date")),
@@ -300,7 +276,7 @@ def get_quote_sina(symbol: str) -> Dict[str, Any]:
         "total_market_cap": None,
         "bids": bids,
         "asks": asks,
-        "quote_time": quote_time.strftime("%Y-%m-%d %H:%M:%S") if quote_time else None,
+        "quote_time": utils.now_text(quote_time) if quote_time else None,
         "market_status": status,
         "is_realtime": is_realtime,
         "source": "新浪",
@@ -330,7 +306,7 @@ def get_minute_em(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
     )
     if frame is None or frame.empty:
         raise ValueError("东财分时返回空数据")
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     items = []
     for row in rows:
         time_text = str(row.get("时间", ""))
@@ -373,7 +349,7 @@ def get_minute_sina(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
     )
     if frame is None or frame.empty:
         raise ValueError("新浪分时返回空数据")
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     # 只保留最近一个交易日，避免把多日分钟线混成一天
     dates = sorted({str(row.get("day", ""))[:10] for row in rows if row.get("day")})
     latest = dates[-1] if dates else ""
@@ -448,7 +424,7 @@ def get_index_quotes_sina() -> List[Dict[str, Any]]:
                 "pct": pct,
                 "volume": utils.to_float(parts[4]),
                 "amount": utils.to_float(parts[5]),
-                "quote_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "quote_time": utils.now_text(),
                 "market_status": "快照",
                 "is_realtime": False,
                 "source": "新浪",
@@ -479,7 +455,7 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
     if normalized in ("DJI", "IXIC", "INX"):
         # 新浪美股指数历史：symbol 形如 .DJI，返回 date/open/high/low/close/volume
         frame = _call_ak(lambda: ak.index_us_stock_sina(symbol=f".{normalized}"))
-        rows = _clean_records(frame)
+        rows = utils.clean_records(frame)
         items = []
         for row in rows:
             items.append(
@@ -501,7 +477,7 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
     frame = _call_ak(lambda: ak.stock_zh_index_daily(symbol=utils.index_code_to_tencent(code)[1]))
     if frame is None or frame.empty:
         raise ValueError("新浪指数K线返回空数据")
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     items = []
     for row in rows:
         items.append(
@@ -540,7 +516,7 @@ def get_profile_em(symbol: str) -> Dict[str, Any]:
     if frame is None or frame.empty:
         raise ValueError("东财个股概况返回空数据")
     mapping: Dict[str, Any] = {}
-    for row in _clean_records(frame):
+    for row in utils.clean_records(frame):
         key = str(row.get("item", "")).strip()
         if key:
             mapping[key] = row.get("value")
@@ -673,7 +649,7 @@ def get_spot_row(symbol: str) -> Dict[str, Any]:
     matched = frame[frame["代码"].astype(str) == code]
     if matched.empty:
         raise ValueError(f"东财快照未找到代码 {code}")
-    row = _clean_records(matched)[0]
+    row = utils.clean_records(matched)[0]
     return {
         "symbol": code,
         "name": row.get("名称"),

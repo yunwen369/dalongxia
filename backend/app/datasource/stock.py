@@ -26,15 +26,12 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
-
-import pandas as pd
 
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
-from backend.app.datasource import ashare, tencent, utils
+from backend.app.datasource import tencent, utils
 
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
@@ -90,35 +87,6 @@ def _call(func) -> Any:
         raise
 
 
-def _clean_records(frame: pd.DataFrame) -> List[Dict[str, Any]]:
-    """DataFrame → 可 JSON 序列化 records（NaN→None；日期转 ISO 字符串）。
-
-    注意：`date`/`datetime`/`Timestamp` 若不转字符串，会在缓存落盘时触发
-    `TypeError: Object of type date is not JSON serializable`（同花顺盈利预测的
-    机构明细表含「报告日期」列，实测必现）。
-
-    Args:
-        frame: 源站原始表（pandas DataFrame）。
-
-    Returns:
-        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
-    """
-    records: List[Dict[str, Any]] = []
-    for raw in frame.to_dict("records"):
-        row: Dict[str, Any] = {}
-        for key, value in raw.items():
-            if pd.isna(value):
-                row[str(key)] = None
-            elif isinstance(value, (datetime, date)):
-                row[str(key)] = value.strftime("%Y-%m-%d")
-            elif hasattr(value, "item"):
-                row[str(key)] = value.item()
-            else:
-                row[str(key)] = value
-        records.append(row)
-    return records
-
-
 def _num(value: Any) -> Optional[float]:
     """安全转 float，空值返回 None（不补 0）。
 
@@ -151,7 +119,7 @@ def _secucode(symbol: str) -> str:
         symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
 
     Returns:
-        str: 文本结果。
+        str: 东财 SECUCODE（带 .SH/.SZ/.BJ 市场后缀）。
     """
     code = str(symbol).strip()
     if code.startswith(("6", "9")):
@@ -168,7 +136,7 @@ def _sina_prefix(symbol: str) -> str:
         symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
 
     Returns:
-        str: 文本结果。
+        str: 新浪市场前缀（sh/sz/bj）。
     """
     code = str(symbol).strip()
     if code.startswith(("6", "9")):
@@ -497,7 +465,7 @@ def get_news(symbol: str, limit: int = 10) -> List[Dict[str, Any]]:
     _ensure_enabled()
     frame = _call(lambda: ak.stock_news_em(symbol=str(symbol)))
     items: List[Dict[str, Any]] = []
-    for row in _clean_records(frame)[: max(1, limit)]:
+    for row in utils.clean_records(frame)[: max(1, limit)]:
         title = str(row.get("新闻标题") or "").strip()
         if not title:
             continue
@@ -560,7 +528,7 @@ def _forecast_ths(symbol: str) -> Dict[str, Any]:
         "target_high": unique_targets[-1] if unique_targets else None,
         "target_avg": _round(sum(unique_targets) / len(unique_targets), 2) if unique_targets else None,
         "target_samples": len(unique_targets),
-        "caliber_note": "同花顺评级分布 + 研报摘要目标价（区间为摘要样本文，非一致预期均值）",
+        "caliber_note": "同花顺评级分布 + 研报摘要目标价（区间取自摘要样本，非一致预期均值）",
     }
 
 
@@ -578,7 +546,7 @@ def _forecast_em(symbol: str) -> Dict[str, Any]:
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_research_report_em(symbol=str(symbol)))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     if not rows:
         raise ValueError(f"东财研报为空：{symbol}")
     ratings = {name: 0 for name in _RATING_NAMES.values()}
@@ -651,7 +619,7 @@ def _estimates_ths(symbol: str) -> Dict[str, Any]:
         frame = _call(lambda: ak.stock_profit_forecast_ths(symbol=str(symbol), indicator=indicator))
         if frame is None or len(frame) == 0:
             return []
-        return _clean_records(frame)
+        return utils.clean_records(frame)
 
     # 先探测页面是否有预测表：同花顺对「无效代码 / 无机构覆盖」返回 200 但无
     # `profit-forecast` 表（实测 000000 → 37KB 无表、999999 → 2.2KB 空页），
@@ -744,7 +712,7 @@ def get_financial_summary(symbol: str) -> Dict[str, Any]:
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_abstract(symbol=str(symbol)))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     if not rows:
         raise ValueError(f"新浪财务摘要为空：{symbol}")
 
@@ -807,7 +775,7 @@ def get_financial_trend(symbol: str, years: int = 5) -> Dict[str, Any]:
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_report_sina(stock=_sina_prefix(symbol), symbol="利润表"))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     if not rows:
         raise ValueError(f"新浪利润表为空：{symbol}")
 
@@ -890,7 +858,7 @@ def get_financial_indicator(symbol: str, limit: int = 8) -> Dict[str, Any]:
     """
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_analysis_indicator(symbol=str(symbol), start_year="2022"))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     if not rows:
         raise ValueError(f"新浪财务指标为空：{symbol}")
     rows = sorted(rows, key=lambda item: str(item.get("日期") or ""))[-limit:]
@@ -949,7 +917,7 @@ def get_financial_report(symbol: str, statement: str = "利润表", limit: int =
         raise ValueError("statement 仅支持资产负债表/利润表/现金流量表")
     _ensure_enabled()
     frame = _call(lambda: ak.stock_financial_report_sina(stock=_sina_prefix(symbol), symbol=statement))
-    rows = _clean_records(frame)
+    rows = utils.clean_records(frame)
     if not rows:
         raise ValueError(f"新浪{statement}为空：{symbol}")
     rows = sorted(rows, key=lambda item: str(item.get("报告日") or ""), reverse=True)[:limit]

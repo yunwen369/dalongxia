@@ -13,11 +13,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict
 
 from fastapi import APIRouter, Body, Path
 
+from backend.app.datasource import utils
 from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import portfolio as store
@@ -42,7 +42,7 @@ def _pack(data: Dict[str, Any], caliber: str, as_of: str = None) -> Dict[str, An
     payload.update({
         "source": "本地持仓",
         "caliber": caliber,
-        "as_of": as_of or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "as_of": as_of or utils.now_text(),
         "market_status": "本地快照",
         "is_realtime": False,
     })

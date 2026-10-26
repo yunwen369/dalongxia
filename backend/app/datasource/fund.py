@@ -26,10 +26,8 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
-
-import pandas as pd
+from datetime import date
+from typing import Any, Dict, List, Optional
 
 from backend.app import config
 from backend.app.core import netfix
@@ -47,6 +45,8 @@ DANJUAN_REFERER = "https://danjuanfunds.com/"
 EM_LSJZ_URL = config.EASTMONEY_FUND_LSJZ_URL
 EM_FHSP_URL = config.EASTMONEY_FUND_FHSP_URL
 EM_FHSP_REFERER = config.EASTMONEY_FUND_FHSP_REFERER
+# 东财批量估值表进程内缓存（全市场约 798 行，逐只基金复用同一份快照）
+_EM_ESTIMATION: Dict[str, Any] = {"at": 0.0, "rows": {}}
 
 
 def _num(value: Any) -> Optional[float]:
@@ -457,12 +457,113 @@ def get_fitted_estimate(code: str) -> Dict[str, Any]:
     }
 
 
-def get_realtime(code: str) -> Dict[str, Any]:
-    """基金最新净值与日涨幅（T+1 口径）。
+def _em_estimation_rows() -> Dict[str, Dict[str, Any]]:
+    """东财批量盘中估值表（``fund_value_estimation_em``）→ 以基金代码为键的索引。
 
-    降级链（D1 合规口径）：
-    ① 养基宝（阶段 7 未接入，跳过并记录）→ ② 蛋卷 nav_grtd（需登录，实测 300001，禁用）
-    → ③ 蛋卷 derived（最新公布净值 + 日涨幅）→ ④ 东财 lsjz 最新净值。
+    该接口一次返回全市场约 798 行（实测 2.9s），因此按 60 秒进程内缓存，
+    避免逐只基金重复拉全表。列名带日期前缀（如 ``2026-10-23-估算数据-估算值``），
+    故用后缀匹配解析，不写死具体日期。
+
+    Returns:
+        Dict[str, Dict[str, Any]]: 基金代码 → 归一化估值记录。
+
+    Raises:
+        Exception: 上游不可用时原样抛出，由调用方降级到下一通道。
+    """
+    now = time.time()
+    cached_at = float(_EM_ESTIMATION.get("at") or 0)
+    if _EM_ESTIMATION.get("rows") and now - cached_at < 60:
+        return _EM_ESTIMATION["rows"]
+
+    frame = ak.fund_value_estimation_em(symbol="全部")
+    columns = [str(col) for col in frame.columns]
+    # 列名解析：日期前缀 + 字段后缀；缺失关键列时直接判不可用（不猜列序）
+    def pick(suffix: str) -> Optional[str]:
+        """按后缀匹配列名。
+
+        Args:
+            suffix: 列名后缀（如 `-估算数据-估算值`）。
+
+        Returns:
+            Optional[str]: 命中的列名；未命中返回 None。
+        """
+        for column in columns:
+            if column.endswith(suffix):
+                return column
+        return None
+
+    estimate_column = pick("-估算数据-估算值")
+    growth_column = pick("-估算数据-估算增长率")
+    if not estimate_column or not growth_column:
+        raise ValueError("东财估值表缺少估算值/估算增长率列")
+    estimate_date = estimate_column.split("-估算数据-")[0]
+    deviation_column = pick("-估算偏差")
+    published_column = pick("-公布数据-单位净值")
+
+    rows: Dict[str, Dict[str, Any]] = {}
+    for record in frame.to_dict("records"):
+        code = str(record.get("基金代码") or "").strip()
+        if not code:
+            continue
+        rows[code] = {
+            "name": str(record.get("基金名称") or "").strip(),
+            "estimate": _num(record.get(estimate_column)),
+            "growth": _num(record.get(growth_column)),
+            "deviation": _num(record.get(deviation_column)) if deviation_column else None,
+            "published_nav": _num(record.get(published_column)) if published_column else None,
+            "estimate_date": estimate_date,
+        }
+    _EM_ESTIMATION.update({"at": now, "rows": rows})
+    return rows
+
+
+def get_em_estimation(code: str) -> Dict[str, Any]:
+    """东财批量估值的单只基金盘中估算（免费拟合估算源，D1 合规口径）。
+
+    仅在「估算数据日期 == 今天」时视为**当日盘中估算**；否则该表只是上一交易日的
+    历史估算，不能冒充盘中估值（红线：不得用估算值冒充净值），直接判不可用并
+    让降级链继续到 T+1 净值。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: `{code, nav, nav_date, day_growth, source, caliber, is_estimate, deviation, base_nav}`。
+
+    Raises:
+        ValueError: 该基金不在估值表内，或估算数据不是当日（含收盘/非交易日）。
+    """
+    record = _em_estimation_rows().get(str(code).strip())
+    if not record:
+        raise ValueError("东财估值表未收录该基金")
+    estimate = record.get("estimate")
+    growth = record.get("growth")
+    if estimate is None or growth is None:
+        raise ValueError("东财估值表缺少估算值/增长率")
+    estimate_date = str(record.get("estimate_date") or "")
+    if estimate_date != utils.now_date_text():
+        raise ValueError(f"东财估值数据非当日（{estimate_date or '未知'}），不作为盘中估值")
+    return {
+        "code": code,
+        "nav": estimate,
+        "nav_date": estimate_date,
+        "day_growth": growth,
+        "source": "东财估值",
+        "caliber": "盘中拟合估算（东财批量估值表，非官方净值，仅供参考）",
+        "is_estimate": True,
+        "deviation": record.get("deviation"),
+        "base_nav": record.get("published_nav"),
+    }
+
+
+def get_realtime(code: str) -> Dict[str, Any]:
+    """基金最新净值与日涨幅（默认 T+1 口径；增强通道开启时优先盘中估算）。
+
+    降级链（D1 合规口径，逐级记录 attempts）：
+    ① 养基宝 increase-rate（需绑定+签名盐）→ ①-b 养基宝 gz-data
+    → ② 东财批量估值 fund_value_estimation_em（免费，仅当日估算可用）
+    → ③ 蛋卷拟合（前十大重仓加权）→ ④ 蛋卷 derived（T+1 公布净值）→ ⑤ 东财 lsjz。
+    盘中估算链仅在「已确认告知书 + 开启增强通道」时执行；关闭即直落 T+1。
 
     Returns:
         dict: {code, nav, nav_date, day_growth, source, caliber, is_estimate, attempts}
@@ -478,43 +579,74 @@ def get_realtime(code: str) -> Dict[str, Any]:
 
     # ① 养基宝：阶段 7 才接入，按 D1 明确跳过（不阻断后续通道）
     if config.DATA_SOURCES.get("yangjibao", {}).get("enabled"):
-        attempts.append({"channel": "养基宝", "ok": False, "reason": "阶段 7 接入前未启用"})
+        attempts.append({"channel": "养基宝", "ok": False, "reason": "config.DATA_SOURCES 未登记（运行时由用户开关直连）"})
     else:
-        attempts.append({"channel": "养基宝", "ok": False, "reason": "连接器未启用（阶段 7）"})
+        attempts.append({"channel": "养基宝", "ok": False, "reason": "config.DATA_SOURCES 未登记（运行时由用户开关直连）"})
 
     # ② 蛋卷 nav_grtd：需登录，规范明确禁用，仅登记不重试
     attempts.append({"channel": "蛋卷 nav_grtd", "ok": False, "reason": "需登录（300001），依规范禁用"})
 
-    # ② 盘中估值链（仅当用户已确认告知书并开启增强通道时执行）
+    # ② 盘中估值链（养基宝需「告知书+增强开关」；东财免费源由「盘中估值」开关单独控制）
     try:
+        from backend.app.core import user_prefs
         from backend.app.datasource import yangjibao
 
         state = yangjibao.status()
-        if state.get("enabled") and (state.get("consent") or {}).get("accepted"):
-            try:
-                fund_id = yangjibao.search_fund_id(code)
-                estimate = yangjibao.fetch_increase_rate(fund_id)
-                attempts.append({"channel": "养基宝 increase-rate", "ok": True})
-                return {
-                    "code": code,
-                    "nav": None,
-                    "nav_date": time.strftime("%Y-%m-%d"),
-                    "day_growth": estimate["pct"],
-                    "source": "养基宝",
-                    "caliber": "非官方·拟合估算·仅供参考·不构成投资建议",
-                    "is_estimate": True,
-                    "attempts": attempts,
-                }
-            except Exception as exc:  # noqa: BLE001 - 逐级降级
-                attempts.append({"channel": "养基宝 increase-rate", "ok": False,
-                                 "reason": type(exc).__name__})
-            try:
-                fitted = get_fitted_estimate(code)
-                attempts.append({"channel": "蛋卷拟合", "ok": True})
-                fitted["attempts"] = attempts
-                return fitted
-            except Exception as exc:  # noqa: BLE001
-                attempts.append({"channel": "蛋卷拟合", "ok": False, "reason": type(exc).__name__})
+        yjb_on = bool(state.get("enabled") and (state.get("consent") or {}).get("accepted"))
+        estimate_on = user_prefs.get_flag("fund_estimation")
+        if yjb_on or estimate_on:
+            if yjb_on:
+                try:
+                    # 真实接口按 6 位代码匹配；先查内部 fund_id 反而会匹配不到
+                    estimate = yangjibao.fetch_increase_rate(code)
+                    attempts.append({"channel": "养基宝 increase-rate", "ok": True})
+                    return {
+                        "code": code,
+                        "nav": estimate.get("nav"),
+                        "nav_date": str(estimate.get("as_of") or utils.now_date_text())[:10],
+                        "day_growth": estimate["pct"],
+                        "source": "养基宝",
+                        "caliber": "非官方·拟合估算·仅供参考·不构成投资建议",
+                        "is_estimate": True,
+                        "attempts": attempts,
+                    }
+                except Exception as exc:  # noqa: BLE001 - 逐级降级
+                    attempts.append({"channel": "养基宝 increase-rate", "ok": False,
+                                     "reason": type(exc).__name__})
+                # ①-b 养基宝 gz-data（increase-rate 失败后的同源备选）
+                try:
+                    gz_estimate = yangjibao.fetch_gz_data(code)
+                    attempts.append({"channel": "养基宝 gz-data", "ok": True})
+                    return {
+                        "code": code,
+                        "nav": gz_estimate.get("nav"),
+                        "nav_date": str(gz_estimate.get("as_of") or utils.now_date_text())[:10],
+                        "day_growth": gz_estimate["pct"],
+                        "source": "养基宝",
+                        "caliber": "非官方·拟合估算·仅供参考·不构成投资建议",
+                        "is_estimate": True,
+                        "attempts": attempts,
+                    }
+                except Exception as exc:  # noqa: BLE001 - 继续降级
+                    attempts.append({"channel": "养基宝 gz-data", "ok": False,
+                                     "reason": type(exc).__name__})
+            if estimate_on:
+                # ② 东财批量估值（免费源，仅当日估算可用；非当日如实判不可用）
+                try:
+                    em_estimate = get_em_estimation(code)
+                    attempts.append({"channel": "东财估值", "ok": True})
+                    em_estimate["attempts"] = attempts
+                    return em_estimate
+                except Exception as exc:  # noqa: BLE001
+                    attempts.append({"channel": "东财估值", "ok": False,
+                                     "reason": str(exc)[:60] or type(exc).__name__})
+                try:
+                    fitted = get_fitted_estimate(code)
+                    attempts.append({"channel": "蛋卷拟合", "ok": True})
+                    fitted["attempts"] = attempts
+                    return fitted
+                except Exception as exc:  # noqa: BLE001
+                    attempts.append({"channel": "蛋卷拟合", "ok": False, "reason": type(exc).__name__})
         else:
             attempts.append({"channel": "盘中估值链", "ok": False,
                              "reason": "未开启增强通道或未确认合规告知书"})
@@ -642,17 +774,33 @@ def get_info(code: str) -> Dict[str, Any]:
     """
     detail = get_detail(code)
     extra: Dict[str, Any] = {}
-    try:
-        frame = ak.fund_individual_basic_info_xq(symbol=code)
-        extra = {
-            str(row.get("item")): row.get("value")
-            for row in frame.to_dict("records")
-        }
-    except Exception as exc:  # noqa: BLE001 - 雪球为补充源
-        logger.info("雪球档案降级：%s（%s）", code, type(exc).__name__)
+
+    def _fetch_xq() -> Dict[str, Any]:
+        """抓一次雪球档案并转成 item→value 字典。
+
+        Returns:
+            dict: 字段字典；失败返回空字典。
+        """
+        try:
+            frame = ak.fund_individual_basic_info_xq(symbol=code)
+            return {str(row.get("item")): row.get("value") for row in frame.to_dict("records")}
+        except Exception as exc:  # noqa: BLE001 - 雪球为补充源
+            logger.info("雪球档案降级：%s（%s）", code, type(exc).__name__)
+            return {}
+
+    extra = _fetch_xq()
+    # 雪球偶发限流会返回缺字段/空表（实测全量回归时出现「基金公司」为 None）。
+    # 补齐关键字段前重试一次，退避 0.8s，避免把第三方抖动透传给用户。
+    if not extra.get("基金公司") or not extra.get("最新规模"):
+        time.sleep(0.8)
+        retry = _fetch_xq()
+        if retry.get("基金公司") or retry.get("最新规模"):
+            extra = retry
     detail["xq"] = {
         "成立时间": extra.get("成立时间"),
-        "最新规模": extra.get("最新规模"),
+        # 键名与前端 i18n 的 fund.kv.scale（"基金规模"）保持一致（R2-04：
+        # 原为"最新规模"，前后端键名不一致导致规模行永远显示"无数据"）
+        "基金规模": extra.get("最新规模"),
         "基金公司": extra.get("基金公司"),
         "基金经理": extra.get("基金经理"),
         "托管银行": extra.get("托管银行"),

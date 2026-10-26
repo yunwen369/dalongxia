@@ -150,6 +150,8 @@ def launch_chrome(port: int, profile_dir: str, width: int, height: int) -> subpr
         "--hide-scrollbars",
         "--no-first-run",
         "--no-default-browser-check",
+        # 本机代理会拦截 127.0.0.1，导致偶发 chrome-error://chromewebdata/
+        "--no-proxy-server",
         f"--remote-debugging-port={port}",
         "--remote-allow-origins=*",
         f"--user-data-dir={profile_dir}",

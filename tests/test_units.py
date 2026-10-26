@@ -202,6 +202,27 @@ class TestNewsStructure:
         assert news_engine.board_leaf_names("半导体设备") == ["半导体设备"]
         assert news_engine.board_leaf_names("不存在") == []
 
+    def test_board_keyword_match_offline(self):
+        """关键词表离线回归：命中/不命中/末级白名单过滤三种口径。
+
+        这是 R3-06 的**确定性**守卫——线上用例受新闻流量影响，淡季池内可能
+        没有板块标签，无法证明关键词表本身有效；这里用固定文本离线校验，
+        保证「关键词表被改坏」或「白名单口径被误改」都能立刻被拦住。
+        """
+        hits = news_engine.match_boards("半导体板块今日大涨，芯片股集体走强，存储芯片涨价")
+        assert hits, "关键词表失效：典型半导体文本未命中任何末级板块"
+        assert "半导体设备" in hits or "存储芯片" in hits or "芯片设计" in hits
+
+        assert news_engine.match_boards("今天天气很好，适合出门散步") == [], \
+            "无关文本不应命中任何板块"
+
+        only = news_engine.match_boards("半导体板块今日大涨", ["半导体设备"])
+        assert only == ["半导体设备"], f"末级白名单过滤失效：{only}"
+
+        # 白名单里放二级名（非末级）应命中不到——这正是 build_ai_feed 曾经踩的坑
+        assert news_engine.match_boards("半导体板块今日大涨", ["半导体"]) == [], \
+            "match_boards 的 boards 语义是末级白名单，混入二级名不应命中"
+
 
 # =============================================================
 # 五、时间口径（TC-通用-时段）
@@ -248,6 +269,92 @@ class TestMarketClock:
         status, realtime = utils.classify_market_status(parsed, "hk", now=now)
         assert status == "盘中"
         assert realtime is True
+
+    def test_us_quote_across_midnight_stays_intraday(self):
+        """美股跨零点（R2-03）：00:00:05 时 23:59:50 的报价仍属盘中，不得判收盘快照。
+
+        回归点：原实现先按「日期早一天」判收盘快照，导致每天 00:00–00:0x
+        把几秒前的美股盘中报价误标为收盘快照，全量回归在零点附近必偶发失败。
+        """
+        from backend.app.datasource import utils
+
+        as_of = datetime(2026, 10, 23, 23, 59, 50)
+        now = datetime(2026, 10, 24, 0, 0, 5)
+        status, realtime = utils.classify_market_status(as_of, "us", now=now)
+        assert status == "盘中"
+        assert realtime is True
+
+    def test_stale_cross_day_quote_is_snapshot(self):
+        """隔日且已过夜的美股报价仍判收盘快照（防止上一条放宽成「跨日永远盘中」）。"""
+        from backend.app.datasource import utils
+
+        as_of = datetime(2026, 10, 22, 16, 0, 0)   # 前一日美东收盘对应北京时间
+        now = datetime(2026, 10, 23, 0, 30, 0)
+        status, realtime = utils.classify_market_status(as_of, "us", now=now)
+        assert status == "收盘快照"
+        assert realtime is False
+
+    def test_a_share_cross_day_still_snapshot(self):
+        """美股跨零点放宽不影响 A 股：隔日 15:00 报价在次日 00:00 仍判收盘快照。"""
+        from backend.app.datasource import utils
+
+        as_of = datetime(2026, 10, 22, 15, 0, 0)
+        now = datetime(2026, 10, 23, 0, 0, 5)
+        status, realtime = utils.classify_market_status(as_of, "a", now=now)
+        assert status == "收盘快照"
+        assert realtime is False
+
+    @pytest.mark.parametrize("et_as_of,et_now,expected,realtime", [
+        # 周三盘中：报价 1 分钟前 → 盘中 / 实时
+        ("2026-10-21 11:00", "2026-10-21 11:01", "盘中", True),
+        # 周三盘中但报价陈旧 30 分钟 → 收盘快照 / 非实时（stale 不得冒充实时）
+        ("2026-10-21 11:00", "2026-10-21 11:30", "收盘快照", False),
+        # 周三开盘前 → 盘前
+        ("2026-10-21 08:00", "2026-10-21 08:00", "盘前", False),
+        # 周三收盘后，报价即当日 16:00 收盘 → 收盘快照
+        ("2026-10-21 16:00", "2026-10-21 17:00", "收盘快照", False),
+        # 周三收盘后，报价仍是盘中 11:00 的旧值 → 盘后（不得算实时）
+        ("2026-10-21 11:00", "2026-10-21 17:00", "盘后", False),
+        # 周六盘中时段（美东 11:00）→ 休市，绝不判盘中（北京硬编码口径的经典误判）
+        ("2026-10-24 11:00", "2026-10-24 11:00", "休市", False),
+        # 周日 → 休市
+        ("2026-10-25 11:00", "2026-10-25 11:00", "休市", False),
+    ])
+    def test_us_session_matrix_across_time_windows(self, et_as_of, et_now, expected, realtime):
+        """美股时段矩阵：盘中/陈旧/盘前/收盘/盘后/周末，覆盖任意时段的判定。
+
+        用美东时间构造再换算成北京时间注入，避免依赖本机真实时钟——
+        这样「任何时段跑全量」都能验证时段判定本身正确，而不是碰运气。
+        """
+        from zoneinfo import ZoneInfo
+
+        from backend.app.datasource import utils
+
+        def to_beijing(text: str) -> datetime:
+            """美东 naive 时间 → 北京时间 naive。"""
+            et = datetime.strptime(text, "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("America/New_York"))
+            return et.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+
+        status, is_realtime = utils.classify_market_status(
+            to_beijing(et_as_of), "us", now=to_beijing(et_now)
+        )
+        assert status == expected, f"{et_as_of}(as_of)/{et_now}(now) 期望 {expected}，实际 {status}"
+        assert is_realtime is realtime
+
+    def test_untranslated_eastern_1600_not_intraday(self):
+        """回归防线：把美东 16:00 原样当北京时间塞进来（差 12~13h）不得判盘中/实时。
+
+        未做换算时，「美东 16:00」会被当成「北京 16:00」= 美东 03:00/04:00（盘前），
+        或反之被当成收盘后的实时数据；本用例锁定「既非盘中、也不实时」。
+        """
+        from backend.app.datasource import utils
+
+        # 北京 16:00（若误把 ET 16:00 当北京时间，就会得到这个值）
+        as_of = datetime(2026, 10, 21, 16, 0, 0)
+        now = datetime(2026, 10, 21, 16, 0, 0)
+        status, is_realtime = utils.classify_market_status(as_of, "us", now=now)
+        assert status != "盘中", f"未换算的美东 16:00 不得判盘中，实际 {status}"
+        assert is_realtime is False
 
 
 # =============================================================
@@ -676,6 +783,198 @@ class TestRoutersContract:
 
 
 # =============================================================
+# 八点五、腾讯成交额字段语义（R2-01 / R2-02）
+# =============================================================
+class TestTencentAmountSemantics:
+    """腾讯 parts[37] 语义按「个股/指数 × 市场」四分，锁死指数不造假成交额。
+
+    背景：上轮 P0-01 只按 market 区分，港股/美股指数与个股共用解析，
+    导致恒生指数 amount=成交量副本、美股指数 amount=成交量×点位（错约 1 万倍）。
+    本用例用构造行情串做纯解析断言，不联网；真实对账由 test_qa_verify 覆盖。
+    """
+
+    @staticmethod
+    def _line(variable: str, name: str, code: str, price: float,
+              volume: float, field37: float) -> str:
+        """构造一条 47 字段的腾讯行情串（仅填判定所需列，其余置 0）。
+
+        Args:
+            variable: 行情变量名（sh600519/hkHSI/usDJI 等，决定市场前缀）。
+            name: 证券名称。
+            code: 证券代码。
+            price: 最新价。
+            volume: 成交量（字段 36）。
+            field37: 源站字段 37（成交额或伪成交额）。
+
+        Returns:
+            str: 形如 `v_hkHSI="0~恒生指数~..."` 的单行行情串。
+        """
+        parts = ["0"] * 47
+        parts[1] = name
+        parts[2] = code
+        parts[3] = str(price)
+        parts[4] = str(price)
+        parts[30] = "2026-10-22 15:00:00"
+        parts[36] = str(volume)
+        parts[37] = str(field37)
+        return f'v_{variable}="' + "~".join(parts) + '";'
+
+    def test_a_share_stock_amount_times_10000(self):
+        """A股个股：字段37为万元 → ×10000 后 成交额/(成交量×100×价格) ≈ 1。"""
+        from backend.app.datasource import tencent
+
+        line = self._line("sh600519", "贵州茅台", "600519", 1335.0, 57686, 767722)
+        quote = tencent._parse_quote_line(line, "a")
+        assert quote["amount"] == 767722 * 10000
+        # A股成交量单位为「手」（100 股），量价比应落在 1 附近
+        ratio = quote["amount"] / (quote["volume"] * 100 * quote["price"])
+        assert 0.95 <= ratio <= 1.05, f"A股个股量价比异常：{ratio}"
+
+    def test_hk_stock_amount_raw(self):
+        """港股个股：字段37为本币原值 → 不得再乘 1 万。"""
+        from backend.app.datasource import tencent
+
+        line = self._line("hk00700", "腾讯控股", "00700", 386.0, 33161473, 12729501754.8)
+        quote = tencent._parse_quote_line(line, "hk")
+        assert quote["amount"] == pytest.approx(12729501754.8)
+        ratio = quote["amount"] / (quote["volume"] * quote["price"])
+        assert 0.95 <= ratio <= 1.05, f"港股个股量价比异常：{ratio}"
+
+    def test_hk_index_amount_none(self):
+        """港股指数：字段37是成交量副本 → amount 必须 None，volume 保留真实值。"""
+        from backend.app.datasource import tencent
+
+        line = self._line("hkHSI", "恒生指数", "HSI", 23093.37, 24978359.03, 24978359.03)
+        quote = tencent._parse_quote_line(line, "hk", is_index=True)
+        assert quote["amount"] is None, "港股指数不得用成交量冒充成交额"
+        assert quote["volume"] == pytest.approx(24978359.03)
+
+    def test_us_index_amount_none(self):
+        """美股指数：字段37=成交量×点位（合成值）→ amount 必须 None。"""
+        from backend.app.datasource import tencent
+
+        line = self._line("usDJI", "道琼斯", "DJI", 52369.18, 126877184, 6636006168563)
+        quote = tencent._parse_quote_line(line, "us", is_index=True)
+        assert quote["amount"] is None, "美股指数不得用成交量×点位的合成值当成交额"
+        assert quote["volume"] == pytest.approx(126877184)
+
+    def test_a_share_index_amount_kept(self):
+        """A股指数：字段37仍是万元 → ×10000，量级为亿元（口径保持不变）。"""
+        from backend.app.datasource import tencent
+
+        line = self._line("sh000001", "上证指数", "000001", 3690.48, 552842912, 89866687)
+        quote = tencent._parse_quote_line(line, "a", is_index=True)
+        assert quote["amount"] == 89866687 * 10000
+        assert 1e11 <= quote["amount"] <= 1e13  # 亿元量级（8000 亿上下）
+
+
+# =============================================================
+# 八点四、密钥安全存储（P1-15）与通道状态（P1-05）
+# =============================================================
+class TestSecureStorage:
+    """AI 密钥必须 DPAPI 密文落盘，历史明文自动迁移，DPAPI 不可用时拒写。"""
+
+    @staticmethod
+    def _client():
+        """构造 TestClient（与 TestRoutersContract 同法，惰性展开真实路由）。
+
+        Returns:
+            TestClient: 已绑定 FastAPI 应用的测试客户端。
+        """
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        return TestClient(app)
+
+    def test_ai_key_encrypted_at_rest(self):
+        """保存后文件只有 api_key_enc 密文，无明文；读取可还原，接口只回掩码。"""
+        from backend.app import config as cfg
+        from backend.app.core import secure_store
+
+        secret = "sk-unit-secret-1234567890"
+        client = self._client()
+        saved = client.post("/api/ai/config", json={
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": secret,
+            "model": "deepseek-chat",
+        }).json()
+        assert saved["error"] is None, saved
+
+        raw = cfg.AI_CONFIG_FILE.read_text(encoding="utf-8")
+        assert secret not in raw, "配置文件出现明文密钥"
+        assert "api_key_enc" in raw and secure_store.is_encrypted(
+            __import__("json").loads(raw)["api_key_enc"]
+        )
+        assert cfg.load_ai_config().api_key == secret
+        assert cfg.load_ai_config().source == "file"
+        echo = client.get("/api/ai/config").json()["data"]["api_key"]
+        assert secret not in echo and "*" in echo
+
+    def test_ai_plaintext_key_migrated(self):
+        """历史明文配置在读取时自动改写为密文，迁移后文件不再含明文。"""
+        from backend.app import config as cfg
+
+        legacy = "sk-legacy-plain-0001"
+        cfg.AI_CONFIG_FILE.write_text(
+            __import__("json").dumps(
+                {"base_url": "https://x/v1", "api_key": legacy, "model": "m1"}, ensure_ascii=False
+            ),
+            encoding="utf-8",
+        )
+        loaded = cfg.load_ai_config()
+        assert loaded.api_key == legacy, "迁移前后密钥必须可读"
+        assert loaded.source == "file"
+        migrated = cfg.AI_CONFIG_FILE.read_text(encoding="utf-8")
+        assert legacy not in migrated, "迁移后仍存在明文密钥"
+        assert "api_key_enc" in migrated
+
+    def test_ai_save_refuses_without_dpapi(self, monkeypatch):
+        """DPAPI 不可用时拒绝保存并返回中文错误，绝不写明文文件。"""
+        from backend.app import config as cfg
+        from backend.app.core import secure_store
+
+        def _boom(_text):
+            raise OSError("当前系统不支持安全存储（DPAPI 不可用）")
+
+        monkeypatch.setattr(secure_store, "available", lambda: False)
+        monkeypatch.setattr(secure_store, "encrypt_text", _boom)
+        body = self._client().post("/api/ai/config", json={
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-should-never-land",
+        }).json()
+        assert body["error_code"] == "NOT_CONFIGURED"
+        assert "DPAPI" in body["error"] or "安全存储" in body["error"]
+        assert not cfg.AI_CONFIG_FILE.exists(), "拒绝保存时不得留下任何文件"
+
+
+class TestCapabilityStatus:
+    """通道状态与真实探测一致：探测失败必须显示「通道异常」，不得报已接入。"""
+
+    def test_probe_failure_marks_channel_error(self, monkeypatch):
+        """模拟财联社探测失败 → 状态为「通道异常（探测失败）」。"""
+        from backend.app.core import capabilities
+
+        monkeypatch.setitem(capabilities.PROBES, "cls", lambda: (False, "模拟超时"))
+        capabilities._PROBE_CACHE.pop("cls", None)  # noqa: SLF001 - 清掉缓存确保重探
+        status = capabilities.datasource_status(force_probe=True)
+        assert status["cls"]["status"] == "通道异常（探测失败）"
+        assert status["cls"]["active"] is False
+
+    def test_v8_disabled_reports_degraded(self, monkeypatch):
+        """冻结形态（V8 关闭）下同花顺应如实标注「V8 降级」，而不是未接入。"""
+        from backend.app import config as cfg
+        from backend.app.core import capabilities
+
+        monkeypatch.setattr(cfg, "V8_SOURCES_ENABLED", False)
+        monkeypatch.setitem(capabilities.PROBES, "ths", lambda: (True, "模拟可达"))
+        capabilities._PROBE_CACHE.pop("ths", None)  # noqa: SLF001 - 清掉缓存确保重探
+        status = capabilities.datasource_status(force_probe=True)
+        assert status["ths"]["status"] == "已接入（V8 降级）"
+        assert status["ths"]["active"] is True
+
+
+# =============================================================
 # 九、前端视图静态一致性（阶段 8：charting/settings 补齐后回归）
 # =============================================================
 class TestFrontendViews:
@@ -740,14 +1039,25 @@ class TestFrontendViews:
         assert not missing, f"语言包缺键：{sorted(missing)}"
 
     def test_fmt_delegates_to_l10n(self):
-        """阶段 6 交接口径：fmt/fmtPct 统一走 L10N（保留无 L10N 时的兜底）。"""
-        pages = self._read("js/pages.js")
-        assert "window.L10N.num" in pages and "window.L10N.pct" in pages
+        """阶段 6 交协议径：fmt/fmtPct 统一走 L10N（保留无 L10N 时的兜底）。
+        经 P1-13 重构，fmt/fmtPct 归入 utils.js 的 window.Utils，委托 L10N.num/pct。"""
+        utils = self._read("js/utils.js")
+        assert "window.L10N.num" in utils and "window.L10N.pct" in utils
 
     def test_charting_css_present(self):
         """图表容器 .pg-chart.tall 样式存在（含 1024 断点降高）。"""
         css = self._read("css/pages.css")
         assert ".pg-chart.tall" in css
+
+    def test_utils_shared_module(self):
+        """P1-13：utils.js 导出共享工具（el/t/toast/fmt/fmtPct/api/renderTable/buildCandlestickOption）。"""
+        utils = self._read("js/utils.js")
+        index = self._read("index.html")
+        for fn in ["el", "t", "toast", "fmt", "fmtPct", "trendClass", "api",
+                    "renderTable", "buildCandlestickOption"]:
+            assert f"{fn}: {fn}" in utils, f"utils.js 缺少共享函数 {fn}"
+        # utils.js 必须在 i18n.js 之后、market.js 之前加载
+        assert index.index("js/i18n.js") < index.index("js/utils.js") < index.index("js/market.js")
 
 
 # =============================================================

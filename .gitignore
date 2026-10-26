@@ -50,9 +50,12 @@ logs/
 *.pfx
 data/yjb_token.json
 data/ai_config.json
+# 养基宝签名盐（DPAPI 密文，YJB2 魔数）：绝不入库、绝不进前端
+data/yjb_secret.json
 
 # ---------- 运行数据与缓存（运行时生成，不入库） ----------
 data/portfolio.json
+data/watchlist.json
 data/cache/
 data/exports/
 data/*.db
@@ -68,7 +71,14 @@ desktop.ini
 .DS_Store
 data/yjb_state.json
 data/scan_tmp_*/
+# 用户偏好与自建布局（本地单机数据，不入库）
+data/prefs.json
+data/dashboards.json
+data/connectors.json
 
 # PyInstaller 构建产物（阶段 9 封装）
 build_v*/
 dist_v*/
+
+# 仓库内历史备份目录（归档整合后残留，仅本地保留，不入库）
+C_历史备份/

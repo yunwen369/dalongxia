@@ -18,6 +18,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from backend.app import config
+from backend.app.core import source_prefs
 from backend.app.core.errors import (
     ERROR_MESSAGES,
     ErrorCode,
@@ -208,6 +209,23 @@ def with_fallback(
     """
     attempts: List[Dict[str, Any]] = []
     normalized = [_normalize_candidate(item) for item in candidates]
+
+    # R3-03：按连接器页的「停用」偏好过滤候选源（全部停用时自动忽略，防误关功能）
+    enabled_names = set(source_prefs.filter_candidates([item[0] for item in normalized]))
+    if len(enabled_names) != len(normalized):
+        skipped = [item[0] for item in normalized if item[0] not in enabled_names]
+        normalized = [item for item in normalized if item[0] in enabled_names]
+        for name in skipped:
+            attempts.append(
+                {
+                    "source": name,
+                    "caliber": "",
+                    "error": "已在连接器页停用，跳过",
+                    "error_code": ErrorCode.UPSTREAM_ERROR.value,
+                    "retries": 0,
+                }
+            )
+            logger.info("数据源 %s 已被用户停用，跳过（键 %s）", name, key)
 
     # 备源优先级记忆：把上次命中的源稳定提到最前，其余源保持声明顺序
     if key:

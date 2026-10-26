@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from backend.app import config
@@ -55,12 +54,13 @@ def _split_quote_body(text: str) -> List[str]:
     return parts
 
 
-def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
+def _parse_quote_line(line: str, market_hint: str = "", is_index: bool = False) -> Dict[str, Any]:
     """解析腾讯单条报价。
 
     Args:
         line: 形如 v_sh600519="1~贵州茅台~600519~...";
         market_hint: 调用方已知市场，缺省从变量前缀推断。
+        is_index: 是否为指数（指数与个股的成交额字段语义不同，默认 False=个股）。
 
     Returns:
         Dict[str, Any]: 报价字段、时间、市场状态与买卖五档。
@@ -110,16 +110,22 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
         if price and price > 0:
             asks.append({"price": price, "volume": volume or 0})
 
-    # 成交额口径（P0-01）：腾讯 parts[37] 的单位随市场不同。
-    # A 股 parts[37] 为万元，×10000 换算为元；港股/美股 parts[37] 已是本币原值
-    # （USD/HKD）不应再 ×10000，否则成交额虚高约 1 万倍（独立验收 P0-01）。
+    # 成交额口径（P0-01 + R2-01/R2-02）：腾讯 parts[37] 的语义按「个股/指数 × 市场」四分：
+    #   · 个股 A 股：万元 → ×10000 换算为元；
+    #   · 个股 港股/美股：本币原值（HKD/USD），不可再乘（P0-01 已修，勿改坏）；
+    #   · A 股指数：万元 → ×10000 换算为元（量级为亿元，口径与个股一致）；
+    #   · 港股指数：源站 parts[37] 是 parts[36] 成交量副本（恒生指数不提供成交额）；
+    #   · 美股指数：源站 parts[37] = 成交量 × 指数点位（合成值，非成交额）。
+    # 后两者一律置 None，由前端显示「—」；绝不用 0 或成交量冒充成交额。
     amount_raw = number(37)
     if amount_raw is None:
         amount = None
+    elif is_index and market in ("hk", "us"):
+        amount = None
     elif market == "a":
-        amount = amount_raw * 10000  # A 股：万元 → 元（口径不变）
+        amount = amount_raw * 10000  # A 股/ A 股指数：万元 → 元（口径不变）
     else:
-        amount = amount_raw  # 港股/美股：本币原值（HKD/USD），不乘换算
+        amount = amount_raw  # 港股/美股个股：本币原值，不乘换算
     return {
         "symbol": parts[2],
         "name": parts[1],
@@ -133,7 +139,7 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
         "change": number(31),
         "pct": number(32),
         "volume": number(36),  # 手
-        "amount": amount,  # 元（A 股） | 本币原值（港/美）
+        "amount": amount,  # 元（A 股/ A 股指数） | 本币原值（港/美个股） | None（港/美指数）
         "turnover": number(38),  # %
         "pe_ttm": number(39),
         "pb": number(46),
@@ -141,7 +147,7 @@ def _parse_quote_line(line: str, market_hint: str = "") -> Dict[str, Any]:
         "total_market_cap": number(45) * 1e8 if number(45) is not None else None,
         "bids": bids,
         "asks": asks,
-        "quote_time": quote_time.strftime("%Y-%m-%d %H:%M:%S") if quote_time else None,
+        "quote_time": utils.now_text(quote_time) if quote_time else None,
         "market_status": status,
         "is_realtime": is_realtime,
         "source": "腾讯",
@@ -272,7 +278,7 @@ def get_index_quotes(market: str = "all") -> List[Dict[str, Any]]:
         meta = by_tencent.get(variable)
         if not meta:
             continue
-        quote = _parse_quote_line(line, meta["market"])
+        quote = _parse_quote_line(line, meta["market"], is_index=True)
         quote["code"] = meta["code"]
         quote["name"] = meta["name"]
         quote["tencent_code"] = meta["tencent"]
@@ -293,7 +299,7 @@ def _kline_key(period_key: str, adjust: str, is_index: bool = False) -> str:
         is_index: 是否为指数。
 
     Returns:
-        str: 文本结果。
+        str: 腾讯 K 线 JSON 里的数据键名（如 day / week / minute）。
     """
     if is_index:
         return period_key
@@ -543,7 +549,7 @@ def _decode_hint(text: str) -> str:
         text: 待解析或清洗的文本。
 
     Returns:
-        str: 文本结果。
+        str: 还原 \\uXXXX 转义后的 UTF-8 文本。
     """
     try:
         return json.loads(f'"{text}"')

@@ -17,14 +17,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 
 from backend.app import config
-from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.datasource import utils
+from backend.app.core import cache, user_prefs
+from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
 from backend.app.datasource import fund as fund_provider
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
     payload.update({
         "source": source,
         "caliber": caliber,
-        "as_of": as_of or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "as_of": as_of or utils.now_text(),
         "market_status": market_status,
         "is_realtime": False,  # 场外基金本批无盘中估值通道，恒为 False
     })
@@ -125,6 +125,45 @@ def fund_search(
     items = result["data"]
     return _pack({"items": items, "count": len(items), "keyword": keyword},
                  "天天基金", "天天基金全量名录本地过滤（代码/简称/拼音）", None, "名录快照")
+
+
+@router.get("/estimation")
+def fund_estimation_status() -> Dict[str, Any]:
+    """盘中估值开关状态（默认关闭，opt-in）。
+
+    Returns:
+        dict: 统一信封；data 含 enabled / caliber。
+    """
+    return ok({
+        "enabled": user_prefs.get_flag("fund_estimation"),
+        "source": "本地 data/prefs.json",
+        "caliber": "盘中估值=非官方·拟合估算·仅供参考·不构成投资建议；关闭后回退 T+1 公布净值",
+        "as_of": utils.now_text(),
+    })
+
+
+@router.post("/estimation")
+def fund_estimation_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """一键开关盘中估值（关闭即回退 T+1 净值）。
+
+    Args:
+        payload: {"enabled": true/false}。
+
+    Returns:
+        dict: 统一信封；data 含 enabled。
+    """
+    if "enabled" not in payload:
+        return _bad("缺少 enabled 参数。")
+    try:
+        prefs = user_prefs.set_flag("fund_estimation", bool(payload.get("enabled")))
+    except NonRetryableError as exc:
+        return api_error(ErrorCode.UPSTREAM_ERROR, str(exc))
+    return ok({
+        "enabled": prefs.get("fund_estimation", False),
+        "source": "本地 data/prefs.json",
+        "caliber": "盘中估值=非官方·拟合估算·仅供参考·不构成投资建议；关闭后回退 T+1 公布净值",
+        "as_of": utils.now_text(),
+    })
 
 
 @router.get("/realtime")

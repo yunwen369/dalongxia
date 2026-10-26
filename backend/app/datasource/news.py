@@ -22,8 +22,6 @@ from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.v8_guard import guard_v8
-from backend.app.datasource import utils
-
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
 
@@ -93,7 +91,7 @@ def _text(value: Any) -> str:
         value: 待处理值（类型由调用方约定）。
 
     Returns:
-        str: 文本结果。
+        str: 去首尾空白后的字符串；None 返回空串。
     """
     return "" if value is None else str(value).strip()
 
@@ -106,7 +104,7 @@ def _clean_title(title: str, content: str = "") -> str:
         content: 正文内容。
 
     Returns:
-        str: 文本结果。
+        str: 清洗后的标题（可能由正文派生或截取）。
     """
     if title:
         return title
@@ -123,7 +121,7 @@ def normalize_key(title: str) -> str:
         title: 标题。
 
     Returns:
-        str: 文本结果。
+        str: 归一化后的标题键（全小写、无标点空白），供跨源去重。
     """
     return _TITLE_NOISE.sub("", (title or "").lower())
 
@@ -137,7 +135,7 @@ def make_id(source: str, title: str, time_text: str) -> str:
         time_text: 时间文本。
 
     Returns:
-        str: 文本结果。
+        str: 稳定 id（同源同标题同时间恒定，可作前端 key）。
     """
     raw = f"{source}|{normalize_key(title)}|{time_text[:16]}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
@@ -171,7 +169,11 @@ BOARD_TREE: List[Dict[str, Any]] = [
     {
         "name": "科技成长",
         "children": [
-            {"name": "半导体", "children": [
+            # 二级板块关键词（R2-03 衍生修复）：媒体标题常只写行业大类
+            # （如「688012，半导体龙头…」），末级词「半导体设备/半导体材料」不出现，
+            # 会导致明明属于该板块却一条都标不到。二级名命中时按 board_leaf_names
+            # 同口径展开其全部末级，保证「大类 → 末级」标注闭环。
+            {"name": "半导体", "keywords": ["半导体"], "children": [
                 _leaf("半导体设备", ["半导体设备", "刻蚀", "薄膜沉积", "光刻", "清洗设备"], ["设备"],
                       {"A": ["688012", "002371"], "HK": [], "US": ["AMAT", "LRCX"]}),
                 _leaf("半导体材料", ["半导体材料", "硅片", "光刻胶", "电子特气", "靶材"], ["材料"],
@@ -635,11 +637,74 @@ def match_boards(text: str, boards: Optional[List[str]] = None) -> List[str]:
             continue
         if any(word and word in body for word in leaf["keywords"]):
             hits.append(leaf["name"])
+    # 二级板块名整体命中：其全部末级一并标注（与 board_leaf_names 展开口径一致）。
+    # 仅对显式声明了 keywords 的二级节点生效（当前为「半导体」），避免「银行/美股」
+    # 这类通用词把无关新闻刷成多板块。
+    for level1 in BOARD_TREE:
+        for level2 in level1["children"]:
+            words = level2.get("keywords") or []
+            if not words or not any(word in body for word in words):
+                continue
+            for leaf in level2["children"]:
+                if boards and leaf["name"] not in boards:
+                    continue
+                if leaf["name"] not in hits:
+                    hits.append(leaf["name"])
     return hits
 
 
+def build_pool(symbol: str = "") -> Dict[str, Any]:
+    """多源新闻池唯一构建入口：财联社 + 东财/新浪/同花顺全球（+ 指定个股）。
+
+    处理链：多源合并 → 标题归一化去重。**不**做板块过滤，供 ai-feed、
+    板块检索（sector-search）与板块情绪（sentiment/board）共用同一池，
+    确保「池内已标注某板块标签 → 板块检索必能回出这些条目」自洽。
+
+    Args:
+        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）；为空则不并入个股新闻。
+
+    Returns:
+        dict: `{"items": 去重后的条目, "channels": 通道状态, "total_before_dedup": 合并条数}`。
+    """
+    pools: List[Dict[str, Any]] = []
+    counter: Dict[str, Any] = {}
+
+    def collect(name: str, loader) -> None:
+        """采集单个源并记录条数，失败不阻断整体。
+
+        Args:
+            name: 通道名称（同时作为前端展示名）。
+            loader: 该通道的取数函数。
+        """
+        try:
+            rows = loader()
+            pools.extend(rows)
+            counter[name] = {"ok": True, "count": len(rows)}
+        except Exception as exc:  # noqa: BLE001 - 单源失败必须降级而非整体失败
+            counter[name] = {"ok": False, "count": 0, "error": type(exc).__name__}
+            logger.info("新闻池源失败：%s（%s）", name, type(exc).__name__)
+
+    collect("财联社快讯", lambda: get_flash(60))
+    # 三个全球源各自只拉一次（避免按 channel 过滤触发三次全量拉取）
+    collect("东财全球", _global_em)
+    collect("新浪全球", _global_sina)
+    collect("同花顺全球", _global_ths)
+    if symbol:
+        collect("东财个股", lambda: get_stock_news(symbol, 20))
+
+    rows = dedup(pools)
+    return {
+        "items": rows,
+        "channels": [{"name": name, **meta} for name, meta in counter.items()],
+        "total_before_dedup": len(pools),
+    }
+
+
 def search_by_sector(sector: str, sort: str = "time", limit: int = 50) -> List[Dict[str, Any]]:
-    """按板块过滤快讯池（财联社 + 三源全球），并做去重与排序。
+    """按板块过滤新闻池（与 ai-feed 同源同池、同一 match_boards 打标口径）。
+
+    与 ai-feed 共用 build_pool 与 match_boards：只要池内某条已被标注该板块
+    （含一级/二级板块展开到末级），本函数必能回出，消除两个视图互相矛盾。
 
     Args:
         sector: 板块名（末级/二级/一级均可）。
@@ -647,19 +712,22 @@ def search_by_sector(sector: str, sort: str = "time", limit: int = 50) -> List[D
         limit: 返回条数。
 
     Returns:
-        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+        list[dict]: 记录列表；每条含 `board`（请求板块名）与 `boards`（真实命中末级板块）。
     """
     node = resolve_board(sector)
-    keywords = (node or {}).get("keywords") or ([sector] if sector else [])
-    pool = get_flash(60) + get_global(120)
-    rows = dedup(pool)
+    node_name = (node or {}).get("name", sector)
+    # 一级/二级板块需展开到末级再比对（match_boards 只输出末级标签）
+    targets = set(board_leaf_names(node_name)) if node else {sector}
     matched: List[Dict[str, Any]] = []
-    for item in rows:
+    for item in build_pool()["items"]:
         body = f"{item.get('title', '')} {item.get('text', '')}"
-        if any(word and word in body for word in keywords):
-            payload = dict(item)
-            payload["board"] = (node or {}).get("name", sector)
-            matched.append(payload)
+        hits = match_boards(body)
+        if not any(name in targets for name in hits):
+            continue
+        payload = dict(item)
+        payload["board"] = node_name
+        payload["boards"] = hits
+        matched.append(payload)
     if sort == "time":
         matched.sort(key=lambda item: item.get("time") or "", reverse=True)
     return matched[: max(1, limit)]
@@ -681,42 +749,24 @@ def build_ai_feed(
         symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: `{items, channels, total_before_dedup, total_after_dedup}`。
     """
-    pools: List[Dict[str, Any]] = []
-    channels: List[Dict[str, Any]] = []
-
-    def collect(name: str, loader, counter: Dict[str, Any]) -> None:
-        """采集单个源并记录条数，失败不阻断整体。
-
-        Args:
-            name: 名称。
-            loader: 缓存未命中时的加载函数（返回数据或 {data, error}）。
-            counter: 计数字典。
-        """
-        try:
-            rows = loader()
-            pools.extend(rows)
-            counter[name] = {"ok": True, "count": len(rows)}
-        except Exception as exc:  # noqa: BLE001
-            counter[name] = {"ok": False, "count": 0, "error": type(exc).__name__}
-            logger.info("ai-feed 源失败：%s（%s）", name, type(exc).__name__)
-
-    counter: Dict[str, Any] = {}
-    collect("财联社快讯", lambda: get_flash(60), counter)
-    # 三个全球源各自只拉一次（避免按 channel 过滤触发三次全量拉取）
-    collect("东财全球", _global_em, counter)
-    collect("新浪全球", _global_sina, counter)
-    collect("同花顺全球", _global_ths, counter)
-    if symbol:
-        collect("东财个股", lambda: get_stock_news(symbol, 20), counter)
-    channels = [{"name": name, **meta} for name, meta in counter.items()]
-
-    rows = dedup(pools)
+    pool = build_pool(symbol)
+    rows = pool["items"]
     if boards:
+        # R3-06 修复：match_boards 的 boards 参数是「末级白名单」，而调用方传入的
+        # 可能是二级（半导体）或一级板块名，直接当白名单会筛掉全部末级 → 恒为空。
+        # 这里与 search_by_sector 保持同一展开口径：先展开到末级再过滤。
+        whitelist: set[str] = set()
+        for name in boards:
+            leaves = board_leaf_names(name)
+            if leaves:
+                whitelist.update(leaves)
+            else:
+                whitelist.add(name)
         filtered: List[Dict[str, Any]] = []
         for item in rows:
-            hits = match_boards(f"{item.get('title', '')} {item.get('text', '')}", boards)
+            hits = match_boards(f"{item.get('title', '')} {item.get('text', '')}", sorted(whitelist))
             if hits:
                 payload = dict(item)
                 payload["boards"] = hits
@@ -728,7 +778,7 @@ def build_ai_feed(
 
     return {
         "items": rows[: max(1, limit)],
-        "channels": channels,
-        "total_before_dedup": len(pools),
+        "channels": pool["channels"],
+        "total_before_dedup": pool["total_before_dedup"],
         "total_after_dedup": len(rows),
     }

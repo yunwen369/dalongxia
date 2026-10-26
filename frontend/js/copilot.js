@@ -2,60 +2,32 @@
  * OpenBB 中文投研工作台 · Copilot 抽屉（批次 5.5）
  * 职责：对话、建议问题、未配置引导、跳设置；错误全部中文且含下一步动作。
  * 依赖接口：GET/POST /api/ai/config、POST /api/ai/chat。
- * 说明：本文件不存放任何密钥；配置由设置页写入 data/ai_config.json（不入 Git）。
+ * 说明：本文件不存放任何密钥；配置由设置页写入 data/ai_config.json（api_key 为 DPAPI 密文，不入 Git）。
  * ============================================================= */
 
 (function () {
   "use strict";
 
-  // 建议问题：覆盖板块/个股/基金/新闻四类常用场景
-  var SUGGESTIONS = [
-    "帮我总结今天半导体板块的资金流向",
-    "中微公司最近的财务趋势有什么变化",
-    "东方人工智能主题混合C 的回撤情况如何",
-    "今天有哪些利好存储芯片的新闻"
-  ];
+  // P1-13：共享工具别名（el/t 原本各 IIFE 重复定义于此）
+  var el = window.Utils.el;
+  var t = window.Utils.t;
+  var toast = window.Utils.toast;
 
   var history = []; // [{role, content}]
   var configured = false;
 
-  /** 创建元素（textContent 防注入）。
-   * @param {string} tag HTML 标签名
-   * @param {string} cls CSS 类名
-   * @param {string} text 文本内容
-   * @returns {*} 处理结果
-   */
-  function el(tag, cls, text) {
-    var node = document.createElement(tag);
-    if (cls) {
-      node.className = cls;
-    }
-    if (text !== undefined && text !== null) {
-      node.textContent = String(text);
-    }
-    return node;
-  }
+  // 建议问题：覆盖板块/个股/基金/新闻四类常用场景
+  var SUGGESTIONS = [
+    t("copilot.suggest1"),
+    t("copilot.suggest2"),
+    t("copilot.suggest3"),
+    t("copilot.suggest4")
+  ];
 
   /** 打开设置页（AI 配置在「设置 → AI 设置」中维护）。 */
   function gotoSetting() {
     window.location.hash = "#/settings";
-    showToast("已打开设置页，可在「AI 设置」中填写接口地址、模型与密钥。");
-  }
-
-  /** 轻提示（复用全局 #toast）。
-   * @param {string} message 提示文案（中文）
-   */
-  function showToast(message) {
-    var node = document.getElementById("toast");
-    if (!node) {
-      return;
-    }
-    node.textContent = message;
-    node.classList.add("show");
-    window.clearTimeout(showToast._timer);
-    showToast._timer = window.setTimeout(function () {
-      node.classList.remove("show");
-    }, 2600);
+    toast(t("copilot.openedSetting"));
   }
 
   /** 构造一条消息气泡。
@@ -66,7 +38,7 @@
    */
   function bubble(role, text, extraClass) {
     var item = el("div", "copilot-msg " + (role === "user" ? "user" : "assistant") + (extraClass ? " " + extraClass : ""));
-    item.appendChild(el("div", "copilot-msg-role", role === "user" ? "我" : "Copilot"));
+    item.appendChild(el("div", "copilot-msg-role", role === "user" ? t("copilot.roleUser") : t("copilot.roleAssistant")));
     item.appendChild(el("div", "copilot-msg-body", text));
     return item;
   }
@@ -82,7 +54,7 @@
     list.innerHTML = "";
     if (!history.length) {
       var empty = el("div", "copilot-empty");
-      empty.appendChild(el("div", "copilot-empty-title", "可以这样问我"));
+      empty.appendChild(el("div", "copilot-empty-title", t("copilot.emptyTitle")));
       SUGGESTIONS.forEach(function (text) {
         var button = el("button", "copilot-suggest", text);
         button.type = "button";
@@ -113,7 +85,7 @@
     var button = container.querySelector(".copilot-send");
     var message = (text || (input && input.value) || "").trim();
     if (!message) {
-      showToast("请输入问题后再发送");
+      toast(t("copilot.inputRequired"));
       return;
     }
     history.push({ role: "user", content: message });
@@ -123,10 +95,10 @@
     renderMessages(container);
     if (button) {
       button.disabled = true;
-      button.textContent = "思考中…";
+      button.textContent = t("copilot.thinking");
     }
     var list = container.querySelector(".copilot-messages");
-    var pending = bubble("assistant", "正在生成回复…", "pending");
+    var pending = bubble("assistant", t("copilot.generating"), "pending");
     if (list) {
       list.appendChild(pending);
       list.scrollTop = list.scrollHeight;
@@ -138,7 +110,7 @@
       body: JSON.stringify({ messages: history.slice(-10) })
     })
       .catch(function () {
-        throw new Error("网络连接失败，请检查网络后重试。");
+        throw new Error(t("error.network"));
       })
       .then(function (response) {
         return response.json();
@@ -149,7 +121,7 @@
           error.code = payload.error_code;
           throw error;
         }
-        history.push({ role: "assistant", content: payload.data.reply || "（空回复）" });
+        history.push({ role: "assistant", content: payload.data.reply || t("copilot.emptyReply") });
         renderMessages(container);
       })
       .catch(function (error) {
@@ -159,11 +131,11 @@
           return;
         }
         var tip = error.code === "NOT_CONFIGURED"
-          ? "尚未配置 AI：请到「设置 → AI 设置」填写 base_url、api_key、model。"
-          : "调用失败：" + error.message;
+          ? t("copilot.aiNotConfigured")
+          : t("error.unknown") + error.message;
         var box = bubble("assistant", tip, "warn");
         if (error.code === "NOT_CONFIGURED") {
-          var link = el("button", "copilot-suggest", "去设置");
+          var link = el("button", "copilot-suggest", t("copilot.goToSetting"));
           link.type = "button";
           link.addEventListener("click", gotoSetting);
           box.appendChild(link);
@@ -174,7 +146,7 @@
       .then(function () {
         if (button) {
           button.disabled = false;
-          button.textContent = "发送";
+          button.textContent = t("copilot.send");
         }
       });
   }
@@ -194,7 +166,7 @@
     body.innerHTML = "";
     body.className = "copilot-body copilot-body-chat";
 
-    var status = el("div", "copilot-status", "未配置模型接口");
+    var status = el("div", "copilot-status", t("copilot.notConfiguredStatus"));
     body.appendChild(status);
 
     var messages = el("div", "copilot-messages");
@@ -204,9 +176,9 @@
     var input = document.createElement("textarea");
     input.className = "copilot-input";
     input.rows = 2;
-    input.placeholder = "输入问题，Ctrl+Enter 发送";
+    input.placeholder = t("copilot.inputPlaceholder");
     composer.appendChild(input);
-    var sendButton = el("button", "pg-btn copilot-send", "发送");
+    var sendButton = el("button", "pg-btn copilot-send", t("copilot.send"));
     sendButton.type = "button";
     sendButton.addEventListener("click", function () {
       send();
@@ -229,12 +201,12 @@
         var data = payload.data || {};
         configured = Boolean(data.configured);
         status.textContent = configured
-          ? "已配置：" + (data.model || "模型未填写") + "（密钥 " + (data.api_key || "已掩码") + "）"
-          : "未配置模型接口，发送将提示去设置";
+          ? t("copilot.configured", { model: data.model || t("copilot.modelEmpty"), key: data.api_key || t("copilot.keyMasked") })
+          : t("copilot.notConfiguredStatus");
         status.className = "copilot-status " + (configured ? "ok" : "warn");
       })
       .catch(function () {
-        status.textContent = "配置状态读取失败，可稍后刷新";
+        status.textContent = t("copilot.configFailed");
       });
 
     renderMessages(drawer);

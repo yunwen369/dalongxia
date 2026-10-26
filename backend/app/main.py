@@ -21,7 +21,7 @@ import threading
 import webbrowser
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 # 以脚本方式运行时，把 openbb-cn 根目录加入 sys.path，保证 backend 包可导入
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -47,14 +47,17 @@ from backend.app.core.errors import ErrorCode, api_error  # noqa: E402
 from backend.app.routers import (  # noqa: E402
     ai,
     connectors,
+    dashboards,
     fund,
     market,
+    moneyflow,
     news,
     portfolio,
     sector,
     sentiment,
     stock,
     system,
+    watchlist,
     widgets,
     yjb,
 )
@@ -146,7 +149,7 @@ def _port_error_message(port: int, pids: List[str]) -> str:
         pids: 进程号列表。
 
     Returns:
-        str: 文本结果。
+        str: 中文错误提示（含占用端口与 PID 列表）。
     """
     pid_text = "、".join(pids) if pids else "未知"
     hint = f"taskkill /PID {pids[0]} /F" if pids else f"netstat -ano | findstr :{port}"
@@ -256,6 +259,10 @@ def create_app() -> FastAPI:
     application.include_router(ai.router)
     # 阶段 7：养基宝连接器（合规告知书 / 扫码绑定 / 估值链 / 一键关闭）
     application.include_router(yjb.router)
+    application.include_router(watchlist.router)
+    application.include_router(moneyflow.router)
+    # R3-02：仪表板整表读写（分组/增删改/复制/排序，落盘 data/dashboards.json）
+    application.include_router(dashboards.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(
@@ -361,6 +368,37 @@ def _run_frozen() -> None:
     logger.info("窗口已关闭，进程退出")
 
 
+def _run_frozen_serve_only() -> None:
+    """冻结形态「仅起服务」模式（``OpenBB-CN.exe --serve-only``，验收门禁专用）。
+
+    与正常启动的唯一区别：**不创建窗口**，uvicorn 直接在主线程运行。
+    用途：让发版门禁脚本在打包产物（而非源码 dev 服务）上实打实跑
+    ``/api/fund/yjb/status|collect|holdings``，避免"交付了旧包/凭据没落位"
+    这类问题再次发生。默认启动路径不受影响（不带该参数仍走窗口模式）。
+
+    Raises:
+        SystemExit: 端口被非本应用占用时以 2 退出。
+    """
+    import uvicorn
+
+    from backend.app.core import desktop_shell
+
+    desktop_shell.redirect_stdio(config.LOG_DIR)
+    logger.info("冻结模式（仅服务）启动 %s %s（%s）端口 %s",
+                config.APP_NAME, config.APP_VERSION, config.BUILD_TAG, config.PORT)
+    if _port_in_use(config.HOST, config.PORT):
+        message = _port_error_message(config.PORT, _find_port_owner(config.PORT))
+        logger.error("端口占用，仅服务模式中止：%s", message.replace("\n", " | "))
+        raise SystemExit(2)
+    try:
+        uvicorn.run(app, host=config.HOST, port=config.PORT,
+                    log_level="warning", log_config=None)
+    except KeyboardInterrupt:  # pragma: no cover - 门禁脚本用 terminate 结束进程
+        logger.info("仅服务模式收到中断信号，退出")
+    finally:
+        logger.info("仅服务模式已退出")
+
+
 def main() -> None:
     """启动入口：冻结形态走内嵌窗口；源码模式走端口预检 + uvicorn + 浏览器。
 
@@ -370,6 +408,9 @@ def main() -> None:
     if config.IS_FROZEN:
         if "--check" in sys.argv:
             raise SystemExit(_run_frozen_check())
+        if "--serve-only" in sys.argv:
+            # 发版门禁专用：无窗口跑打包产物，供自动化实测接口
+            raise SystemExit(_run_frozen_serve_only())
         _run_frozen()
         return
 

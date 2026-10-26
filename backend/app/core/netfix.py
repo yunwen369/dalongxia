@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import certifi
+import requests
 
 from backend.app import config
 
