@@ -270,6 +270,67 @@ def test_destructive_posts_execute_with_confirm(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "yjb_token.json").exists()
 
 
+def test_destructive_posts_write_redacted_audit(tmp_path, monkeypatch) -> None:
+    """RT-01：破坏性端点无论拒绝还是执行，都必须留下可追溯的脱敏审计痕迹。
+
+    回归点：第四方扫描误清绑定后，日志里只有一条「已解绑」，无法回答
+    「是哪个动作、带没带确认、什么时候」——现在拒绝与执行都落审计，
+    且审计文件本身不得成为凭据副本（有人读到也拿不到 token/盐）。
+    """
+    from backend.app.core import audit as audit_module
+
+    monkeypatch.setattr(yjb, "YJB_TOKEN_FILE", tmp_path / "yjb_token.json")
+    monkeypatch.setattr(yjb, "YJB_SECRET_FILE", tmp_path / "yjb_secret.json")
+    monkeypatch.setattr(yjb, "YJB_STATE_FILE", tmp_path / "yjb_state.json")
+    monkeypatch.setattr(audit_module, "AUDIT_FILE", tmp_path / "audit" / "yjb_audit.jsonl")
+    yjb.save_token("AUDIT-PROBE-TOKEN-9f3c", "ios")
+    yjb.set_secret("AUDIT-PROBE-SECRET-NEW", "AUDIT-PROBE-SECRET-OLD")
+    yjb.accept_consent(True)
+
+    # ① 空 body 四连击 → 四条 rejected 记录（状态未变由上一个用例保证）
+    for url in ("/api/fund/yjb/consent", "/api/fund/yjb/toggle",
+                "/api/fund/yjb/unbind", "/api/fund/yjb/secret"):
+        assert client.post(url, json={}).json()["error_code"] == "INVALID_PARAM"
+    rejected = [entry for entry in audit_module.tail(30) if entry["result"].startswith("rejected:")]
+    assert len(rejected) == 4, f"空 body 四连击应有 4 条拒绝审计，实际 {len(rejected)}"
+    assert {entry["action"] for entry in rejected} == {
+        "yjb.consent", "yjb.toggle", "yjb.unbind", "yjb.secret.clear",
+    }
+
+    # ② 带正确确认标识 → 执行并落 ok 记录
+    assert client.post("/api/fund/yjb/secret", json={"confirm": True}).json()["error"] is None
+    assert client.post("/api/fund/yjb/unbind", json={"confirm": True}).json()["error"] is None
+    ok_actions = {entry["action"] for entry in audit_module.tail(30) if entry["result"] == "ok"}
+    assert {"yjb.secret.clear", "yjb.unbind"} <= ok_actions, f"实际 {ok_actions}"
+
+    # ③ 脱敏：审计文件不得出现任何凭据明文
+    audit_text = (tmp_path / "audit" / "yjb_audit.jsonl").read_text(encoding="utf-8")
+    for leaked in ("AUDIT-PROBE-TOKEN-9f3c", "AUDIT-PROBE-SECRET-NEW", "AUDIT-PROBE-SECRET-OLD"):
+        assert leaked not in audit_text, f"审计日志泄漏了凭据明文：{leaked}"
+
+
+def test_audit_redacts_sensitive_keys() -> None:
+    """审计脱敏单元测试：敏感键（含子串）整值打码，状态位与数值原样保留。"""
+    from backend.app.core import audit as audit_module
+
+    redacted = audit_module._redact({  # noqa: SLF001 - 直接验证脱敏函数
+        "token": "abc",
+        "secret_key": "xyz",
+        "authorization": "Bearer zzz",
+        "bound": True,
+        "secret_configured": False,
+        "nested": {"old": "s1", "count": 1},
+    })
+    assert redacted["token"] == "***"
+    assert redacted["secret_key"] == "***", "键名含 secret 子串也必须打码"
+    assert redacted["authorization"] == "***"
+    assert redacted["bound"] is True, "状态位不是敏感值，必须保留供审计判断"
+    assert redacted["secret_configured"] is False, \
+        "secret_configured 是布尔状态位（键名含 secret 但值是 True/False），不得打码"
+    assert redacted["nested"]["old"] == "***"
+    assert redacted["nested"]["count"] == 1
+
+
 def test_holdings_view_calls_user_account_once(monkeypatch) -> None:
     """YJB-P2-5：合并全部账户持仓时 /user_account 只允许调 1 次。
 

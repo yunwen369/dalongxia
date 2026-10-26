@@ -24,7 +24,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Body, Query
 
 from backend.app.datasource import utils
-from backend.app.core import cache
+from backend.app.core import audit, cache
 from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
 from backend.app.datasource import fund as fund_provider
 from backend.app.datasource import yangjibao
@@ -154,10 +154,15 @@ def yjb_consent(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     accepted = _require_explicit(payload, "accepted", "accepted")
     if accepted is None:
         # 空 body 或缺字段：不落任何状态变更（RT-01：第三方空 body 扫描曾误清状态）
+        audit.record("yjb.consent", "rejected:missing-accepted",
+                     {"payload_keys": sorted(str(k) for k in payload.keys())})
         return api_error(ErrorCode.INVALID_PARAM, "缺少确认标识：请显式提交 accepted 布尔值。")
     state = yangjibao.accept_consent(accepted)
     cache.clear_cache()  # 合规状态变化后失效估值缓存，避免旧口径残留
     logger.info("养基宝告知书状态变更：accepted=%s（操作经显式请求体）", bool(accepted))
+    audit.record("yjb.consent", "ok",
+                 {"accepted": bool(accepted), "consent": state.get("consent"),
+                  "enabled": state.get("enabled")})
     return _pack(
         {"consent": state.get("consent"), "enabled": state.get("enabled")},
         "本地配置",
@@ -178,13 +183,17 @@ def yjb_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     enabled = _require_explicit(payload, "enabled", "enabled")
     if enabled is None:
         # 空 body 不得翻转开关（RT-01）
+        audit.record("yjb.toggle", "rejected:missing-enabled",
+                     {"payload_keys": sorted(str(k) for k in payload.keys())})
         return api_error(ErrorCode.INVALID_PARAM, "缺少确认标识：请显式提交 enabled 布尔值。")
     try:
         state = yangjibao.set_enabled(enabled)
         cache.clear_cache()  # 开关变化立即影响估值链
     except PermissionError as exc:
+        audit.record("yjb.toggle", "rejected:consent-required", {"enabled": bool(enabled)})
         return api_error(ErrorCode.INVALID_PARAM, str(exc), data={"enabled": False})
     logger.info("养基宝增强通道开关：enabled=%s（操作经显式请求体）", bool(enabled))
+    audit.record("yjb.toggle", "ok", {"enabled": bool(state.get("enabled"))})
     return _pack(
         {"enabled": state.get("enabled")},
         "本地配置",
@@ -211,6 +220,9 @@ def yjb_secret(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     if not new_secret and not old_secret:
         # 清除签名盐：不可逆，必须显式二次确认标识（空 body 拒绝）
         if payload.get("confirm") is not True:
+            audit.record("yjb.secret.clear", "rejected:missing-confirm",
+                         {"secret_configured": yangjibao.secret_configured(),
+                          "payload_keys": sorted(str(k) for k in payload.keys())})
             return api_error(
                 ErrorCode.INVALID_PARAM,
                 "清除签名盐需二次确认：请显式提交 confirm=true。",
@@ -220,11 +232,14 @@ def yjb_secret(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             written = yangjibao.set_secret(new_secret, old_secret)
         except Exception as exc:  # noqa: BLE001 - DPAPI 不可用时拒绝明文落盘
             logger.info("养基宝签名盐写入失败：%s", type(exc).__name__)
+            audit.record("yjb.secret.clear", "failed:secure-store",
+                         {"reason": type(exc).__name__})
             return api_error(ErrorCode.INTERNAL_ERROR,
                              "签名盐写入失败：本机安全存储（DPAPI）不可用，已拒绝明文落盘。",
                              data={"secret_configured": False})
         cache.clear_cache()
         logger.info("养基宝签名盐已清除（confirm=true 显式确认；盐值不记录）")
+        audit.record("yjb.secret.clear", "ok", {"cleared": not written})
         return _pack(
             {
                 "secret_configured": yangjibao.secret_configured(),
@@ -238,10 +253,15 @@ def yjb_secret(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         written = yangjibao.set_secret(new_secret, old_secret)
     except Exception as exc:  # noqa: BLE001 - DPAPI 不可用时拒绝明文落盘
         logger.info("养基宝签名盐写入失败：%s", type(exc).__name__)
+        audit.record("yjb.secret.write", "failed:secure-store",
+                     {"reason": type(exc).__name__})
         return api_error(ErrorCode.INTERNAL_ERROR,
                          "签名盐写入失败：本机安全存储（DPAPI）不可用，已拒绝明文落盘。",
                          data={"secret_configured": False})
     cache.clear_cache()
+    # 只记「写了哪一个」不记值本身：审计文件可被他人读取，绝不能成为凭据副本
+    audit.record("yjb.secret.write", "ok",
+                 {"wrote_new": bool(new_secret), "wrote_old": bool(old_secret)})
     return _pack(
         {
             "secret_configured": yangjibao.secret_configured(),
@@ -324,14 +344,19 @@ def yjb_unbind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """
     if payload.get("confirm") is not True:
         # 解绑不可逆：缺确认标识时不删 token（RT-01：第三方空 body 扫描曾清空本机绑定）
+        audit.record("yjb.unbind", "rejected:missing-confirm",
+                     {"bound": yangjibao.status().get("bound", True),
+                      "payload_keys": sorted(str(k) for k in payload.keys())})
         return api_error(
             ErrorCode.INVALID_PARAM,
             "解绑需二次确认：请显式提交 confirm=true（不可逆操作）。",
             data={"bound": yangjibao.status().get("bound", True)},
         )
+    was_bound = bool(yangjibao.status().get("bound"))
     yangjibao.clear_token()
     cache.clear_cache()
     logger.info("养基宝已解绑（confirm=true 显式确认；token 内容不记录）")
+    audit.record("yjb.unbind", "ok", {"was_bound": was_bound, "bound": False})
     return _pack({"bound": False}, "本地配置", "已清除本地 token；不影响基金 T+1 净值功能")
 
 

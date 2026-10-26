@@ -58,6 +58,8 @@ data/portfolio.json
 data/watchlist.json
 data/cache/
 data/exports/
+# RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
+data/audit/
 data/*.db
 data/*.sqlite
 data/*.sqlite3

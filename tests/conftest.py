@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 
 from backend.app import config
+from backend.app.core import audit as audit_module
 from backend.app.core import cache as cache_module
 from backend.app.core import resilient, source_prefs, user_prefs
 from backend.app.datasource import tencent
@@ -57,6 +58,9 @@ def isolate_process_state(monkeypatch, tmp_path):
     # AI 配置同样隔离：用例不得写入真实 data/ai_config.json（P1-15 后为密文，
     # 仍不应被测试覆盖，否则会污染用户已保存的密钥）
     monkeypatch.setattr(config, "AI_CONFIG_FILE", tmp_path / "ai_config.json")
+    # RT-01 审计日志同样隔离：破坏性端点用例会逐条落审计，绝不能写进真实 data/audit/
+    # （真实审计文件是用户本机的安全痕迹，被测试覆盖就失去取证价值）
+    monkeypatch.setattr(audit_module, "AUDIT_FILE", tmp_path / "audit" / "yjb_audit.jsonl")
 
     _reset_process_state()
     try:

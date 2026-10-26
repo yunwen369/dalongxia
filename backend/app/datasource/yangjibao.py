@@ -26,8 +26,24 @@
 - `GET /fund_hold?account_id=` → 持仓（`fund_id` / `money` / `hold_earn` 等）
 - `GET /income_data?account_id=` → 估值列表（`fund_id` / `code` / `short_name`，估算涨跌幅在 `nv_info.vgszzl`）
 
-仍待实测确认（非阻塞）：账户多开时的默认账户选择、`nv_info` 在非交易时段是否置空、
-token 有效期与失效码值。
+仍待实测确认（非阻塞：见下方「未确认项登记」，共 6 项，**不得按猜测补全**）。
+
+### 未确认项登记（与接口说明书 §5.2 同步，改一处须改另一处）
+
+以下 6 项在 `养基宝接口文档_GitHub调研_20261025.md` §五 中被明确标注为「未找到 / 需抓包」，
+本工程**没有任何代码假装知道答案**：凡是依赖这些未知项的判断，一律走「宁可显示无数据，
+不猜字段、不补零、不沿用上一交易日」的保守分支。
+
+1. **token 精确有效期与失效码值**：实测 17h 仍有效，上限未知；仅按「HTTP 401 或 code≠200」判失效。
+2. **`/income_line_data` 真实字段**：仅见于 S1 源码，未本机实测；本工程未接入。
+3. **增删持仓字段**（`POST /fund_hold`、`DELETE /remove_fund_hold`）：同上；本工程只读，不做写持仓。
+4. **`/version_info` 必需参数**：裸调 400「必要参数缺失」，参数名未逆向出；未接入任何业务路径。
+5. **非交易时段 `vgszzl` 是否置空**：仅知周六夜间 `gszzl` 仍有值；取值链已兼容任一为空，
+   空即返回 `None`（前端显示「无数据」），不上溯旧值。
+6. **新通道 app-api 可用性**：`https://app-api.yangjibao.com` 本轮未验证可达性；不做切换尝试，
+   `sign_new` 保留但标注「未启用」。
+   （另：`zwls666/yangjibao-edge-extension` 仓库 URL 未直接命中，但同算法/同 SECRET/同端点
+   已由 S1 源码 + 本机实测双重坐实，不影响结论。）
 
 本模块只做协议、存储与状态机，不拼装 HTTP 响应。
 """
@@ -432,8 +448,11 @@ def sign_new(path: str, token: str, timestamp: str) -> str:
     secret_new, _ = _load_secret()
     if not secret_new:
         raise NonRetryableError("未配置 YJB_SECRET_NEW，无法调用养基宝新接口")
-    # 真实算法（GitHub 公开实现，2026-08 版）：md5(去查询串的 path + token + 秒级时间戳 + SECRET)
-    # 注意：**不含基址**、时间戳为**秒**，两处都与早期逆向假设不同（R8 已按实测修正）
+    # ⚠️ YJB-04：以下拼接是**早期社区逆袭实现的写法，不是 app-api 的权威算法**，且当前无任何调用方
+    # （全工程 use_old=True）。app-api 权威实现为 md5(NEW_API_BASE + path + token + NEW_SECRET + ts)
+    # ——多一段基址前缀；仅此一处差异就会导致签名全错（表现为上游 401/签名无效）。
+    # 若将来切换新通道，除了补基址，还必须同时改 Authorization 为 "ios:" + token、UA 伪装
+    # "YJB/2.0.13 … Alamofire"，三处一起改，缺一不可。详见说明书 §3.2 与 §五「未闭环」。
     plain_path = path.split("?")[0]
     raw = f"{plain_path}{token}{timestamp}{secret_new}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
@@ -995,6 +1014,9 @@ def get_holdings_view(account_id: str = "", estimates: bool = True) -> Dict[str,
     """
     if not (load_token() or {}).get("token"):
         raise YjbNotConfiguredError("未绑定养基宝，无法读取持仓")
+    # YJB-P2-5：账户列表**只在这里取一次**，后续逐账户取持仓直接复用 id。
+    # 不要在循环内调 get_accounts() 或传空 account_id（空值会让 get_holdings 再走
+    # resolve_account_id → 又一次 /user_account，3 账户就退化成 4 次上游调用）。
     info = get_accounts()
     titles = {str(a["id"]): a["title"] for a in info["accounts"]}
     wanted = str(account_id or "").strip()
@@ -1002,6 +1024,8 @@ def get_holdings_view(account_id: str = "", estimates: bool = True) -> Dict[str,
 
     items: List[Dict[str, Any]] = []
     for current in targets:
+        # current 必为非空账户 id：get_holdings 内部的 resolve_account_id 走「显式传入直接返回」分支，
+        # 不再产生 /user_account 请求（回归用例 test_holdings_view_calls_user_account_once 守护）
         for raw in get_holdings(current):
             nv = raw.get("nv_info") if isinstance(raw.get("nv_info"), dict) else {}
             items.append({
