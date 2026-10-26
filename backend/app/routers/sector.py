@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sector", tags=["板块"])
 
-_ALLOWED_MARKETS = ("cn", "hk", "us")
+# 板块域白名单：cn=国内（A股）、hk=港股、us=美股
+_ALLOWED_MARKETS = utils.MARKET_WHITELIST_SECTOR
 
 
 def _bad_request(message: str) -> Dict[str, Any]:

@@ -1,7 +1,7 @@
 """组件元数据路由：/api/widgets 下发 widget_registry。
 
-前端按 type/id 渲染区块；当前注册 9 个页面共 44 个区块元数据
-（sectors 7 / stock 10 / sector-val 4 / news 4 / fund 6 / portfolio 4 / watchlist 2 / lhb 5 / yjb 2）；
+前端按 type/id 渲染区块；当前注册 9 个页面共 49 个区块元数据
+（sectors 7 / stock 10 / sector-val 4 / news 5 / fund 6 / portfolio 4 / watchlist 2 / lhb 5 / yjb 6）；
 dashboard、home 等页由仪表板配方渲染，查询时返回显式空态（P2-14）。
 """
 
@@ -35,6 +35,7 @@ def list_widgets(page: str = Query("", description="按页面筛选，如 #/sect
             "items": [],
             "total": 0,
             "grid": widgets_registry.GRID_SPAN,
+            "categories": widgets_registry.LIBRARY_CATEGORIES,
             "empty": True,
             "note": "该页面暂不提供组件注册（仪表板请通过组件库与配方渲染）",
         })
@@ -43,5 +44,6 @@ def list_widgets(page: str = Query("", description="按页面筛选，如 #/sect
             "items": items,
             "total": len(items),
             "grid": widgets_registry.GRID_SPAN,
+            "categories": widgets_registry.LIBRARY_CATEGORIES,
         }
     )

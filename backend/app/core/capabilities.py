@@ -31,7 +31,7 @@ from backend.app.core import netfix
 
 logger = logging.getLogger(__name__)
 
-PROBE_TTL = 600  # 探测结果缓存秒数（10 分钟）
+PROBE_TTL = 600  # 探测结果缓存秒数（10 分钟）——仅供探测结果专用短缓存，与数据缓存不同
 PROBE_TIMEOUT = 2.0  # 单个通道探测超时（秒）
 
 # {源键: (过期时间戳, {"ok": bool, "detail": str, "probed_at": str})}

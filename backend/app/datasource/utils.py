@@ -32,6 +32,13 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 # 北京时区（UTC+8）：业务时间唯一口径，部署机器时区不同也不偏移（红线「时间一律北京时间」）。
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
+# 市场白名单（单一来源，SC-03/R3-21）：
+# - 行情/个股域（quote/stock）：a=A股、hk=港股、us=美股
+# - 板块域：cn=A股（国内）、hk=港股、us=美股
+# 两个域的 a/cn 语义不同：前端跨页跳转由 normSectorMarket 映射 a->cn，后端各域引用各自白名单。
+MARKET_WHITELIST_QUOTE = ("a", "hk", "us")
+MARKET_WHITELIST_SECTOR = ("cn", "hk", "us")
+
 
 def bj_now() -> datetime:
     """取当前北京时间（naive）。

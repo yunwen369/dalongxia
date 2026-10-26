@@ -128,8 +128,21 @@ def get_ca_bundle() -> Optional[str]:
     return str(_CERT_PATH) if _CERT_PATH else None
 
 
+def _make_base_session() -> "requests.Session":
+    """创建基础会话（trust_env=False、浏览器 UA），不挂载重试适配器。
+
+    内部函数：供 make_session / make_post_session 复用。
+    """
+    import requests
+
+    session = requests.Session()
+    session.trust_env = False  # 关键：绕过本机残留代理与 .netrc
+    session.headers.update({"User-Agent": config.BROWSER_USER_AGENT})
+    return session
+
+
 def make_session() -> "requests.Session":
-    """创建绕过系统代理、带重试的 requests 会话。
+    """创建绕过系统代理、带重试的 requests 会话（GET/HEAD 可重试）。
 
     Returns:
         requests.Session: 已设置 trust_env=False、浏览器 UA 与重试适配器的会话。
@@ -137,14 +150,13 @@ def make_session() -> "requests.Session":
     Notes:
         trust_env=False 会忽略 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 等环境变量，
         等价于「代理异常时自动回退直连」，符合规范 §6.5。
+        仅 GET/HEAD 纳入重试（幂等方法），POST 不自动重试——避免非幂等操作重复执行。
     """
     import requests
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
 
-    session = requests.Session()
-    session.trust_env = False  # 关键：绕过本机残留代理与 .netrc
-    session.headers.update({"User-Agent": config.BROWSER_USER_AGENT})
+    session = _make_base_session()
 
     retry = Retry(
         total=config.MAX_RETRY,
@@ -152,12 +164,28 @@ def make_session() -> "requests.Session":
         read=config.MAX_RETRY,
         backoff_factor=1.0,  # 退避间隔 1s、2s，与规范一致
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET", "HEAD"}),
+        allowed_methods=frozenset({"GET", "HEAD"}),  # POST 不重试：非幂等
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    return session
+
+
+def make_post_session() -> "requests.Session":
+    """创建 POST 专用会话：统一 trust_env=False/UA/超时，**不自动重试**（POST 非幂等）。
+
+    Returns:
+        requests.Session: 仅带基础配置（无重试适配器）的会话。
+
+    Notes:
+        1. POST 不自动重试：避免非幂等接口（下单、写入、AI 对话等）重复执行。
+        2. 仍共享 trust_env=False、浏览器 UA、统一超时等网络环境配置。
+        3. 调用方需自行处理超时/异常重试逻辑（如 AI 接口在路由层已有显式 try/except）。
+    """
+    session = _make_base_session()
+    # 故意不挂载 Retry 适配器：POST 不重试（SC-P2-2 / 规范 §6.5）
     return session
 
 
@@ -174,7 +202,8 @@ def http_request(method: str, url: str, *, timeout: Optional[int] = None,
     Returns:
         requests.Response: 响应对象。
     """
-    session = make_session()
+    # GET/HEAD 用带重试会话，POST 用不重试会话（非幂等安全）
+    session = make_session() if method.upper() in ("GET", "HEAD") else make_post_session()
     try:
         return session.request(
             method,

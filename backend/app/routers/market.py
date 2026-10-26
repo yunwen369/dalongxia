@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/market", tags=["行情"])
 
-_ALLOWED_MARKETS = ("a", "hk", "us")
+# 行情/个股域白名单：a=A股、hk=港股、us=美股
+_ALLOWED_MARKETS = utils.MARKET_WHITELIST_QUOTE
 
 
 def _bad_request(message: str) -> Dict[str, Any]:
