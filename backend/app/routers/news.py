@@ -612,27 +612,34 @@ def financial_search(
 
 @router.get("/financial-detail")
 def financial_detail(
+    market: str = Query("a", description="市场：a|hk|us（cn 为兼容别名）"),
     title: str = Query("", max_length=200, description="公告标题（列表行原样回传）"),
-    code: str = Query("", max_length=10, description="6 位证券代码"),
+    code: str = Query("", max_length=10, description="证券代码（A 股 6 位 / 港股 4~5 位 / 美股 ticker）"),
     pub_time: str = Query("", max_length=20, description="发布时间（列表行原样回传）"),
     doc_url: str = Query("", max_length=500, description="原文链接（列表行原样回传）"),
 ) -> Any:
-    """A 股公告正文详情（详情弹窗按需拉取，仅 A 股市场）。
+    """公告正文详情（详情弹窗按需拉取，支持 A 股 / 港股 / 美股）。
 
     Args:
-        title: 公告标题（巨潮/东财来源原样回传，服务端负责归一比对）。
-        code: 6 位证券代码。
+        market: 市场枚举 a/hk/us。
+        title: 公告标题（源站原文，服务端负责归一比对）。
+        code: 证券代码。
         pub_time: 发布时间。
-        doc_url: 原文链接（东财来源含 art_code 直取；巨潮来源走跨源交叉验证）。
+        doc_url: 原文链接（东财来源含 art_code 直取；巨潮/HKEX 来源走跨源交叉验证；
+            美股为 EDGAR 归档文档直取）。
 
     Returns:
         Any: 统一信封 `{data, error, error_code}`；
         data 含 content/source/verified/truncated/caliber/as_of。
 
     Notes:
-        安全约束：doc_url 仅接受巨潮/东财已知域名前缀，其余一律 INVALID_PARAM；
+        安全约束：doc_url 仅接受巨潮/东财/HKEX/SEC 已知域名前缀，其余一律 INVALID_PARAM；
         交叉验证不过返回成功信封 + 空 content + 中文口径（空/错分离，不造数）。
     """
+    # 第五轮阶段 4：market 口径统一 a/hk/us（cn 为兼容别名，归一后回写）
+    market = utils.normalize_market(market, default="a") or ""
+    if not market:
+        return _bad(utils.market_error_message())
     title = (title or "").strip()
     doc_url = (doc_url or "").strip()
     if not title and not doc_url:
@@ -641,15 +648,18 @@ def financial_detail(
         doc_url.startswith("https://np-anotice-stock.eastmoney.com/")
         or doc_url.startswith("https://data.eastmoney.com/notices/detail/")
         or doc_url.startswith("https://static.cninfo.com.cn/")
+        or doc_url.startswith("https://www1.hkexnews.hk/")
+        or doc_url.startswith("https://www.sec.gov/Archives/")
     ):
-        return _bad("doc_url 来源不在支持的公告源（巨潮资讯/东方财富）内，已拒绝处理。")
+        return _bad("doc_url 来源不在支持的公告源（巨潮资讯/东方财富/HKEX/SEC）内，已拒绝处理。")
 
     try:
-        data = financial_report.cn_detail_cached(
-            title=title, code=(code or "").strip(), pub_time=(pub_time or "").strip(), doc_url=doc_url
+        data = financial_report.detail_cached(
+            market=market, title=title, code=(code or "").strip(),
+            pub_time=(pub_time or "").strip(), doc_url=doc_url,
         )
     except Exception as exc:  # noqa: BLE001 - 上游异常统一转中文错误态
-        logger.warning("A 股公告正文拉取失败：%s", exc)
+        logger.warning("%s 公告正文拉取失败：%s", market, exc)
         return api_error(
             ErrorCode.UPSTREAM_ERROR,
             "公告正文拉取失败（源站限频或网络不通），请稍后重新打开重试。",

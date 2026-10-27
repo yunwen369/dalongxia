@@ -2842,11 +2842,9 @@
     var bodyNode = el("div", "m-body", item.summary || t("fs.summaryNone"));
     modal.appendChild(bodyNode);
 
-    // 阶段 11：A 股列表源站不提供摘要 → 打开弹窗时按需拉取正文
-    //（东财来源直取；巨潮来源经后端「标题+代码+公告日」交叉验证后取，验证不过给说明不造数）
-    if ((item.market || "") === "a") {
-      fsLoadCnDetail(modal, bodyNode, item);
-    }
+    // 阶段 12：A 股（巨潮/东财）、港股（HKEX）、美股（EDGAR）均在打开弹窗时按需拉取正文
+    //（A 股：东财直链或巨潮↔东财交叉验证；港股：HKEX↔东财港股库校验；美股：SEC 官方原文）
+    fsLoadCnDetail(modal, bodyNode, item);
 
     modal.appendChild(el("div", "m-sec", t("fs.docLink", { source: item.source || "—" })));
     var link = el("a", "m-link", item.docUrl || t("value.none"));
@@ -2883,15 +2881,16 @@
     document.body.appendChild(mask);
   }
 
-  /** 阶段 11：A 股详情正文按需拉取（弹窗打开后异步加载，四态齐备）。
+  /** 详情正文按需拉取（弹窗打开后异步加载，四态齐备；三市场共用）。
    * @param {HTMLElement} modal 弹窗容器（用于挂口径行与判断弹窗是否已关闭）
    * @param {HTMLElement} bodyNode 摘要/正文体节点
-   * @param {Object} item 单条记录（title/code/pubTime/docUrl 原样回传后端）
+   * @param {Object} item 单条记录（market/title/code/pubTime/docUrl 原样回传后端）
    */
   function fsLoadCnDetail(modal, bodyNode, item) {
     bodyNode.textContent = t("fs.detailLoading");
     bodyNode.classList.add("m-loading");
     window.Utils.api("/api/news/financial-detail", {
+      market: item.market || "a",
       title: item.title || "",
       code: item.code || "",
       pub_time: item.pubTime || "",

@@ -19,6 +19,8 @@ import logging
 import time
 import re
 import zlib
+import difflib
+import html as html_lib
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -942,7 +944,7 @@ def search_filings(
 
 
 # =============================================================
-# 五、A 股公告正文详情（详情弹窗按需拉取，阶段 11）
+# 五、公告正文详情（详情弹窗按需拉取；A 股 / 港股 / 美股）
 # =============================================================
 
 # 东财公告正文接口（np-cnotice-stock，与列表备源同属东财公告库）
@@ -953,15 +955,92 @@ _DETAIL_TTL = 1800
 _DETAIL_MAX_CHARS = 6000
 # 标题归一时剔除的标点/空白（跨源比对：巨潮与东财的标点习惯不一致）
 _TITLE_STRIP_RE = re.compile(r"[\s:：,，。.·\-—()（）\[\]【】\"'“”]")
+# 东财公告详情链接内的 art_code
+_EM_DETAIL_RE = re.compile(r"/notices/detail/([A-Za-z0-9]+)\.html")
+# 阶段 12 实测：东财 content 接口分页返回，每页固定 5000 字且 page_index 递增内容不同；
+# 展示 6000 字需 2 页，取 3 页留余量（长公告首页常为封面/目录）
+_CONTENT_PAGE_CHARS = 5000
+_CONTENT_MAX_PAGES = 3
+# 阶段 12 实测：东财 ann 列表 page_size 上限 100；20 页 = 2000 条，
+# 中大型个股可回溯 5-10 年，并配合「本页最早日期已早于目标」提前终止
+_MATCH_PAGE_SIZE = 100
+_MATCH_MAX_PAGES = 20
+
+# 繁体 → 简体 精简映射（覆盖港股公告标题高频字）：
+# HKEX 标题为繁体、东财港股标题为简体，标题全等比较前需归一；
+# 正文包含校验走「繁体正文 ⊇ 繁体标题」，不依赖此表。
+_T2S = str.maketrans({
+    "據": "据", "於": "于", "為": "为", "億": "亿", "萬": "万", "將": "将",
+    "屆": "届", "滿": "满", "額": "额", "聯": "联", "對": "对", "內": "内",
+    "負": "负", "責": "责", "準": "准", "確": "确", "聲": "声", "並": "并",
+    "產": "产", "開": "开", "關": "关", "東": "东", "亞": "亚", "業": "业",
+    "務": "务", "財": "财", "報": "报", "權": "权", "會": "会", "議": "议",
+    "決": "决", "選": "选", "舉": "举", "辭": "辞", "職": "职", "調": "调",
+    "訂": "订", "單": "单", "價": "价", "購": "购", "買": "买", "賣": "卖",
+    "轉": "转", "讓": "让", "資": "资", "銀": "银", "團": "团", "貸": "贷",
+    "債": "债", "計": "计", "劃": "划", "條": "条", "協": "协", "簽": "签",
+    "諾": "诺", "擔": "担", "證": "证", "預": "预", "虧": "亏", "損": "损",
+    "長": "长", "減": "减", "變": "变", "營": "营", "純": "纯", "潤": "润",
+    "總": "总", "淨": "净", "攤": "摊", "數": "数", "顯": "显", "續": "续",
+    "經": "经", "運": "运", "現": "现", "儲": "储", "備": "备", "餘": "余",
+    "週": "周", "函": "函", "細": "细", "則": "则", "連": "连", "須": "须",
+    "佈": "布", "載": "载", "網": "网", "頁": "页", "檔": "档", "結": "结",
+    "圖": "图", "錄": "录", "註": "注", "冊": "册", "記": "记", "認": "认",
+    "審": "审", "閱": "阅", "獨": "独", "綜": "综", "動": "动", "員": "员",
+    "級": "级", "僱": "雇", "獎": "奖", "勵": "励", "鎖": "锁", "體": "体",
+    "簡": "简", "譯": "译", "師": "师", "給": "给", "屬": "属", "離": "离",
+    "隨": "随", "豐": "丰", "匯": "汇", "蘭": "兰", "點": "点", "處": "处",
+    "發": "发", "騰": "腾", "訊": "讯", "過": "过", "還": "还", "進": "进",
+    "這": "这", "說": "说", "與": "与", "參": "参", "見": "见", "該": "该",
+    "們": "们", "時": "时", "間": "间", "問": "问", "題": "题", "應": "应",
+    "擬": "拟", "標": "标", "紙": "纸", "華": "华", "辦": "办",
+    "優": "优", "灣": "湾", "區": "区", "醫": "医", "藥": "药", "險": "险",
+    "驗": "验", "電": "电", "構": "构", "機": "机", "領": "领", "項": "项",
+    "類": "类", "風": "风", "順": "顺", "頂": "顶", "頻": "频", "靈": "灵",
+    "雙": "双", "雜": "杂", "難": "难", "龍": "龙", "齊": "齐", "黨": "党",
+    "鐘": "钟", "隱": "隐", "雖": "虽", "飯": "饭", "飲": "饮", "館": "馆",
+    "幣": "币", "兩": "两", "個": "个", "傳": "传", "傷": "伤", "僅": "仅",
+    "儀": "仪", "償": "偿", "兒": "儿", "兌": "兑", "凍": "冻", "勝": "胜",
+    "勞": "劳", "勢": "势", "衛": "卫", "當": "当", "療": "疗", "監": "监",
+    "盤": "盘", "稅": "税", "穩": "稳", "競": "竞", "筆": "笔", "節": "节",
+    "範": "范", "籌": "筹", "紀": "纪", "約": "约", "素": "素", "索": "索",
+    "累": "累", "維": "维", "綱": "纲", "緊": "紧", "線": "线", "練": "练",
+    "組": "组", "終": "终", "統": "统", "絲": "丝", "綁": "绑", "綠": "绿",
+    "罰": "罚", "羅": "罗", "義": "义", "習": "习", "老": "老", "聽": "听",
+    "腦": "脑", "臉": "脸", "臨": "临", "舊": "旧", "藝": "艺", "築": "筑",
+    "顧": "顾", "飛": "飞", "餐": "餐", "駐": "驻", "髮": "发", "齒": "齿",
+    "齡": "龄", "執": "执", "掃": "扫", "掛": "挂", "採": "采", "換": "换",
+    "搖": "摇", "撤": "撤", "撥": "拨", "擇": "择", "擴": "扩", "擺": "摆",
+    "攜": "携", "斷": "断", "來": "来", "極": "极", "檢": "检", "樓": "楼",
+    "樣": "样", "樹": "树", "橋": "桥", "橫": "横", "歐": "欧", "歸": "归",
+    "殘": "残", "毀": "毁", "氣": "气", "沒": "没", "況": "况", "測": "测",
+    "濟": "济", "熱": "热", "燈": "灯", "爭": "争", "牆": "墙", "狀": "状",
+    "獲": "获", "環": "环", "畫": "画", "眾": "众", "礎": "础", "視": "视",
+    "福": "福", "窮": "穷", "竊": "窃", "糾": "纠", "紅": "红", "聞": "闻",
+})
+
+
+def _norm_text(text: str) -> str:
+    """把任意文本归一为可比对形式（剥标签、繁转简、剔标点空白、小写）。
+
+    Args:
+        text: 原文（可为 HTML 片段、繁体或简体）。
+
+    Returns:
+        str: 归一后的字符串；输入为空返回空串。
+    """
+    out = re.sub(r"<[^>]+>", "", str(text or ""))
+    out = out.translate(_T2S)
+    return _TITLE_STRIP_RE.sub("", out).strip().lower()
 
 
 def _norm_cn_title(title: str) -> str:
     """把公告标题归一为跨源可比对的键。
 
-    处理三件事：剥 HTML 标签、剥东财「公司名:」前缀、剔除全部标点与空白后转小写。
+    处理四件事：剥 HTML 标签、剥东财「公司名:」前缀、繁转简、剔除全部标点与空白后转小写。
 
     Args:
-        title: 公告标题原文（巨潮或东财）。
+        title: 公告标题原文（巨潮简体 / 东财简体 / HKEX 繁体）。
 
     Returns:
         str: 归一标题键；输入为空返回空串。
@@ -969,93 +1048,269 @@ def _norm_cn_title(title: str) -> str:
     text = re.sub(r"<[^>]+>", "", str(title or ""))
     if ":" in text:  # 东财标题固定带「公司名:」前缀（探针实测），先剥离再比对
         text = text.split(":", 1)[1]
-    return _TITLE_STRIP_RE.sub("", text).strip().lower()
+    return _norm_text(text)
 
 
-def _em_content(art_code: str) -> Tuple[str, str]:
-    """拉取东财公告正文（np-cnotice-stock/api/content/ann）。
+def _art_from_url(doc_url: str) -> str:
+    """从东财公告详情链接中提取 art_code。
+
+    Args:
+        doc_url: 形如 ``https://data.eastmoney.com/notices/detail/AN2026....html``。
+
+    Returns:
+        str: art_code；未匹配返回空串。
+    """
+    match = _EM_DETAIL_RE.search(str(doc_url or ""))
+    return match.group(1) if match else ""
+
+
+def _em_content(art_code: str, *, max_pages: int = _CONTENT_MAX_PAGES) -> str:
+    """分页拉取东财公告正文并拼接（每页 5000 字，实测连续页内容不同）。
 
     Args:
         art_code: 东财公告唯一编号（如 AN202608141827994407）。
+        max_pages: 最多拉取页数（默认 3 页 = 15000 字）。
 
     Returns:
-        Tuple[str, str]: (正文文本, 东财侧公告标题)。
+        str: 正文全文（未截断，截断由调用方按展示口径处理）。
 
     Raises:
-        RuntimeError: 接口非 200 或返回结构异常（通道异常，由上层转错误态）。
+        RuntimeError: 首页接口非 200 或请求异常（通道异常，由上层转错误态）。
+    """
+    parts: List[str] = []
+    for page in range(1, max_pages + 1):
+        try:
+            resp = netfix.http_request(
+                "GET",
+                _EM_CONTENT,
+                params={"art_code": art_code, "client_source": "web", "page_index": page},
+                headers={"Referer": "https://data.eastmoney.com/notices/"},
+                timeout=config.DATASOURCE_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if parts:
+                break  # 首页已成功，后续页失败时保留已取得的内容
+            raise RuntimeError(f"东财公告正文请求异常：{exc}") from exc
+        if resp.status_code != 200:
+            if parts:
+                break
+            raise RuntimeError(f"东财公告正文 HTTP {resp.status_code}")
+        data = (resp.json() or {}).get("data") or {}
+        chunk = str(data.get("notice_content") or "").replace("\r\n", "\n").strip()
+        if not chunk:
+            break
+        parts.append(chunk)
+        if len(chunk) < _CONTENT_PAGE_CHARS:
+            break  # 不足一整页说明已到正文末尾
+    return "\n".join(parts).strip()
+
+
+def _em_page(*, stock_list: str, page: int, page_size: int,
+             ann_type: str = "A") -> Tuple[List[Dict[str, str]], int]:
+    """按市场类型取一页东财公告列表（匹配用，保留 art_code）。
+
+    Args:
+        stock_list: 证券代码（A 股 6 位 / 港股 5 位）。
+        page: 页码（从 1 开始）。
+        page_size: 每页条数（实测上限 100）。
+        ann_type: 东财市场类型：A=A 股，H=港股（阶段 12 探针实测有效）。
+
+    Returns:
+        Tuple[List[Dict[str, str]], int]: (记录列表, 源站总命中数)；
+        每条含 title/company/code/pubTime/docUrl/art。
+
+    Raises:
+        RuntimeError: 接口非 200。
     """
     resp = netfix.http_request(
         "GET",
-        _EM_CONTENT,
-        params={"art_code": art_code, "client_source": "web", "page_index": 1},
+        _EM_ANN,
+        params={
+            "sr": -1,
+            "page_size": min(int(page_size), 100),
+            "page_index": page,
+            "ann_type": ann_type,
+            "client_source": "web",
+            "stock_list": stock_list,
+            "f_node": 0,
+            "s_node": 0,
+        },
         headers={"Referer": "https://data.eastmoney.com/notices/"},
         timeout=config.DATASOURCE_TIMEOUT,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"东财公告正文 HTTP {resp.status_code}")
+        raise RuntimeError(f"东财公告列表 HTTP {resp.status_code}")
     data = (resp.json() or {}).get("data") or {}
-    content = str(data.get("notice_content") or "").replace("\r\n", "\n").strip()
-    return content, str(data.get("notice_title") or "")
+    total = int(data.get("total_hits") or 0)
+    rows: List[Dict[str, str]] = []
+    for item in data.get("list") or []:
+        company = ""
+        codes = item.get("codes") or []
+        if codes:
+            company = str(codes[0].get("short_name") or "")
+        title = str(item.get("title") or "")
+        if company and title.startswith(f"{company}:"):
+            title = title[len(company) + 1:]
+        display = str(item.get("display_time") or "")
+        pub = display[:16] if len(display) >= 16 else str(item.get("notice_date") or "")[:10]
+        art = str(item.get("art_code") or "")
+        rows.append({
+            "title": title.strip(":： "),
+            "company": company,
+            "code": str((codes[0].get("stock_code") if codes else "") or ""),
+            "pubTime": pub,
+            "docUrl": f"{_EM_DETAIL}{art}.html" if art else "",
+            "art": art,
+        })
+    return rows, total
 
 
-def _match_em_art(title: str, code: str, pub_time: str) -> Optional[str]:
-    """用「代码 + 归一标题 + 公告日」在东财公告列表中定位 art_code（跨源交叉验证）。
+def _title_in_text(title_norm: str, text_norm: str, *, ratio: float = 0.82) -> bool:
+    """判断归一标题是否出现在归一正文中（容忍正文对标题的少量增删）。
+
+    港股正文为 PDF 文本化结果，标题处可能出现编辑差异（实测正文写成
+    「…计划**「该计划」**发行…」，比列表标题多一个括注），故不能只做严格子串判断：
+    先用标题前 20/12 字在正文中定位锚点，再取该处局部窗口做编辑距离相似度比对。
 
     Args:
-        title: 巨潮侧公告标题。
-        code: 6 位证券代码（空串时无法定向检索，直接返回 None）。
-        pub_time: 巨潮侧发布时间（北京时间，可能只精确到日）。
+        title_norm: 归一后的标题。
+        text_norm: 归一后的正文。
+        ratio: 相似度阈值（0~1）。
 
     Returns:
-        Optional[str]: 三要素（标题全等 + 代码一致 + 同日）校验通过的 art_code；
-        任一环节不过返回 None（调用方按「验证未通过」给空态，不猜造）。
+        bool: 命中返回 True；输入为空或锚点缺失返回 False。
     """
-    code = (code or "").strip()
-    if not (code.isdigit() and len(code) == 6):
-        return None
-    try:
-        rows, _total = _em_query(stock_list=code, page=1, page_size=50)
-    except Exception as exc:  # noqa: BLE001 - 通道异常向上抛，由路由转错误态
-        raise RuntimeError(f"东财公告备源列表异常：{exc}") from exc
-    want_title = _norm_cn_title(title)
-    want_day = (pub_time or "")[:10]
-    for row in rows:
-        if not row.get("title") or _norm_cn_title(row["title"]) != want_title:
-            continue
-        row_art = ""
-        match = re.search(r"/notices/detail/([A-Za-z0-9]+)\.html", str(row.get("docUrl") or ""))
-        if match:
-            row_art = match.group(1)
-        # 公告日校验：巨潮标题含年份，同标题可能跨年复现（如权益分派实施公告）。
-        # 巨潮对多数记录只精确到日（UTC 整点换算北京时间可能跨到次日），
-        # 故允许双侧日期相差 ≤1 天；往期同名公告至少相差数月，不会误匹配。
-        row_day = (row.get("pubTime") or "")[:10]
-        if want_day and row_day:
-            diff = _day_diff(want_day, row_day)
-            if diff is None or diff > 1:
-                continue
-        if row_art:
-            return row_art
-    return None
+    if not title_norm or not text_norm:
+        return False
+    if title_norm in text_norm:
+        return True
+    pos = -1
+    for probe_len in (20, 12):
+        if len(title_norm) >= probe_len:
+            pos = text_norm.find(title_norm[:probe_len])
+            if pos >= 0:
+                break
+    if pos < 0:
+        return False
+    window = text_norm[pos: pos + len(title_norm) + 20]
+    return difflib.SequenceMatcher(None, title_norm, window).ratio() >= ratio
 
 
 def _day_diff(day_a: str, day_b: str) -> Optional[int]:
-    """计算两个日期串（YYYY-MM-DD）相差天数；任一不可解析返回 None。"""
+    """计算两个日期串（YYYY-MM-DD）相差天数（绝对值）；任一不可解析返回 None。"""
+    signed = _signed_day_diff(day_a, day_b)
+    return None if signed is None else abs(signed)
+
+
+def _signed_day_diff(day_a: str, day_b: str) -> Optional[int]:
+    """计算 day_a - day_b 的天数（正数表示 day_a 更晚）；任一不可解析返回 None。
+
+    Args:
+        day_a: 日期串（YYYY-MM-DD 或以空格分隔的时间串）。
+        day_b: 日期串（同上）。
+
+    Returns:
+        Optional[int]: 带符号天数差；不可解析返回 None。
+
+    Notes:
+        翻页提前终止必须用带符号差值：目标日期早于本页记录时（如回溯历史公告），
+        绝对差值同样很大，若用绝对差会误判为「已翻过目标」而提前停止。
+    """
     try:
         da = datetime.strptime(day_a[:10], "%Y-%m-%d").date()
         db = datetime.strptime(day_b[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return None
-    return abs((da - db).days)
+    return (da - db).days
+
+
+def _match_em_art(
+    *, title: str, code: str, pub_time: str, ann_type: str = "A"
+) -> Tuple[str, bool, str]:
+    """在东财公告库中定位目标公告的 art_code（不降级：逐页回溯 + 正文兜底）。
+
+    匹配策略（阶段 12 重写，替代原「前 50 条」小窗口）：
+    ① 按公告日倒序逐页翻（page_size=100，最多 20 页 = 2000 条），
+       本页最早日期已早于目标日 2 天以上则提前终止；
+    ② 页内「归一标题全等 + 公告日相差 ≤1 天」直接命中（exact=True）；
+    ③ 未全等时，对同日同代码候选逐条拉正文，用「正文 ⊇ 标题」校验
+       （港股正文为港交所繁体原文，与 HKEX 繁体标题可直接比对，绕开繁简差异）；
+    ④ 兜底：同日同代码仅 1 条候选时直接采用（唯一性确定）。
+
+    Args:
+        title: 来源侧公告标题（巨潮简体 / HKEX 繁体）。
+        code: 证券代码（A 股 6 位 / 港股 4~5 位）。
+        pub_time: 来源侧发布时间（北京时间，可能只精确到日）。
+        ann_type: 东财市场类型 A / H。
+
+    Returns:
+        Tuple[str, bool, str]: (art_code, 是否标题全等命中, 命中方式说明)；
+        全部策略失败返回 ("", False, "")。
+
+    Raises:
+        RuntimeError: 东财列表通道异常（由上层转错误态）。
+    """
+    code = (code or "").strip()
+    length_ok = len(code) == 6 or (ann_type == "H" and 4 <= len(code) <= 5)
+    if not (code.isdigit() and length_ok):
+        return "", False, ""
+    want_title = _norm_cn_title(title)
+    want_day = (pub_time or "")[:10]
+    candidates: List[Dict[str, str]] = []
+
+    try:
+        for page in range(1, _MATCH_MAX_PAGES + 1):
+            rows, _total = _em_page(
+                stock_list=code, page=page, page_size=_MATCH_PAGE_SIZE, ann_type=ann_type
+            )
+            if not rows:
+                break
+            for row in rows:
+                row_day = (row.get("pubTime") or "")[:10]
+                if want_day and row_day:
+                    signed = _signed_day_diff(row_day, want_day)
+                    if signed is not None and abs(signed) > 1:
+                        continue  # 日期不符（含往期同名公告）
+                if not row.get("art"):
+                    continue
+                candidates.append(row)
+                if want_title and _norm_cn_title(row["title"]) == want_title:
+                    return row["art"], True, "标题全等 + 公告日一致"
+            # 提前终止：本页最早记录已早于目标日 2 天以上（后续页只会更早）
+            days = [r.get("pubTime") or "" for r in rows if r.get("pubTime")]
+            if want_day and days:
+                oldest_signed = _signed_day_diff(min(days)[:10], want_day)
+                if oldest_signed is not None and oldest_signed < -2:
+                    break
+            if len(rows) < _MATCH_PAGE_SIZE:
+                break  # 已到最后一页
+    except Exception as exc:  # noqa: BLE001 - 通道异常向上抛，由路由转错误态
+        raise RuntimeError(f"东财公告列表异常：{exc}") from exc
+
+    # ② 正文包含校验（港股繁体正文 vs 繁体标题天然同文，A 股简体同理）
+    if want_title:
+        for row in candidates:
+            try:
+                body = _em_content(row["art"], max_pages=1)
+            except Exception as exc:  # noqa: BLE001 - 单条失败不阻断其余候选
+                logger.debug("候选正文拉取失败 art=%s：%s", row["art"], exc)
+                continue
+            if body and _title_in_text(want_title, _norm_text(body)):
+                return row["art"], False, "正文包含标题校验"
+
+    # ③ 唯一候选直接采用
+    if len(candidates) == 1:
+        return candidates[0]["art"], False, "同日同代码唯一公告"
+    return "", False, ""
 
 
 def cn_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
     """A 股公告正文详情（详情弹窗按需拉取）。
 
-    两条取数链（阶段 11 交叉验证口径）：
+    两条取数链：
     - 东财来源记录：docUrl 直接含 art_code，单源直取（verified=False）；
-    - 巨潮来源记录：docUrl 为 PDF 链接，按「代码 + 归一标题全等 + 公告日同日」
-      在东财公告列表交叉定位 art_code 后取正文（verified=True，双源一致）。
+    - 巨潮来源记录：docUrl 为 PDF 链接，按「代码 + 归一标题 + 公告日」
+      在东财公告库逐页回溯交叉定位 art_code 后取正文（命中即 verified=True）。
 
     Args:
         title: 公告标题（列表行原样回传）。
@@ -1072,62 +1327,203 @@ def cn_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str
     pub_time = str(pub_time or "").strip()
     doc_url = str(doc_url or "").strip()
 
-    # 链路一：东财来源，docUrl 直含 art_code
-    art = ""
-    match = re.search(r"/notices/detail/([A-Za-z0-9]+)\.html", doc_url)
-    if match:
-        art = match.group(1)
+    art = _art_from_url(doc_url)
     verified = False
+    how = "东财直链（该公告的直接来源）"
 
-    # 链路二：巨潮来源（PDF 链接或无 docUrl），跨源交叉验证定位
     if not art:
-        found = _match_em_art(title, code, pub_time)
+        found, _exact, hit_how = _match_em_art(title=title, code=code, pub_time=pub_time, ann_type="A")
         if not found:
-            return {
-                "content": "",
-                "source": "东方财富",
-                "verified": False,
-                "truncated": False,
-                "caliber": (
-                    "未能通过交叉验证取得正文（巨潮标题未能在东财公告库中按"
-                    "「标题+代码+公告日」匹配到唯一记录），请直接打开原文查看"
-                ),
-                "as_of": _bj_now_text(),
-            }
+            return _detail_empty(
+                "未能取得正文：巨潮标题在东财公告库（含全部历史页）中未匹配到"
+                "「标题+代码+公告日」一致的记录，请直接打开原文查看"
+            )
         art = found
         verified = True
+        how = f"与巨潮披露标题交叉验证一致（{hit_how}）"
 
-    content, _em_title = _em_content(art)
+    content = _em_content(art)
     if not content:
-        # 源站该公告无文本版正文（如纯表格/图片型公告）→ 空态说明，不造数
-        return {
-            "content": "",
-            "source": "东方财富",
-            "verified": verified,
-            "truncated": False,
-            "caliber": "东财公告库该记录无文本版正文（常见于纯表格/图片型公告），请直接打开原文查看",
-            "as_of": _bj_now_text(),
-        }
-    truncated = len(content) > _DETAIL_MAX_CHARS
-    caliber = (
-        "正文来自东财公告库（文本版），与巨潮披露标题经「标题+代码+公告日」三重比对一致"
-        if verified
-        else "正文来自东财公告库（文本版），为该公告的直接来源"
+        return _detail_empty(
+            "东财公告库该记录无文本版正文（常见于纯表格/图片型公告），请直接打开原文查看"
+        )
+    return _detail_payload(content, source="东方财富", verified=verified,
+                           caliber=f"正文来自东财公告库（文本版），{how}")
+
+
+def hk_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
+    """港股公告正文详情（详情弹窗按需拉取）。
+
+    取数链：HKEX 列表（繁体标题）→ 东财港股公告库（ann_type=H）按「代码 + 公告日」
+    锁定候选 → 标题全等 / 正文包含标题校验（港交所繁体原文 vs 繁体标题，绕开繁简差异）
+    → content 正文（繁体原文）。
+
+    Args:
+        title: 公告标题（HKEX 繁体原文，列表行原样回传）。
+        code: 4~5 位港股代码。
+        pub_time: 发布时间（北京时间，列表行原样回传）。
+        doc_url: HKEX 原文 PDF 链接（仅作展示，不解析 PDF）。
+
+    Returns:
+        Dict[str, Any]: 同 :func:`cn_detail`；正文为港交所繁体原文。
+    """
+    title = str(title or "").strip()
+    code = str(code or "").strip()
+    pub_time = str(pub_time or "").strip()
+    if not (code.isdigit() and 4 <= len(code) <= 5):
+        return _detail_empty("港股代码不合法（需 4~5 位数字），无法定位东财公告库记录")
+    found, exact, hit_how = _match_em_art(title=title, code=code.zfill(5), pub_time=pub_time, ann_type="H")
+    if not found:
+        return _detail_empty(
+            "未能取得正文：HKEX 标题在东财港股公告库中未匹配到「标题+代码+公告日」"
+            "一致的记录，请直接打开港交所原文（PDF）查看"
+        )
+    content = _em_content(found)
+    if not content:
+        return _detail_empty("东财港股公告库该记录无文本版正文，请直接打开港交所原文（PDF）查看")
+    note = "标题全等" if exact else hit_how
+    return _detail_payload(
+        content, source="东方财富（港交所原文镜像）", verified=True,
+        caliber=f"正文为港交所披露繁体原文文本版，与 HKEX 列表标题经「代码+公告日+{note}」校验一致",
     )
-    if truncated:
-        caliber += f"；超长正文节选前 {_DETAIL_MAX_CHARS} 字，完整内容请打开原文"
+
+
+def us_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
+    """美股公告正文详情（详情弹窗按需拉取）。
+
+    取数链：直接抓 SEC EDGAR 官方申报文档（primaryDocument，实测 145/145 为 .htm）
+    → 剥标签文本化。正文与列表同源（SEC 官方），无需跨源匹配。
+
+    Args:
+        title: 公告标题（列表行原样回传，仅用于展示核对）。
+        code: ticker。
+        pub_time: 发布时间。
+        doc_url: EDGAR 归档文档链接。
+
+    Returns:
+        Dict[str, Any]: 同 :func:`cn_detail`；正文为 SEC 官方原文。
+    """
+    doc_url = str(doc_url or "").strip()
+    if not doc_url.startswith("https://www.sec.gov/Archives/"):
+        return _detail_empty("该记录不是 SEC EDGAR 归档文档链接，无法抓取正文")
+    try:
+        resp = netfix.http_request(
+            "GET", doc_url, headers={"User-Agent": _EDGAR_UA}, timeout=60
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"EDGAR 文档请求异常：{exc}") from exc
+    if resp.status_code != 200:
+        raise RuntimeError(f"EDGAR 文档 HTTP {resp.status_code}")
+    text = _html_to_text(resp.text or "")
+    if not text:
+        return _detail_empty("EDGAR 文档无可用文本（可能为纯图片/扫描件），请直接打开原文查看")
+    return _detail_payload(
+        text, source="SEC EDGAR", verified=True,
+        caliber="正文为 SEC EDGAR 官方申报原文（HTML 文档文本化），与列表同源",
+    )
+
+
+def _html_to_text(html: str) -> str:
+    """把 HTML 文档转为可读纯文本（剥脚本/样式/XBRL 头，块级标签断行，实体解码）。
+
+    Args:
+        html: 原始 HTML。
+
+    Returns:
+        str: 纯文本；输入为空返回空串。
+
+    Notes:
+        EDGAR 10-K/10-Q 的 HTML 开头含内联 XBRL ``<ix:header>``（隐藏段），
+        不剥除会导致正文前 6000 字全是 `aapl-20250927 false 2025 FY ...` 这类上下文定义，
+        实测剥除后首个可见文本即「UNITED STATES / SECURITIES AND EXCHANGE COMMISSION / FORM 10-K」。
+    """
+    text = re.sub(r"(?is)<(script|style|ix:header)[^>]*>.*?</\1>", " ", str(html or ""))
+    text = re.sub(r"(?i)</(p|div|tr|li|h[1-6]|table|section)>", "\n", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html_lib.unescape(text).replace("\xa0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+def _detail_empty(caliber: str) -> Dict[str, Any]:
+    """构造「无正文」的统一返回（空/错分离：空态走成功信封 + 中文口径）。
+
+    Args:
+        caliber: 中文口径说明。
+
+    Returns:
+        Dict[str, Any]: content 为空串的详情结构。
+    """
     return {
-        "content": content[:_DETAIL_MAX_CHARS],
-        "source": "东方财富",
-        "verified": verified,
-        "truncated": truncated,
+        "content": "",
+        "source": "—",
+        "verified": False,
+        "truncated": False,
         "caliber": caliber,
         "as_of": _bj_now_text(),
     }
 
 
+def _detail_payload(content: str, *, source: str, verified: bool, caliber: str) -> Dict[str, Any]:
+    """按展示口径截断正文并组装详情返回。
+
+    Args:
+        content: 正文全文。
+        source: 正文来源标识。
+        verified: 是否通过交叉验证。
+        caliber: 口径说明（截断时自动追加节选说明）。
+
+    Returns:
+        Dict[str, Any]: 详情结构。
+    """
+    truncated = len(content) > _DETAIL_MAX_CHARS
+    note = caliber
+    if truncated:
+        note += f"；超长正文节选前 {_DETAIL_MAX_CHARS} 字，完整内容请打开原文"
+    return {
+        "content": content[:_DETAIL_MAX_CHARS],
+        "source": source,
+        "verified": verified,
+        "truncated": truncated,
+        "caliber": note,
+        "as_of": _bj_now_text(),
+    }
+
+
+def detail_cached(*, market: str, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
+    """带缓存的公告正文详情（按市场分发 a/hk/us）。
+
+    缓存口径：仅「取到正文」的结果落缓存（30 分钟）；空态/验证未通过不落缓存，
+    下次打开弹窗立即重新拉取 —— 避免源站临时波动把空态固化半小时（不得降级）。
+
+    Args:
+        market: 市场枚举 a/hk/us。
+        title: 公告标题。
+        code: 证券代码。
+        pub_time: 发布时间。
+        doc_url: 原文链接。
+
+    Returns:
+        Dict[str, Any]: 同对应市场的详情函数。
+    """
+    market = market if market in ("a", "hk", "us") else "a"
+    digest = f"{market}|{title}|{code}|{pub_time}|{doc_url}"
+    key = f"findetail:{market}:{zlib.crc32(digest.encode('utf-8')):08x}"
+    handlers = {"a": cn_detail, "hk": hk_detail, "us": us_detail}
+    handler = handlers[market]
+    cached = cache.get(key, _DETAIL_TTL)
+    if isinstance(cached, dict) and cached.get("content"):
+        return cached
+    result = handler(title=title, code=code, pub_time=pub_time, doc_url=doc_url)
+    if isinstance(result, dict) and result.get("content"):
+        cache.set(key, result)
+    return result
+
+
 def cn_detail_cached(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
-    """带缓存的 A 股公告正文详情。
+    """带缓存的 A 股公告正文详情（detail_cached 的 A 股别名，保持既有调用兼容）。
 
     Args:
         title: 公告标题。
@@ -1138,6 +1534,4 @@ def cn_detail_cached(*, title: str, code: str, pub_time: str, doc_url: str) -> D
     Returns:
         Dict[str, Any]: 同 :func:`cn_detail`。
     """
-    digest = f"{title}|{code}|{pub_time}|{doc_url}"
-    key = f"findetail:a:{zlib.crc32(digest.encode('utf-8')):08x}"
-    return cache.get_or_load(key, _DETAIL_TTL, lambda: cn_detail(title=title, code=code, pub_time=pub_time, doc_url=doc_url))
+    return detail_cached(market="a", title=title, code=code, pub_time=pub_time, doc_url=doc_url)

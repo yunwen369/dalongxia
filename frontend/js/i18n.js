@@ -146,8 +146,8 @@
     "fs.needKeyword": "请输入公司名称或代码后再检索。",
     "fs.detailLoading": "正在拉取公告正文…",
     "fs.detailFailed": "正文拉取失败，请关闭弹窗后重新打开重试。",
-    "fs.verified": "已交叉验证（巨潮 ↔ 东财）",
-    "fs.unverified": "单源正文（东财公告库）",
+    "fs.verified": "已交叉验证",
+    "fs.unverified": "源站原文",
 
 
     // ---------- 新增功能：自选股（W-01/W-02/W-03） ----------
