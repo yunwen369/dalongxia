@@ -181,10 +181,3 @@ def rename_item(symbol: str, market: str, name: str) -> Optional[Dict[str, Any]]
         return None
 
 
-def store_path() -> str:
-    """返回清单文件绝对路径（供健康检查/测试断言）。
-
-    Returns:
-        str: 文件路径。
-    """
-    return str(WATCHLIST_FILE)

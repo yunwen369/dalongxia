@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import date
 from typing import Any, Dict, List, Optional
 
 from backend.app import config
@@ -952,19 +951,3 @@ def get_dividend(code: str) -> Dict[str, Any]:
     }
 
 
-def get_position(code: str) -> Dict[str, Any]:
-    """基金持仓分布：蛋卷该端点需登录，按规范禁用并如实说明。
-
-    Args:
-        code: 证券或基金代码。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-
-    Raises:
-        NonRetryableError: 蛋卷 /djapi/fund/position 需登录态（实测 rc=300001），依规范禁用；可用「重仓股」（东财季报）替代，行业分布暂不可用。
-    """
-    raise NonRetryableError(
-        "蛋卷 /djapi/fund/position 需登录态（实测 rc=300001），依规范禁用；"
-        "可用「重仓股」（东财季报）替代，行业分布暂不可用。"
-    )

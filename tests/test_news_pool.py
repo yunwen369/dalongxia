@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 from backend.app.main import app
 from backend.app.core import cache
 from backend.app.datasource import news as news_provider
-from backend.app.routers import news as news_router
 
 client = TestClient(app)
 

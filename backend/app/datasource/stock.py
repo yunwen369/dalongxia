@@ -532,43 +532,6 @@ def _forecast_ths(symbol: str) -> Dict[str, Any]:
     }
 
 
-def _forecast_em(symbol: str) -> Dict[str, Any]:
-    """备源：东财研报列表（评级分布/机构家数，无目标价）。
-
-    Args:
-        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-
-    Raises:
-        ValueError: 参数不合法或上游数据不满足口径时抛出。
-    """
-    _ensure_enabled()
-    frame = _call(lambda: ak.stock_research_report_em(symbol=str(symbol)))
-    rows = utils.clean_records(frame)
-    if not rows:
-        raise ValueError(f"东财研报为空：{symbol}")
-    ratings = {name: 0 for name in _RATING_NAMES.values()}
-    orgs = set()
-    for row in rows:
-        rating = str(row.get("东财评级") or "").strip()
-        if rating in ratings:
-            ratings[rating] += 1
-        org = str(row.get("机构") or "").strip()
-        if org:
-            orgs.add(org)
-    return {
-        "ratings": ratings,
-        "org_count": len(orgs),
-        "target_low": None,
-        "target_high": None,
-        "target_avg": None,
-        "target_samples": 0,
-        "caliber_note": "东财研报评级分布（该通道不提供目标价）",
-    }
-
-
 def get_forecast(symbol: str) -> Dict[str, Any]:
     """机构预测：评级分布 + 目标价区间。
 
@@ -742,20 +705,6 @@ def get_financial_summary(symbol: str) -> Dict[str, Any]:
     if not metrics:
         raise ValueError(f"新浪财务摘要缺少常用指标：{symbol}")
     return {"symbol": symbol, "periods": period_cols, "metrics": metrics}
-
-
-def _annual_columns(periods: List[str], years: int) -> List[str]:
-    """从报告期列中筛出年报（1231 结尾），按时间倒序取最近 N 年。
-
-    Args:
-        periods: 报告期列表。
-        years: 统计年数。
-
-    Returns:
-        list[str]: 字符串列表。
-    """
-    annual = [p for p in periods if str(p).endswith("1231")]
-    return annual[:years]
 
 
 def get_financial_trend(symbol: str, years: int = 5) -> Dict[str, Any]:

@@ -68,15 +68,6 @@ def _snapshot() -> Dict[str, bool]:
         return dict(_CACHE)
 
 
-def all_prefs() -> Dict[str, bool]:
-    """返回全部开关当前值。
-
-    Returns:
-        dict: {开关名: 是否开启}。
-    """
-    return _snapshot()
-
-
 def get_flag(name: str) -> bool:
     """读取单个开关（未登记返回 False 并告警）。
 

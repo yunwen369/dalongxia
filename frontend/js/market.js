@@ -188,56 +188,6 @@
     chart.resize();
   }
 
-  /** 渲染 K 线图。
-   * @param {Array} items 记录列表
-   */
-  function renderKlineChart(items) {
-    const chart = chartOf("mk-kline-chart");
-    if (!chart) return;
-    const c = themeColors();
-    const labels = items.map((item) => item.date);
-    const values = items.map((item) => [item.open, item.close, item.low, item.high]);
-    chart.setOption(
-      {
-        animation: false,
-        tooltip: {
-          trigger: "axis",
-          axisPointer: { type: "cross" },
-          backgroundColor: c.panel,
-          borderColor: c.border,
-          textStyle: { color: c.text }
-        },
-        grid: { left: 56, right: 16, top: 18, bottom: 28 },
-        xAxis: {
-          type: "category",
-          data: labels,
-          axisLine: { lineStyle: { color: c.border } },
-          axisLabel: { color: c.dim, fontSize: 11 }
-        },
-        yAxis: {
-          scale: true,
-          axisLabel: { color: c.dim, fontSize: 11 },
-          splitLine: { lineStyle: { color: c.border, type: "dashed" } }
-        },
-        dataZoom: [{ type: "inside", start: 55, end: 100 }],
-        series: [
-          {
-            type: "candlestick",
-            data: values,
-            itemStyle: {
-              color: c.up,
-              color0: c.down,
-              borderColor: c.up,
-              borderColor0: c.down
-            }
-          }
-        ]
-      },
-      true
-    );
-    chart.resize();
-  }
-
   /** 渲染指数表。
    * @param {Array} items 记录列表
    */

@@ -16,7 +16,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 import certifi
 import requests
@@ -119,15 +119,6 @@ def apply_netfix() -> Optional[Path]:
     return target
 
 
-def get_ca_bundle() -> Optional[str]:
-    """返回当前生效的 CA 证书路径，供诊断接口使用。
-
-    Returns:
-        str | None: 文本；缺失返回 None。
-    """
-    return str(_CERT_PATH) if _CERT_PATH else None
-
-
 def _make_base_session() -> "requests.Session":
     """创建基础会话（trust_env=False、浏览器 UA），不挂载重试适配器。
 
@@ -152,7 +143,6 @@ def make_session() -> "requests.Session":
         等价于「代理异常时自动回退直连」，符合规范 §6.5。
         仅 GET/HEAD 纳入重试（幂等方法），POST 不自动重试——避免非幂等操作重复执行。
     """
-    import requests
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
 
@@ -215,20 +205,3 @@ def http_request(method: str, url: str, *, timeout: Optional[int] = None,
         session.close()
 
 
-def make_curl_session() -> Any:
-    """创建 curl_cffi 会话，供需要浏览器指纹的源站使用。
-
-    Returns:
-        curl_cffi.requests.Session: 已关闭环境代理的会话。
-
-    Notes:
-        curl_cffi 的 trust_env 参数在不同小版本间可能缺省，
-        因此做一次兼容性回退，确保不会因参数不支持而崩溃。
-    """
-    from curl_cffi import requests as curl_requests
-
-    try:
-        return curl_requests.Session(trust_env=False, impersonate="chrome")
-    except TypeError:
-        # 旧版 curl_cffi 不支持 trust_env 关键字，退化为仅设置指纹
-        return curl_requests.Session(impersonate="chrome")

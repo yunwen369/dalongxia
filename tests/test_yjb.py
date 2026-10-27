@@ -13,7 +13,6 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
-from backend.app import config
 from backend.app.core import cache
 from backend.app.datasource import yangjibao as yjb
 from backend.app.main import app

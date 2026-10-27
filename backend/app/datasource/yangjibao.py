@@ -55,7 +55,6 @@ import hashlib
 import json
 import logging
 import os
-import secrets as py_secrets
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -289,15 +288,6 @@ def set_enabled(enabled: bool) -> Dict[str, Any]:
     state["enabled"] = bool(enabled)
     _save_state(state)
     return state
-
-
-def token_path_exists() -> bool:
-    """是否已存在 token 文件（不读取内容）。
-
-    Returns:
-        bool: 判定结果。
-    """
-    return YJB_TOKEN_FILE.exists()
 
 
 def load_token() -> Optional[Dict[str, Any]]:
@@ -1109,43 +1099,6 @@ def fetch_gz_data(fund_id: str) -> Dict[str, Any]:
     return detail
 
 
-def search_fund_id(code: str) -> str:
-    """按 6 位基金代码换取养基宝内部 ``fund_id``（真实接口 ``/search_fund``）。
-
-    先查持仓（免一次请求），未命中再走 ``/search_fund?keyword=&account_id=``。
-
-    Args:
-        code: 6 位基金代码。
-
-    Returns:
-        str: 养基宝内部 fund_id。
-
-    Raises:
-        NonRetryableError: 未绑定、接口不可用，或未找到该基金。
-    """
-    target = str(code or "").strip()
-    for item in get_holdings():
-        if str(item.get("code") or "").strip() == target:
-            value = item.get("fund_id")
-            if value not in (None, ""):
-                return str(value)
-    data = _plug_get("/search_fund", {"keyword": target, "account_id": resolve_account_id()})
-    items = data if isinstance(data, list) else []
-    if isinstance(data, dict):
-        for key in ("list", "fund_list", "data"):
-            if isinstance(data.get(key), list):
-                items = data[key]
-                break
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("code") or "").strip() == target:
-            value = item.get("id", item.get("fund_id"))
-            if value not in (None, ""):
-                return str(value)
-    raise NonRetryableError(f"养基宝未找到该基金：{target}")
-
-
 def status() -> Dict[str, Any]:
     """连接器状态（不含 token 与盐的取值）。
 
@@ -1201,10 +1154,3 @@ def status() -> Dict[str, Any]:
     }
 
 
-def new_session_id() -> str:
-    """生成备用会话 id（二维码接口不可用时不使用）。
-
-    Returns:
-        str: 会话 id（loginQrId 前缀 + 随机片段）。
-    """
-    return py_secrets.token_hex(8)

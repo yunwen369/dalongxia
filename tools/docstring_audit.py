@@ -21,7 +21,7 @@ import ast
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 SECTION_ARGS = re.compile(r"^\s*Args:\s*$", re.MULTILINE)
@@ -182,7 +182,7 @@ def audit_js(path: str) -> Dict[str, Any]:
         if not CJK_RE.search(doc):
             missing.append("summary")
         for param in params:
-            if f"@param" not in doc or not re.search(rf"@param\s*\{{[^}}]*\}}\s*{re.escape(param)}\b", doc):
+            if "@param" not in doc or not re.search(rf"@param\s*\{{[^}}]*\}}\s*{re.escape(param)}\b", doc):
                 missing.append("param:" + param)
         body = _js_body(source, match.end())
         if re.search(r"^\s*return\s+\S", body, re.MULTILINE) and "@returns" not in doc:

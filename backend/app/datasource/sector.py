@@ -471,20 +471,6 @@ def heatmap_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return nodes
 
 
-def get_heatmap(market: str = "cn", kind: str = "industry") -> List[Dict[str, Any]]:
-    """热力图节点（直接取数版本，供测试/独立调用；路由层复用缓存后的同一派生函数）。
-
-    Args:
-        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
-        kind: 类别：industry=行业 / concept=概念。
-
-    Returns:
-        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
-    """
-    source = get_concept(market) if kind == "concept" else get_industry(market)
-    return heatmap_from_items(source)
-
-
 def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[str, Any]:
     """由行情列表派生板块摘要：领涨/领跌/主力净流入 Top3 + 成交额集中度。
 
@@ -555,18 +541,6 @@ def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[
         "total_amount": _round(total, 2),
         "board_count": len(items),
     }
-
-
-def get_summary(market: str = "cn") -> Dict[str, Any]:
-    """板块摘要（直接取数版本）。
-
-    Args:
-        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return summary_from_items(get_industry(market), market)
 
 
 # =============================================================
@@ -951,10 +925,18 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         if wait:
             time.sleep(wait)
         polite_sleep()
-        frame = retry_call(
-            lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0)
-        )
-        rows = utils.clean_records(frame)
+        try:
+            frame = retry_call(
+                lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0)
+            )
+            rows = utils.clean_records(frame)
+        except (KeyError, IndexError, AttributeError) as exc:
+            # 第五轮阶段 5：akshare 解析申万空表/结构变动时会抛 KeyError(slice) 等
+            # （实测首次冷启动偶发一次，第二次即恢复）。这类异常属"本次无数据"，
+            # 不能穿透到降级链顶层当作整体失败，否则会把夜间单源抖动放大成全链路不可用。
+            logger.warning("申万成分解析异常（第 %d/3 次）：%s（%s）",
+                           attempt + 1, board, type(exc).__name__)
+            rows = []
         if rows:
             break
         logger.warning("申万成分为空（第 %d/3 次尝试）：%s", attempt + 1, board)
@@ -1064,40 +1046,6 @@ def get_cons_em(board: str) -> Dict[str, Any]:
     return {"board": board, "items": _sort_cons(_cons_em(board)), "source_hint": "东财"}
 
 
-def get_cons(board: str, market: str = "cn") -> Dict[str, Any]:
-    """板块成分股（内部顺序降级版本，供测试/独立调用）。
-
-    路由层使用 get_cons_sina / get_cons_sw / get_cons_em 三个独立候选，
-    以便降级命中时徽章显示真实源名（§8 双徽章要求）。
-
-    Args:
-        board: 板块名称（与板块树中的名称一致）。
-        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-
-    Raises:
-        ValueError: board 参数不可为空。
-    """
-    if not board:
-        raise ValueError("board 参数不可为空")
-    if market in ("hk", "us"):
-        return {"board": board, "items": [], "source_hint": "境外简化建模无成分股"}
-
-    errors: List[str] = []
-    for label, func in (("新浪", _cons_sina), ("申万", _cons_sw), ("东财", _cons_em)):
-        try:
-            items = func(board)
-            # 权重缺失时补 0 会误导，故保留 None；按涨跌幅降序更符合阅读习惯
-            items.sort(key=lambda item: (_num(item.get("pct")) is None, -(_num(item.get("pct")) or 0.0)))
-            return {"board": board, "items": items, "source_hint": label}
-        except Exception as exc:  # noqa: BLE001 - 逐级降级
-            errors.append(f"{label}:{type(exc).__name__}")
-            logger.info("板块成分降级：%s %s 失败（%s）", label, board, type(exc).__name__)
-    raise ValueError("板块成分全部通道失败：" + "，".join(errors))
-
-
 # 板块成分「不存在/暂无」冷却表（R2-10）：与 P1-03 同策略——先做本地存在性闸门，
 # 不存在立即失败，不再让三个源各等满超时（原实测 12.4s）。
 _CONS_MISS: Dict[str, float] = {}
@@ -1129,18 +1077,6 @@ def _known_board_names() -> set:
         except Exception:  # noqa: BLE001 - 单个列表失败不影响判定
             continue
     return {name for name in names if name}
-
-
-def _note_cons_miss(board: str) -> None:
-    """记录板块成分失败冷却（R2-10）：10 分钟内同板块直接快速失败。
-
-    Args:
-        board: 板块名称。
-
-    Returns:
-        None: 仅更新进程内状态。
-    """
-    _CONS_MISS[board] = time.time() + 600
 
 
 def _ensure_board_known(board: str) -> None:

@@ -20,7 +20,7 @@ import ast
 import os
 import re
 import textwrap
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import tempfile
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -87,16 +86,3 @@ def atomic_write_json(path: PathLike, payload: Any, *, indent: int = 2,
     atomic_write_text(path, json.dumps(payload, ensure_ascii=ensure_ascii, indent=indent), mode=mode)
 
 
-def harden_permissions(path: PathLike) -> None:
-    """尽力收紧文件权限（POSIX 0o600 / Windows 只读位不加）。
-
-    Args:
-        path: 目标文件路径。
-    """
-    target = Path(path)
-    try:
-        current = target.stat().st_mode
-        os.chmod(target, current & ~(stat.S_IRWXG | stat.S_IRWXO))
-    except OSError:
-        # 非 POSIX 或文件不存在时静默跳过（不影响主流程）
-        pass
