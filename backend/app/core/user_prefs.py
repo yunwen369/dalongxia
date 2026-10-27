@@ -4,7 +4,7 @@
 用途：需要用户明确 opt-in 的增强能力（如「盘中估值」）统一在这里存取，
 避免各模块各自读环境变量或写死常量。
 
-存储：`data/prefs.json`，结构 `{"fund_estimation": false, ...}`，原子写。
+存储：`data/user_prefs.json`，结构 `{"fund_estimation": false, ...}`，原子写。
 约束：
 1. 只允许**已登记**的键，未登记键读写均报错，防止拼写错误静默生效；
 2. 默认值全部为关闭（合规优先：不主动向用户展示估算数据）；
@@ -23,7 +23,7 @@ from backend.app.core import atomic
 
 logger = logging.getLogger(__name__)
 
-PREFS_FILE = config.DATA_DIR / "prefs.json"
+PREFS_FILE = config.DATA_DIR / "user_prefs.json"
 _LOCK = threading.Lock()
 _CACHE: Optional[Dict[str, bool]] = None
 

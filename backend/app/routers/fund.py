@@ -136,7 +136,7 @@ def fund_estimation_status() -> Dict[str, Any]:
     """
     return ok({
         "enabled": user_prefs.get_flag("fund_estimation"),
-        "source": "本地 data/prefs.json",
+        "source": "本地 data/user_prefs.json",
         "caliber": "盘中估值=非官方·拟合估算·仅供参考·不构成投资建议；关闭后回退 T+1 公布净值",
         "as_of": utils.now_text(),
     })
@@ -160,7 +160,7 @@ def fund_estimation_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any
         return api_error(ErrorCode.UPSTREAM_ERROR, str(exc))
     return ok({
         "enabled": prefs.get("fund_estimation", False),
-        "source": "本地 data/prefs.json",
+        "source": "本地 data/user_prefs.json",
         "caliber": "盘中估值=非官方·拟合估算·仅供参考·不构成投资建议；关闭后回退 T+1 公布净值",
         "as_of": utils.now_text(),
     })

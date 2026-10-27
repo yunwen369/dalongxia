@@ -74,7 +74,7 @@ desktop.ini
 data/yjb_state.json
 data/scan_tmp_*/
 # 用户偏好与自建布局（本地单机数据，不入库）
-data/prefs.json
+data/user_prefs.json
 data/dashboards.json
 data/connectors.json
 

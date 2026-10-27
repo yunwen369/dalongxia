@@ -201,7 +201,7 @@ def test_factory_reset_requires_confirm(tmp_path, monkeypatch) -> None:
 
     # 隔离：偏好文件重定向到临时目录（不碰真实 data/）
     monkeypatch.setattr(config, "AI_CONFIG_FILE", tmp_path / "ai_config.json")
-    prefs = tmp_path / "prefs.json"
+    prefs = tmp_path / "user_prefs.json"
     prefs.write_text('{"fund_estimation": true}', encoding="utf-8")
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
 
@@ -214,7 +214,7 @@ def test_factory_reset_requires_confirm(tmp_path, monkeypatch) -> None:
     }).json()
     assert ok["error"] is None
     assert "prefs" in ok["data"]["removed"]
-    assert not prefs.is_file(), "确认后应删除 prefs.json"
+    assert not prefs.is_file(), "确认后应删除 user_prefs.json"
     # 白名单外的 scope 被标记为未知，绝不当真执行
     assert set(ok["data"]["unknown_scopes"]) == {"portfolio", "watchlist"}
     assert "kept" in ok["data"]

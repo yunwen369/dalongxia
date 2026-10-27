@@ -118,7 +118,7 @@ def _factory_scopes() -> Dict[str, Path]:
         Dict[str, Path]: 应用偏好文件映射；**不含持仓/自选/密钥**。
     """
     return {
-        "prefs": config.DATA_DIR / "prefs.json",
+        "prefs": config.DATA_DIR / "user_prefs.json",
         "connectors": config.DATA_DIR / "connectors.json",
         "dashboards": config.DATA_DIR / "dashboards.json",
         "ai": config.AI_CONFIG_FILE,
