@@ -54,6 +54,69 @@ PAGES_JS_MARKERS = [
 ]
 
 
+# 门禁固定顺序（阶段 9）：①静态 → ②单测 → ③端点 → ④界面资源。
+# 任一失败即不得发版；pyflakes 本可拦住「F821 undefined name 'netfix'」这类 P1。
+STATIC_TARGET = "backend/app"
+STATIC_TIMEOUT = 180
+PYTEST_TIMEOUT = 900
+
+
+def _run_step(command: List[str], cwd: Path, timeout: int) -> Tuple[int, str]:
+    """执行门禁子步骤（异常也转为失败结果，不抛出）。
+
+    Args:
+        command: 命令与参数列表。
+        cwd: 工作目录。
+        timeout: 超时秒数。
+
+    Returns:
+        Tuple[int, str]: (退出码, 合并输出)；超时返回 -1，启动失败返回 -2。
+    """
+    try:
+        proc = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True,
+                              timeout=timeout, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return -1, f"超时（>{timeout}s）"
+    except OSError as exc:
+        return -2, f"{type(exc).__name__}: {exc}"
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+
+
+def _check_pyflakes(project: Path) -> Dict[str, Any]:
+    """静态检查：pyflakes 对 backend/app 必须零输出。
+
+    Args:
+        project: 工程根目录。
+
+    Returns:
+        Dict[str, Any]: ``{ok, exit_code, output}``；F821/F401 等任一告警都判失败。
+    """
+    code, out = _run_step([sys.executable, "-m", "pyflakes", STATIC_TARGET], project, STATIC_TIMEOUT)
+    return {"ok": code == 0 and not out.strip(), "exit_code": code, "output": out.strip()[-3000:]}
+
+
+def _check_pytest(project: Path) -> Dict[str, Any]:
+    """全量 pytest 必须全绿。
+
+    Args:
+        project: 工程根目录。
+
+    Returns:
+        Dict[str, Any]: ``{ok, exit_code, tail}``。
+
+    Notes:
+        basetemp 必须指向工程内目录：默认落 %TEMP% 时，pytest 收尾清理会触发
+        沙箱 safe-delete 批量阈值（>50 文件）导致进程异常退出。
+    """
+    stamp = datetime.now(BJ_TZ).strftime("%Y%m%d_%H%M%S")
+    basetemp = project / "build" / "_tmp" / f"gate_{stamp}"
+    basetemp.parent.mkdir(parents=True, exist_ok=True)
+    code, out = _run_step([sys.executable, "-m", "pytest", f"--basetemp={basetemp}",
+                           "-p", "no:cacheprovider"], project, PYTEST_TIMEOUT)
+    tail = "\n".join(out.strip().splitlines()[-8:])
+    return {"ok": code == 0, "exit_code": code, "tail": tail}
+
+
 def _bj_text() -> str:
     """返回北京时间的可读时间戳。
 
@@ -239,7 +302,26 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
         "responses": {},
         "passed": False,
         "notes": [],
+        "steps": [],
     }
+    # ---------- 步骤 1：静态检查（不依赖产物，最先失败最快反馈）----------
+    static = _check_pyflakes(PROJECT_DIR)
+    report["checks"]["pyflakes"] = static
+    report["steps"].append({"step": "1. pyflakes 静态检查（backend/app 须 0 输出）",
+                            "ok": static["ok"], "exit_code": static["exit_code"]})
+    if not static["ok"]:
+        report["notes"].append("pyflakes 未通过：未定义名 / 未用导入必须清零（见 checks.pyflakes.output）")
+        return report
+
+    # ---------- 步骤 2：全量 pytest ----------
+    unit = _check_pytest(PROJECT_DIR)
+    report["checks"]["pytest"] = unit
+    report["steps"].append({"step": "2. 全量 pytest", "ok": unit["ok"],
+                            "exit_code": unit["exit_code"]})
+    if not unit["ok"]:
+        report["notes"].append("pytest 未全绿：禁止发版（见 checks.pytest.tail）")
+        return report
+
     exe = artifact / "OpenBB-CN.exe"
     report["checks"]["exe"] = {"path": str(exe), "exists": exe.exists(),
                                "bytes": exe.stat().st_size if exe.exists() else 0}
@@ -308,9 +390,27 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
             "ok": bool(holdings_payload) and len(items) > 0 and not problems,
         }
 
+        # ---------- 步骤 3/4 结果入账（与 1/2 一起构成完整门禁链）----------
+        endpoint_ok = all(report["checks"][key]["ok"] for key in ("status", "collect", "holdings"))
+        report["steps"].append({
+            "step": "3. 端点全扫描（health / yjb status·collect·holdings）",
+            "ok": endpoint_ok,
+            "detail": {
+                "health_build": (report["checks"].get("health") or {}).get("build"),
+                "status_bound": (report["checks"].get("status") or {}).get("bound"),
+                "collect_total_assets": (report["checks"].get("collect") or {}).get("total_assets"),
+                "holdings_total": (report["checks"].get("holdings") or {}).get("total"),
+            },
+        })
+        report["steps"].append({
+            "step": "4. 界面资源取证（pages.js 5 项标记）",
+            "ok": bool((report["checks"].get("frontend") or {}).get("ok")),
+            "detail": {"bytes": (report["checks"].get("frontend") or {}).get("bytes")},
+        })
+
         gate_ok = all(report["checks"][key]["ok"]
                       for key in ("frontend", "credentials", "status", "collect", "holdings"))
-        report["passed"] = bool(gate_ok)
+        report["passed"] = bool(gate_ok) and all(s.get("ok") for s in report["steps"])
         if not report["checks"]["credentials"]["ok"]:
             report["notes"].append(
                 "凭据未落位：把源码树 data/yjb_token.json、yjb_secret.json 复制到产物 data/，"
@@ -340,6 +440,8 @@ def _print_report(report: Dict[str, Any]) -> None:
     print("OpenBB 中文投研工作台 · 发版门禁（打包产物实测）")
     print(f"时间：{report.get('as_of')}　产物：{report.get('artifact')}　端口：{report.get('port')}")
     print("-" * 66)
+    for step in report.get("steps") or []:
+        print(f"[{'OK' if step.get('ok') else 'FAIL'}] {step.get('step')}")
     exe = checks.get("exe") or {}
     print(f"[{'OK' if exe.get('exists') else 'FAIL'}] 主程序　{exe.get('bytes')} 字节　{exe.get('path')}")
     front = checks.get("frontend") or {}

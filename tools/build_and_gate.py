@@ -268,7 +268,19 @@ def deploy(target: Path) -> bool:
 
 
 def gate(target: Path, port: int) -> bool:
-    """调用发版门禁脚本（打包产物实测三项接口）。"""
+    """调用发版门禁脚本（固定顺序：pyflakes → 全量 pytest → 端点 → 界面资源）。
+
+    Args:
+        target: 产物目录。
+        port: 门禁端口。
+
+    Returns:
+        bool: 门禁是否通过。
+
+    Notes:
+        阶段 9：pyflakes 静态检查与全量 pytest 已并入 ``tools/release_gate.py``，
+        本函数不再单独实现，避免两套门禁漂移；任一步失败即禁止发版。
+    """
     script = PROJECT_DIR / "tools" / "release_gate.py"
     code = _run([sys.executable, str(script), "--artifact", str(target), "--port", str(port)],
                 PROJECT_DIR, "发版门禁（打包产物实测）")
@@ -292,6 +304,7 @@ def main() -> int:
     print("=" * 66)
     print(f"OpenBB 发版流水线　源码版本 {_read_version()}")
     print(f"产物：{DIST_DIR}\n目标：{target}\n门禁端口：{args.port}")
+    print("门禁顺序：① pyflakes ② 全量 pytest ③ 端点全扫描 ④ 界面资源取证（任一失败禁止发版）")
     print("=" * 66)
 
     if not args.gate_only:
