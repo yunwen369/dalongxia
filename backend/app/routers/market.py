@@ -156,9 +156,9 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
     Returns:
         dict: {data:{items,source,caliber,as_of,market_status,is_realtime},error,error_code}
     """
-    selected = (market or "all").lower()
-    if selected not in ("all", "a", "hk", "us"):
-        return _bad_request("market 仅支持 all/a/hk/us")
+    selected = utils.normalize_market(market, allow_all=True, default="all")
+    if selected is None:
+        return _bad_request(utils.market_error_message(allow_all=True))
     cache_key = f"market:index:{selected}"
 
     def loader() -> Dict[str, Any]:
@@ -267,9 +267,9 @@ def market_quote(
     Raises:
         NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
-    normalized_market = (market or "a").lower()
-    if normalized_market not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    normalized_market = utils.normalize_market(market)
+    if normalized_market is None:
+        return _bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
@@ -366,9 +366,9 @@ def market_kline(
     Raises:
         NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
-    normalized_market = (market or "a").lower()
-    if normalized_market not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    normalized_market = utils.normalize_market(market)
+    if normalized_market is None:
+        return _bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
         utils.period_to_tencent(period)
@@ -447,9 +447,9 @@ def market_minute(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    normalized_market = (market or "a").lower()
-    if normalized_market not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    normalized_market = utils.normalize_market(market)
+    if normalized_market is None:
+        return _bad_request(utils.market_error_message())
     period_value = str(period or "1min").lower().replace("min", "").replace("m", "")
     if period_value not in ("1", "5", "15", "30", "60"):
         return _bad_request("period 仅支持 1/5/15/30/60 分钟")
@@ -583,9 +583,9 @@ def market_profile(
     Raises:
         NonRetryableError: 仅降级链内部使用（东财快照熔断时由内层函数抛出，不向外抛出）。
     """
-    normalized_market = (market or "a").lower()
-    if normalized_market not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    normalized_market = utils.normalize_market(market)
+    if normalized_market is None:
+        return _bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:

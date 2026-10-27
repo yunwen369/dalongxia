@@ -134,7 +134,7 @@
       { id: "view:charting", group: "palette.views", label: t("nav.charting"), run: function () { location.hash = "#/charting"; } },
       { id: "view:sectors", group: "palette.views", label: t("nav.sectors"), run: function () { location.hash = "#/sectors"; } },
       { id: "view:stock", group: "palette.views", label: t("nav.stock"), run: function () { location.hash = "#/stock?symbol=688012&market=a"; } },
-      { id: "view:sector-val", group: "palette.views", label: t("nav.sectorVal"), run: function () { location.hash = "#/sector-val?board=半导体&market=cn"; } },
+      { id: "view:sector-val", group: "palette.views", label: t("nav.sectorVal"), run: function () { location.hash = "#/sector-val?board=半导体&market=a"; } },
       { id: "view:watchlist", group: "palette.views", label: t("nav.watchlist"), run: function () { location.hash = "#/watchlist"; } },
       { id: "view:lhb", group: "palette.views", label: t("nav.lhb"), run: function () { location.hash = "#/lhb"; } },
       { id: "view:news", group: "palette.views", label: t("nav.news"), run: function () { location.hash = "#/news"; } },

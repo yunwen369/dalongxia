@@ -159,12 +159,12 @@ def add_watchlist(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         dict: 统一返回结构；data.item 为落盘条目，data.created 表示是否新建。
     """
     raw_symbol = str(payload.get("symbol") or "").strip()
-    market = str(payload.get("market") or "a").lower()
+    market = utils.normalize_market(str(payload.get("market") or "a"), extra=("fund",))
     name = str(payload.get("name") or "").strip()
     if not raw_symbol:
         return api_error(ErrorCode.INVALID_PARAM, "symbol 不可为空。")
-    if market not in store._ALLOWED_MARKETS:
-        return api_error(ErrorCode.INVALID_PARAM, "market 仅支持 a/hk/us/fund。")
+    if market is None:
+        return api_error(ErrorCode.INVALID_PARAM, "market 仅支持 a/hk/us/fund（cn 为 a 的兼容别名）。")
     if market == "fund":
         symbol = raw_symbol.upper()
     else:
@@ -200,9 +200,9 @@ def remove_watchlist(symbol: str, market: str = Query("a", description="a/hk/us/
     Returns:
         dict: 统一返回结构；data.removed 表示是否删除了既有条目。
     """
-    normalized = (market or "a").lower()
-    if normalized not in store._ALLOWED_MARKETS:
-        return api_error(ErrorCode.INVALID_PARAM, "market 仅支持 a/hk/us/fund。")
+    normalized = utils.normalize_market(market, extra=("fund",))
+    if normalized is None:
+        return api_error(ErrorCode.INVALID_PARAM, "market 仅支持 a/hk/us/fund（cn 为 a 的兼容别名）。")
     removed = store.remove_item(symbol, normalized)
     return ok({
         "removed": removed,

@@ -32,12 +32,67 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 # 北京时区（UTC+8）：业务时间唯一口径，部署机器时区不同也不偏移（红线「时间一律北京时间」）。
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
-# 市场白名单（单一来源，SC-03/R3-21）：
-# - 行情/个股域（quote/stock）：a=A股、hk=港股、us=美股
-# - 板块域：cn=A股（国内）、hk=港股、us=美股
-# 两个域的 a/cn 语义不同：前端跨页跳转由 normSectorMarket 映射 a->cn，后端各域引用各自白名单。
-MARKET_WHITELIST_QUOTE = ("a", "hk", "us")
-MARKET_WHITELIST_SECTOR = ("cn", "hk", "us")
+# 市场枚举（第五轮阶段 4 统一口径）：
+# - **对外唯一口径 = a / hk / us**（行情、指数、个股、板块、新闻、财报搜索一致）；
+# - 板块数据源内部仍以 cn 表示 A 股，由 ``sector_source_market()`` 做 a→cn 映射，
+#   调用方不再需要关心该差异（前端也删除了 normSectorMarket 的 a↔cn 兜底）；
+# - ``cn`` 保留为 **a 的兼容别名**（历史书签/旧调用），归一化后一律按 a 处理并回写响应。
+MARKET_WHITELIST = ("a", "hk", "us")
+MARKET_WHITELIST_ALL = ("all", "a", "hk", "us")
+MARKET_WHITELIST_WATCHLIST = ("a", "hk", "us", "fund")
+MARKET_ALIASES = {"cn": "a"}
+
+# 兼容旧引用（第五轮前两套白名单并存），新代码请直接用 MARKET_WHITELIST
+MARKET_WHITELIST_QUOTE = MARKET_WHITELIST
+MARKET_WHITELIST_SECTOR = MARKET_WHITELIST
+
+
+def normalize_market(value: Optional[str], *, allow_all: bool = False,
+                     extra: tuple = (), default: str = "a") -> Optional[str]:
+    """归一化 market 参数（含别名与大小写）。
+
+    Args:
+        value: 原始入参（可为 None/空串）。
+        allow_all: 是否允许 ``all``（聚合口径，仅指数/新闻/财报搜索使用）。
+        extra: 额外允许的取值（如自选清单的 ``fund``）。
+        default: 入参为空时的默认值。
+
+    Returns:
+        Optional[str]: 归一后的 a/hk/us（或 all）；非法返回 None，由调用方转 INVALID_PARAM。
+
+    Notes:
+        ``cn`` 是 a 的历史别名，归一为 ``a``，响应中不再回显 cn —— 杜绝「后端两套、前端猜」。
+    """
+    text = str(value or "").strip().lower() or default
+    text = MARKET_ALIASES.get(text, text)
+    allowed = set(MARKET_WHITELIST_ALL if allow_all else MARKET_WHITELIST) | set(extra)
+    return text if text in allowed else None
+
+
+def sector_source_market(market: str) -> str:
+    """把对外市场口径映射为板块数据源内部口径（a→cn）。
+
+    Args:
+        market: 已归一化的 a/hk/us。
+
+    Returns:
+        str: 板块 provider 使用的 cn/hk/us。
+    """
+    return "cn" if market == "a" else market
+
+
+def market_error_message(allow_all: bool = False) -> str:
+    """生成 market 非法时的中文提示（与白名单同源，避免文案漂移）。
+
+    Args:
+        allow_all: 是否允许 all。
+
+    Returns:
+        str: 提示文案。
+    """
+    allowed = MARKET_WHITELIST_ALL if allow_all else MARKET_WHITELIST
+    alias = "（cn 为 a 的兼容别名）"
+    return f"market 仅支持 {'/'.join(allowed)}{alias}"
 
 
 def bj_now() -> datetime:

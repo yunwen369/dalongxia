@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 WATCHLIST_FILE = config.DATA_DIR / "watchlist.json"
 MAX_ITEMS = 100  # 单用户自选上限，防止误导入超大清单拖垮行情批量
 _LOCK = threading.Lock()
-_ALLOWED_MARKETS = ("a", "hk", "us", "fund")
+_ALLOWED_MARKETS = utils.MARKET_WHITELIST_WATCHLIST
 
 
 def _empty() -> Dict[str, Any]:
@@ -105,9 +105,9 @@ def add_item(symbol: str, market: str, name: str = "", note: str = "") -> Tuple[
         NonRetryableError: 超过上限或写入失败。
         ValueError: 市场不合法。
     """
-    normalized = (market or "a").lower()
-    if normalized not in _ALLOWED_MARKETS:
-        raise ValueError("market 仅支持 a/hk/us/fund")
+    normalized = utils.normalize_market(market, extra=("fund",))
+    if normalized is None:
+        raise ValueError("market 仅支持 a/hk/us/fund（cn 为 a 的兼容别名）")
     with _LOCK:
         payload = _read_raw()
         items = payload["items"]

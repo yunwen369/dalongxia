@@ -146,9 +146,9 @@ def stock_profile(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "a").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    selected = utils.normalize_market(market)
+    if selected is None:
+        return _bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
@@ -234,9 +234,9 @@ def stock_realtime_panel(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "a").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    selected = utils.normalize_market(market)
+    if selected is None:
+        return _bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
@@ -341,9 +341,9 @@ def stock_estimates(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "a").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 a/hk/us")
+    selected = utils.normalize_market(market)
+    if selected is None:
+        return _bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
         return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")

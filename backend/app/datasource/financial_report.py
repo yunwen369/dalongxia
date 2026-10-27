@@ -41,7 +41,7 @@ TYPE_VALUES: Tuple[str, ...] = (
     "全部", "年报", "半年报", "一季报", "三季报", "业绩预告", "招股书", "10-K", "10-Q", "8-K", "其他",
 )
 # 市场枚举：all=三市场合并
-MARKET_VALUES: Tuple[str, ...] = ("all", "a", "hk", "us")
+MARKET_VALUES: Tuple[str, ...] = utils.MARKET_WHITELIST_ALL
 # 时间范围枚举（近 N 天）
 SINCE_VALUES: Tuple[str, ...] = ("all", "7", "30", "90", "365")
 

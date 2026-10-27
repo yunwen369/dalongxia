@@ -193,7 +193,7 @@ def _concept_cached(market: str) -> Dict[str, Any]:
 
 
 @router.get("/industry")
-def sector_industry(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
+def sector_industry(market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）")) -> Dict[str, Any]:
     """行业板块行情列表（S-04 排行表数据源）。
 
     Args:
@@ -202,16 +202,18 @@ def sector_industry(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     result = _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": selected})
+        return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack(
-        {"items": items, "count": len(items), "market": selected, "kind": "industry"},
+        {"items": items, "count": len(items), "market": public_market, "kind": "industry"},
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -221,7 +223,7 @@ def sector_industry(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
 
 
 @router.get("/concept")
-def sector_concept(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
+def sector_concept(market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）")) -> Dict[str, Any]:
     """概念板块行情列表（S-05 排行表数据源）。
 
     Args:
@@ -230,16 +232,18 @@ def sector_concept(market: str = Query("cn", description="cn/hk/us")) -> Dict[st
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     result = _concept_cached(selected)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": selected})
+        return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack(
-        {"items": items, "count": len(items), "market": selected, "kind": "concept"},
+        {"items": items, "count": len(items), "market": public_market, "kind": "concept"},
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -253,7 +257,7 @@ def sector_concept(market: str = Query("cn", description="cn/hk/us")) -> Dict[st
 # =============================================================
 @router.get("/heatmap")
 def sector_heatmap(
-    market: str = Query("cn", description="cn/hk/us"),
+    market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）"),
     kind: str = Query("industry", description="industry/concept"),
 ) -> Dict[str, Any]:
     """热力图节点（S-03）。value=abs(涨跌幅)，pct 保留原值供颜色与标签使用。
@@ -265,20 +269,22 @@ def sector_heatmap(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     kind_value = (kind or "industry").lower()
     if kind_value not in ("industry", "concept"):
         return _bad_request("kind 仅支持 industry/concept")
 
     result = _concept_cached(selected) if kind_value == "concept" else _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"nodes": [], "market": selected, "kind": kind_value})
+        return _failure(result, {"nodes": [], "market": public_market, "kind": kind_value})
     nodes = sector_provider.heatmap_from_items(result["data"] or [])
     as_of, status, is_realtime = _status_now()
     return _pack(
-        {"nodes": nodes, "count": len(nodes), "market": selected, "kind": kind_value},
+        {"nodes": nodes, "count": len(nodes), "market": public_market, "kind": kind_value},
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -288,7 +294,7 @@ def sector_heatmap(
 
 
 @router.get("/summary")
-def sector_summary(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
+def sector_summary(market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）")) -> Dict[str, Any]:
     """板块摘要（S-06）：领涨/领跌/净流入 Top3 + 成交额集中度。
 
     Args:
@@ -297,13 +303,16 @@ def sector_summary(market: str = Query("cn", description="cn/hk/us")) -> Dict[st
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     result = _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"gainers": [], "losers": [], "inflow": [], "market": selected})
+        return _failure(result, {"gainers": [], "losers": [], "inflow": [], "market": public_market})
     summary = sector_provider.summary_from_items(result["data"] or [], selected)
+    summary = {**summary, "market": public_market}  # 对外口径 a/hk/us（第五轮阶段 4 统一）
     as_of, status, is_realtime = _status_now()
     return _pack(
         summary,
@@ -322,7 +331,7 @@ def sector_summary(market: str = Query("cn", description="cn/hk/us")) -> Dict[st
 def sector_kline(
     board: str = Query(..., description="板块名，如 半导体"),
     period: str = Query("daily", description="daily/weekly/monthly"),
-    market: str = Query("cn", description="cn/hk/us"),
+    market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）"),
 ) -> Dict[str, Any]:
     """板块指数 K 线（V-01）。
 
@@ -336,9 +345,11 @@ def sector_kline(
     """
     if not board.strip():
         return _bad_request("board 参数不可为空")
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
 
     cache_key = f"sector:kline:{selected}:{board}:{period}"
 
@@ -371,7 +382,7 @@ def sector_kline(
         # 板块指数 K 线属派生能力：同花顺禁用后由申万指数承接（§13.6-2），
         # 申万名录未收录该板块名时按「空态 + 中文说明」处理，不伪装成通道故障。
         return _pack(
-            {"items": [], "board": board, "period": period, "market": selected, "available": False},
+            {"items": [], "board": board, "period": period, "market": public_market, "available": False},
             "本地口径",
             "暂未收录该板块的指数序列（同花顺通道在安装版不可用，申万行业名录未覆盖该名称）。"
             "可查看板块行情或用同源行业（如「半导体设备」）对比。",
@@ -386,6 +397,7 @@ def sector_kline(
         {
             "board": data.get("board", board),
             "period": data.get("period", period),
+            "market": public_market,
             "items": items,
             "model": data.get("model"),
             "index_code": data.get("index_code"),
@@ -401,7 +413,7 @@ def sector_kline(
 @router.get("/cons")
 def sector_cons(
     board: str = Query(..., description="板块名"),
-    market: str = Query("cn", description="cn/hk/us"),
+    market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）"),
 ) -> Dict[str, Any]:
     """板块成分股（V-03）。
 
@@ -414,9 +426,11 @@ def sector_cons(
     """
     if not board.strip():
         return _bad_request("board 参数不可为空")
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
 
     cache_key = f"sector:cons:{selected}:{board}"
 
@@ -424,7 +438,7 @@ def sector_cons(
         return api_error(
             ErrorCode.EMPTY_DATA,
             "港美股板块暂无免费成分股通道，已如实标注不可用。",
-            data={"items": [], "board": board},
+            data={"items": [], "board": board, "market": public_market},
         )
 
     def loader() -> Dict[str, Any]:
@@ -449,12 +463,13 @@ def sector_cons(
 
     result = cache.get_or_load(cache_key, config.TTL["cons"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "board": board})
+        return _failure(result, {"items": [], "board": board, "market": public_market})
     data = result["data"] or {}
     as_of, status, is_realtime = _status_now()
     return _pack(
         {
             "board": data.get("board", board),
+            "market": public_market,
             "items": data.get("items") or [],
             "source_hint": data.get("source_hint"),
         },
@@ -470,7 +485,7 @@ def sector_cons(
 # 四、资金流 / 趋势
 # =============================================================
 @router.get("/fundflow")
-def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[str, Any]:
+def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）")) -> Dict[str, Any]:
     """板块资金流向（S-07）。主力净额/流入/流出为真实值；超大单/大单源不提供，返回 None。
 
     Args:
@@ -479,14 +494,16 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     if selected in ("hk", "us"):
         return api_error(
             ErrorCode.EMPTY_DATA,
             "港美股板块资金流暂无免费通道，已如实标注不可用。",
-            data={"items": [], "market": selected},
+            data={"items": [], "market": public_market},
         )
 
     if not config.V8_SOURCES_ENABLED:
@@ -495,7 +512,7 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
         # ak.stock_fund_flow_concept 名义"概念"实为同花顺 V8 源、自下而上聚合需数百次
         # HTTP 不可行。故如实返回空态 + 指引（改用个股四档资金流，该通道纯 HTTP 可用）。
         return _pack(
-            {"items": [], "count": 0, "market": selected, "available": False},
+            {"items": [], "count": 0, "market": public_market, "available": False},
             "本地口径",
             "安装版不提供板块资金流（唯一来源为同花顺 V8 通道，规范 §13.6-2 禁用）。"
             "可改用「个股 → 资金分布」查看单只标的的四档真实资金流。",
@@ -518,11 +535,11 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
 
     result = cache.get_or_load(f"sector:fundflow:{selected}", config.TTL["fund_flow"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": selected})
+        return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack(
-        {"items": items, "count": len(items), "market": selected},
+        {"items": items, "count": len(items), "market": public_market},
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -535,7 +552,7 @@ def sector_fundflow(market: str = Query("cn", description="cn/hk/us")) -> Dict[s
 def sector_trend(
     boards: str = Query(..., description="逗号分隔板块名，最多 6 个"),
     days: int = Query(30, ge=5, le=120, description="取最近 N 个交易日"),
-    market: str = Query("cn", description="cn/hk/us"),
+    market: str = Query("a", description="a/hk/us（cn 为 a 的兼容别名）"),
 ) -> Dict[str, Any]:
     """多板块归一化走势对比（首个交易日=100），由板块 K 线聚合，不额外编造数据。
 
@@ -547,9 +564,11 @@ def sector_trend(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    selected = (market or "cn").lower()
-    if selected not in _ALLOWED_MARKETS:
-        return _bad_request("market 仅支持 cn/hk/us")
+    normalized = utils.normalize_market(market)
+    if normalized is None:
+        return _bad_request(utils.market_error_message())
+    selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
+    public_market = normalized                           # 对外口径 a/hk/us
     names = [item.strip() for item in (boards or "").split(",") if item.strip()]
     if not names:
         return _bad_request("boards 参数不可为空")
@@ -582,6 +601,7 @@ def sector_trend(
         {
             "boards": names,
             "days": days,
+            "market": public_market,
             "base": data.get("base", 100),
             "series": data.get("series") or [],
             "failures": data.get("failures") or [],

@@ -37,7 +37,7 @@ router = APIRouter(prefix="/api/news", tags=["新闻"])
 
 _SORTS = ("time", "impact", "relevance")
 _AI_FEED_REGIONS = ("global", "cn")
-_MARKETS = ("all", "a", "hk", "us")
+_MARKETS = utils.MARKET_WHITELIST_ALL
 
 
 def _bad(message: str) -> Dict[str, Any]:
@@ -370,8 +370,9 @@ def news_ai_feed(
         return _bad("sort 仅支持 relevance/time/impact")
     if region not in _AI_FEED_REGIONS:
         return _bad("region 仅支持 global/cn")
-    if market not in _MARKETS:
-        return _bad("market 仅支持 all/a/hk/us")
+    market = utils.normalize_market(market, allow_all=True, default="all") or ""
+    if not market:
+        return _bad(utils.market_error_message(allow_all=True))
 
     board_list = [item.strip() for item in (boards or "").split(",") if item.strip()]
     unknown = [item for item in board_list if news_provider.resolve_board(item) is None]
@@ -581,8 +582,10 @@ def financial_search(
         参数非法一律返回 INVALID_PARAM 中文提示，不发起上游请求；
         单市场失败不整体失败，原因写入 caliber 由前端呈现（不补零、不造数）。
     """
-    if market not in financial_report.MARKET_VALUES:
-        return _bad("market 参数不合法，仅支持 all / a / hk / us。")
+    # 第五轮阶段 4：market 口径统一 a/hk/us（cn 为兼容别名，归一后回写）
+    market = utils.normalize_market(market, allow_all=True, default="all") or ""
+    if not market:
+        return _bad(utils.market_error_message(allow_all=True))
     if type_value not in financial_report.TYPE_VALUES:
         return _bad("type 参数不合法，请从「全部/年报/半年报/一季报/三季报/业绩预告/招股书/10-K/10-Q/8-K/其他」中选择。")
     if since not in financial_report.SINCE_VALUES:

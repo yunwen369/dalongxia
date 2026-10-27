@@ -68,9 +68,9 @@
 
   // 页面会话状态：市场/口径/标的，用于 Tab 切换时保留上下文
   var state = {
-    sectors: { market: "cn", kind: "industry" },
+    sectors: { market: "a", kind: "industry" },
     stock: { symbol: "688012", market: "a", tab: "kline", finTab: "summary" },
-    sectorVal: { board: "", market: "cn" },
+    sectorVal: { board: "", market: "a" },
     // 图表分析页状态：标的选择 + 周期/复权/指标开关 + K线/分时 Tab + 画线开关
     charting: { symbol: "688012", market: "a", period: "日k", adjust: "qfq", tab: "kline", draw: false },
     // 设置页状态：AI 配置表单（api_key 留空表示保留原值，与后端契约一致）
@@ -571,7 +571,7 @@
     // S-01 市场切换
     var marketTabs = el("div", "pg-tabs");
     marketTabs.id = "S-01";
-    [["cn", t("sectors.market.cn")], ["hk", t("sectors.market.hk")], ["us", t("sectors.market.us")]].forEach(function (item) {
+    [["a", t("sectors.market.cn")], ["hk", t("sectors.market.hk")], ["us", t("sectors.market.us")]].forEach(function (item) {
       var button = el("button", "pg-tab", item[1]);
       button.type = "button";
       button.setAttribute("data-market", item[0]);
@@ -683,7 +683,7 @@
     if (value === "us") {
       return "us";
     }
-    return "cn";  // a / cn / 空值 一律视为国内市场
+    return "a";  // a / cn / 空值 一律视为 A 股（后端已统一 a 口径，此处仅做兜底）
   }
 
   /** 渲染板块页。
@@ -744,11 +744,11 @@
 
     // DS-07：行业与概念两张排行表各自独立取数、同时常驻，互不替代；
     // S-02 的行业/概念切换只决定 S-03 热力图口径（基准 §3.4 两表分别绑定 industry/concept 接口）。
-    var conceptTask = market === "cn"
-      ? api("/api/sector/concept", { market: "cn" })
+    var conceptTask = market === "a"
+      ? api("/api/sector/concept", { market: "a" })
       : Promise.resolve(null);
     // 资金流仅 A股有免费通道（同花顺行业资金流）；港美股不发请求，避免整页因单块 4xx 被判失败
-    var flowTask = market === "cn"
+    var flowTask = market === "a"
       ? api("/api/sector/fundflow", { market: market })
       : Promise.resolve(null);
     Promise.all([
@@ -806,7 +806,7 @@
     if (!bodies.s03) {
       return;
     }
-    var degrade = payload.list.source && payload.list.source !== "同花顺" && market === "cn";
+    var degrade = payload.list.source && payload.list.source !== "同花顺" && market === "a";
 
     // ---- S-03 热力图 ----
     setBadges(cards.s03, payload.heat.source, payload.heat.caliber, degrade);
@@ -918,7 +918,7 @@
     // ---- S-05 概念排行表（DS-07：独立第二表，不再与 S-04 互换） ----
     if (payload.concept) {
       paintRankTable(bodies.s05, cards.s05, payload.concept, market,
-        payload.concept.source && payload.concept.source !== "同花顺" && market === "cn");
+        payload.concept.source && payload.concept.source !== "同花顺" && market === "a");
     } else {
       setBadges(cards.s05, "", "", false);
       setEmpty(bodies.s05, t("sectors.conceptOverseas"), function () {
@@ -931,7 +931,7 @@
     paintSummary(bodies.s06, payload.summary);
 
     // ---- S-07 资金流向（行业口径常驻：概念板块无免费资金流口径，不在两张排行表之间切换） ----
-    if (market !== "cn") {
+    if (market !== "a") {
       setBadges(cards.s07, "", "", false);
       setEmpty(bodies.s07, t("sectors.overseasFlow"), function () {
         loadSectors(true);
@@ -2256,7 +2256,7 @@
     }
     var label = document.getElementById("val-board-label");
     if (label) {
-      label.textContent = t("val.boardLabel") + (state.sectorVal.board || t("val.placeholder.unselected")) + "（" + (state.sectorVal.market === "cn" ? t("sectors.market.cn") : state.sectorVal.market === "hk" ? t("sectors.market.hk") : t("sectors.market.us")) + "）";
+      label.textContent = t("val.boardLabel") + (state.sectorVal.board || t("val.placeholder.unselected")) + "（" + (state.sectorVal.market === "a" ? t("sectors.market.cn") : state.sectorVal.market === "hk" ? t("sectors.market.hk") : t("sectors.market.us")) + "）";
     }
     loadSectorVal();
   }
