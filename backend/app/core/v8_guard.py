@@ -169,7 +169,7 @@ def _record_failure(exc: BaseException) -> None:
 
 def _record_success() -> None:
     """记录一次引擎调用成功，清零失败计数并关闭熔断。"""
-    global _V8_FAIL_STREAK, _V8_SUCCESS_AT, _V8_OPEN_UNTIL, _V8_PROBE_PENDING
+    global _V8_FAIL_STREAK, _V8_FAIL_WINDOW_START, _V8_SUCCESS_AT, _V8_OPEN_UNTIL, _V8_PROBE_PENDING
     with _V8_STATE_LOCK:
         _V8_FAIL_STREAK = 0
         _V8_FAIL_WINDOW_START = 0.0
