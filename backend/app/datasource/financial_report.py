@@ -18,6 +18,7 @@ import json
 import logging
 import time
 import re
+import zlib
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -938,3 +939,205 @@ def search_filings(
         }
 
     return cache.get_or_load(key, _LIST_TTL, _load)
+
+
+# =============================================================
+# 五、A 股公告正文详情（详情弹窗按需拉取，阶段 11）
+# =============================================================
+
+# 东财公告正文接口（np-cnotice-stock，与列表备源同属东财公告库）
+_EM_CONTENT = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+# 详情正文缓存 30 分钟：正文一经披露不再变化，缓存只为减少重复拉取与源站压力
+_DETAIL_TTL = 1800
+# 正文返回上限（字符）：弹窗展示场景，超长正文节选并在 caliber 注明，不整篇回传
+_DETAIL_MAX_CHARS = 6000
+# 标题归一时剔除的标点/空白（跨源比对：巨潮与东财的标点习惯不一致）
+_TITLE_STRIP_RE = re.compile(r"[\s:：,，。.·\-—()（）\[\]【】\"'“”]")
+
+
+def _norm_cn_title(title: str) -> str:
+    """把公告标题归一为跨源可比对的键。
+
+    处理三件事：剥 HTML 标签、剥东财「公司名:」前缀、剔除全部标点与空白后转小写。
+
+    Args:
+        title: 公告标题原文（巨潮或东财）。
+
+    Returns:
+        str: 归一标题键；输入为空返回空串。
+    """
+    text = re.sub(r"<[^>]+>", "", str(title or ""))
+    if ":" in text:  # 东财标题固定带「公司名:」前缀（探针实测），先剥离再比对
+        text = text.split(":", 1)[1]
+    return _TITLE_STRIP_RE.sub("", text).strip().lower()
+
+
+def _em_content(art_code: str) -> Tuple[str, str]:
+    """拉取东财公告正文（np-cnotice-stock/api/content/ann）。
+
+    Args:
+        art_code: 东财公告唯一编号（如 AN202608141827994407）。
+
+    Returns:
+        Tuple[str, str]: (正文文本, 东财侧公告标题)。
+
+    Raises:
+        RuntimeError: 接口非 200 或返回结构异常（通道异常，由上层转错误态）。
+    """
+    resp = netfix.http_request(
+        "GET",
+        _EM_CONTENT,
+        params={"art_code": art_code, "client_source": "web", "page_index": 1},
+        headers={"Referer": "https://data.eastmoney.com/notices/"},
+        timeout=config.DATASOURCE_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"东财公告正文 HTTP {resp.status_code}")
+    data = (resp.json() or {}).get("data") or {}
+    content = str(data.get("notice_content") or "").replace("\r\n", "\n").strip()
+    return content, str(data.get("notice_title") or "")
+
+
+def _match_em_art(title: str, code: str, pub_time: str) -> Optional[str]:
+    """用「代码 + 归一标题 + 公告日」在东财公告列表中定位 art_code（跨源交叉验证）。
+
+    Args:
+        title: 巨潮侧公告标题。
+        code: 6 位证券代码（空串时无法定向检索，直接返回 None）。
+        pub_time: 巨潮侧发布时间（北京时间，可能只精确到日）。
+
+    Returns:
+        Optional[str]: 三要素（标题全等 + 代码一致 + 同日）校验通过的 art_code；
+        任一环节不过返回 None（调用方按「验证未通过」给空态，不猜造）。
+    """
+    code = (code or "").strip()
+    if not (code.isdigit() and len(code) == 6):
+        return None
+    try:
+        rows, _total = _em_query(stock_list=code, page=1, page_size=50)
+    except Exception as exc:  # noqa: BLE001 - 通道异常向上抛，由路由转错误态
+        raise RuntimeError(f"东财公告备源列表异常：{exc}") from exc
+    want_title = _norm_cn_title(title)
+    want_day = (pub_time or "")[:10]
+    for row in rows:
+        if not row.get("title") or _norm_cn_title(row["title"]) != want_title:
+            continue
+        row_art = ""
+        match = re.search(r"/notices/detail/([A-Za-z0-9]+)\.html", str(row.get("docUrl") or ""))
+        if match:
+            row_art = match.group(1)
+        # 公告日校验：巨潮标题含年份，同标题可能跨年复现（如权益分派实施公告）。
+        # 巨潮对多数记录只精确到日（UTC 整点换算北京时间可能跨到次日），
+        # 故允许双侧日期相差 ≤1 天；往期同名公告至少相差数月，不会误匹配。
+        row_day = (row.get("pubTime") or "")[:10]
+        if want_day and row_day:
+            diff = _day_diff(want_day, row_day)
+            if diff is None or diff > 1:
+                continue
+        if row_art:
+            return row_art
+    return None
+
+
+def _day_diff(day_a: str, day_b: str) -> Optional[int]:
+    """计算两个日期串（YYYY-MM-DD）相差天数；任一不可解析返回 None。"""
+    try:
+        da = datetime.strptime(day_a[:10], "%Y-%m-%d").date()
+        db = datetime.strptime(day_b[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return abs((da - db).days)
+
+
+def cn_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
+    """A 股公告正文详情（详情弹窗按需拉取）。
+
+    两条取数链（阶段 11 交叉验证口径）：
+    - 东财来源记录：docUrl 直接含 art_code，单源直取（verified=False）；
+    - 巨潮来源记录：docUrl 为 PDF 链接，按「代码 + 归一标题全等 + 公告日同日」
+      在东财公告列表交叉定位 art_code 后取正文（verified=True，双源一致）。
+
+    Args:
+        title: 公告标题（列表行原样回传）。
+        code: 6 位证券代码。
+        pub_time: 发布时间（列表行原样回传）。
+        doc_url: 原文链接（列表行原样回传）。
+
+    Returns:
+        Dict[str, Any]: ``{content, source, verified, truncated, caliber, as_of}``；
+        验证未通过或正文缺失时 content 为空串并给中文 caliber，绝不造数。
+    """
+    title = str(title or "").strip()
+    code = str(code or "").strip()
+    pub_time = str(pub_time or "").strip()
+    doc_url = str(doc_url or "").strip()
+
+    # 链路一：东财来源，docUrl 直含 art_code
+    art = ""
+    match = re.search(r"/notices/detail/([A-Za-z0-9]+)\.html", doc_url)
+    if match:
+        art = match.group(1)
+    verified = False
+
+    # 链路二：巨潮来源（PDF 链接或无 docUrl），跨源交叉验证定位
+    if not art:
+        found = _match_em_art(title, code, pub_time)
+        if not found:
+            return {
+                "content": "",
+                "source": "东方财富",
+                "verified": False,
+                "truncated": False,
+                "caliber": (
+                    "未能通过交叉验证取得正文（巨潮标题未能在东财公告库中按"
+                    "「标题+代码+公告日」匹配到唯一记录），请直接打开原文查看"
+                ),
+                "as_of": _bj_now_text(),
+            }
+        art = found
+        verified = True
+
+    content, _em_title = _em_content(art)
+    if not content:
+        # 源站该公告无文本版正文（如纯表格/图片型公告）→ 空态说明，不造数
+        return {
+            "content": "",
+            "source": "东方财富",
+            "verified": verified,
+            "truncated": False,
+            "caliber": "东财公告库该记录无文本版正文（常见于纯表格/图片型公告），请直接打开原文查看",
+            "as_of": _bj_now_text(),
+        }
+    truncated = len(content) > _DETAIL_MAX_CHARS
+    caliber = (
+        "正文来自东财公告库（文本版），与巨潮披露标题经「标题+代码+公告日」三重比对一致"
+        if verified
+        else "正文来自东财公告库（文本版），为该公告的直接来源"
+    )
+    if truncated:
+        caliber += f"；超长正文节选前 {_DETAIL_MAX_CHARS} 字，完整内容请打开原文"
+    return {
+        "content": content[:_DETAIL_MAX_CHARS],
+        "source": "东方财富",
+        "verified": verified,
+        "truncated": truncated,
+        "caliber": caliber,
+        "as_of": _bj_now_text(),
+    }
+
+
+def cn_detail_cached(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
+    """带缓存的 A 股公告正文详情。
+
+    Args:
+        title: 公告标题。
+        code: 6 位证券代码。
+        pub_time: 发布时间。
+        doc_url: 原文链接。
+
+    Returns:
+        Dict[str, Any]: 同 :func:`cn_detail`。
+    """
+    digest = f"{title}|{code}|{pub_time}|{doc_url}"
+    key = f"findetail:a:{zlib.crc32(digest.encode('utf-8')):08x}"
+    return cache.get_or_load(key, _DETAIL_TTL, lambda: cn_detail(title=title, code=code, pub_time=pub_time, doc_url=doc_url))

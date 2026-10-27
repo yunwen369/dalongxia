@@ -1341,6 +1341,21 @@ html[data-font="lg"] {
   line-height: 1.7;
   max-height: 280px;
   overflow-y: auto;
+  /* 阶段 11：A 股详情按需拉取的正文为多段文本，保留源站换行 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 阶段 11：A 股详情按需拉取的加载态与口径说明 */
+.m-body.m-loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.m-caliber {
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
 }
 .m-link {
   display: inline-flex;

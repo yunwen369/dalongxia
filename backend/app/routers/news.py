@@ -608,3 +608,52 @@ def financial_search(
         # 空态与错误态严格分离：这里返回成功信封 + 空列表 + 口径说明（红线「空/错分离」）
         data["caliber"] = data.get("caliber") or "未检索到匹配的财报/公告，请调整关键词、类型或时间范围"
     return ok(data)
+
+
+@router.get("/financial-detail")
+def financial_detail(
+    title: str = Query("", max_length=200, description="公告标题（列表行原样回传）"),
+    code: str = Query("", max_length=10, description="6 位证券代码"),
+    pub_time: str = Query("", max_length=20, description="发布时间（列表行原样回传）"),
+    doc_url: str = Query("", max_length=500, description="原文链接（列表行原样回传）"),
+) -> Any:
+    """A 股公告正文详情（详情弹窗按需拉取，仅 A 股市场）。
+
+    Args:
+        title: 公告标题（巨潮/东财来源原样回传，服务端负责归一比对）。
+        code: 6 位证券代码。
+        pub_time: 发布时间。
+        doc_url: 原文链接（东财来源含 art_code 直取；巨潮来源走跨源交叉验证）。
+
+    Returns:
+        Any: 统一信封 `{data, error, error_code}`；
+        data 含 content/source/verified/truncated/caliber/as_of。
+
+    Notes:
+        安全约束：doc_url 仅接受巨潮/东财已知域名前缀，其余一律 INVALID_PARAM；
+        交叉验证不过返回成功信封 + 空 content + 中文口径（空/错分离，不造数）。
+    """
+    title = (title or "").strip()
+    doc_url = (doc_url or "").strip()
+    if not title and not doc_url:
+        return _bad("缺少公告标识（title 或 doc_url 至少一项），无法拉取正文。")
+    if doc_url and not (
+        doc_url.startswith("https://np-anotice-stock.eastmoney.com/")
+        or doc_url.startswith("https://data.eastmoney.com/notices/detail/")
+        or doc_url.startswith("https://static.cninfo.com.cn/")
+    ):
+        return _bad("doc_url 来源不在支持的公告源（巨潮资讯/东方财富）内，已拒绝处理。")
+
+    try:
+        data = financial_report.cn_detail_cached(
+            title=title, code=(code or "").strip(), pub_time=(pub_time or "").strip(), doc_url=doc_url
+        )
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转中文错误态
+        logger.warning("A 股公告正文拉取失败：%s", exc)
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            "公告正文拉取失败（源站限频或网络不通），请稍后重新打开重试。",
+            data={"content": "", "source": "—", "verified": False,
+                  "truncated": False, "caliber": "上游异常", "as_of": utils.now_text()},
+        )
+    return ok(data)

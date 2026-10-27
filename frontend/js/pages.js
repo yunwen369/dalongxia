@@ -2839,7 +2839,14 @@
 
     modal.appendChild(el("div", "m-sec", t("fs.summary")));
     // 源站不提供摘要时不编造：如实说明「未提供」并引导看原文
-    modal.appendChild(el("div", "m-body", item.summary || t("fs.summaryNone")));
+    var bodyNode = el("div", "m-body", item.summary || t("fs.summaryNone"));
+    modal.appendChild(bodyNode);
+
+    // 阶段 11：A 股列表源站不提供摘要 → 打开弹窗时按需拉取正文
+    //（东财来源直取；巨潮来源经后端「标题+代码+公告日」交叉验证后取，验证不过给说明不造数）
+    if ((item.market || "") === "a") {
+      fsLoadCnDetail(modal, bodyNode, item);
+    }
 
     modal.appendChild(el("div", "m-sec", t("fs.docLink", { source: item.source || "—" })));
     var link = el("a", "m-link", item.docUrl || t("value.none"));
@@ -2874,6 +2881,42 @@
       }
     });
     document.body.appendChild(mask);
+  }
+
+  /** 阶段 11：A 股详情正文按需拉取（弹窗打开后异步加载，四态齐备）。
+   * @param {HTMLElement} modal 弹窗容器（用于挂口径行与判断弹窗是否已关闭）
+   * @param {HTMLElement} bodyNode 摘要/正文体节点
+   * @param {Object} item 单条记录（title/code/pubTime/docUrl 原样回传后端）
+   */
+  function fsLoadCnDetail(modal, bodyNode, item) {
+    bodyNode.textContent = t("fs.detailLoading");
+    bodyNode.classList.add("m-loading");
+    window.Utils.api("/api/news/financial-detail", {
+      title: item.title || "",
+      code: item.code || "",
+      pub_time: item.pubTime || "",
+      doc_url: item.docUrl || ""
+    }).then(function (data) {
+      if (!document.body.contains(modal)) {
+        return;  // 弹窗已关闭，过期响应丢弃
+      }
+      bodyNode.classList.remove("m-loading");
+      if (data && data.content) {
+        bodyNode.textContent = data.content;
+        var caliber = el("div", "m-caliber",
+          (data.verified ? t("fs.verified") : t("fs.unverified"))
+          + " · " + (data.caliber || ""));
+        modal.insertBefore(caliber, bodyNode.nextSibling);
+      } else {
+        bodyNode.textContent = (data && data.caliber) || t("fs.summaryNone");
+      }
+    }).catch(function () {
+      if (!document.body.contains(modal)) {
+        return;
+      }
+      bodyNode.classList.remove("m-loading");
+      bodyNode.textContent = t("fs.detailFailed");
+    });
   }
 
   /** 拉取财报/公告结果（reset=true 重新检索，false 追加下一页）。
