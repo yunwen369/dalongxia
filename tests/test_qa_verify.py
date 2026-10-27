@@ -1443,13 +1443,30 @@ def test_p104_kline_preferred_source_memory() -> None:
     assert resilient.preferred_source("market:kline:us") == data["source"]
 
 
-def test_yjb_collect_and_holdings_real() -> None:
+def test_yjb_collect_and_holdings_real(monkeypatch) -> None:
     """养基宝工作台接入：账户概览与持仓估值（未绑定时退化为契约断言）。
 
     本用例不隔离 token，因此能读到本机真实绑定态：
     - 已绑定 → 断言真实字段与口径自洽
     - 未绑定 → 只断言降级契约（UPSTREAM_ERROR + 明确文案 + 不给假数），不 skip
+
+    Args:
+        monkeypatch: pytest 补丁器（用于把养基宝路径指回真实 data/，只读不写）。
+
+    Notes:
+        第五轮阶段 2 起，``conftest`` 默认把 data 目录隔离到 ``tmp_path``
+        （防止 pytest 改写 portfolio 等用户数据）；本用例按设计需读真实绑定态，
+        故显式覆盖回真实路径 —— 仅读取 token/state，不做任何写入。
     """
+    import pathlib as _pathlib
+
+    from backend.app.datasource import yangjibao as _yjb
+
+    real_data = _pathlib.Path(__file__).resolve().parents[1] / "data"
+    monkeypatch.setattr(_yjb, "YJB_TOKEN_FILE", real_data / "yjb_token.json")
+    monkeypatch.setattr(_yjb, "YJB_STATE_FILE", real_data / "yjb_state.json")
+    monkeypatch.setattr(_yjb, "YJB_SECRET_FILE", real_data / "yjb_secret.json")
+
     status = _success("/api/fund/yjb/status", {})
     if not status.get("bound"):
         for path in ("/api/fund/yjb/collect", "/api/fund/yjb/holdings"):

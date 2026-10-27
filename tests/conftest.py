@@ -25,7 +25,11 @@ from backend.app import config
 from backend.app.core import audit as audit_module
 from backend.app.core import cache as cache_module
 from backend.app.core import resilient, source_prefs, user_prefs, v8_guard
+from backend.app.datasource import dashboards as dashboards_module
+from backend.app.datasource import portfolio as portfolio_module
 from backend.app.datasource import tencent
+from backend.app.datasource import watchlist as watchlist_module
+from backend.app.datasource import yangjibao as yangjibao_module
 
 
 def _reset_process_state() -> None:
@@ -64,6 +68,22 @@ def isolate_process_state(monkeypatch, tmp_path):
     # RT-01 审计日志同样隔离：破坏性端点用例会逐条落审计，绝不能写进真实 data/audit/
     # （真实审计文件是用户本机的安全痕迹，被测试覆盖就失去取证价值）
     monkeypatch.setattr(audit_module, "AUDIT_FILE", tmp_path / "audit" / "yjb_audit.jsonl")
+    # 第五轮阶段 2：数据文件全面隔离（此前只有 CACHE_DIR / AI_CONFIG_FILE）
+    # 实测缺陷：tests/test_qa_verify.py 的 POST /api/portfolio 会改写真实
+    # data/portfolio.json（54B→56B），等于每次跑 pytest 都改用户数据字节。
+    # 这些常量在模块导入时求值，故必须逐个 patch 到 tmp_path；
+    # 同时把 config.DATA_DIR 指向 tmp，覆盖运行时动态拼接的路径（如 cache.layout）。
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "DATA_DIR", data_dir)
+    monkeypatch.setattr(portfolio_module, "PORTFOLIO_FILE", data_dir / "portfolio.json")
+    monkeypatch.setattr(watchlist_module, "WATCHLIST_FILE", data_dir / "watchlist.json")
+    monkeypatch.setattr(user_prefs, "PREFS_FILE", data_dir / "user_prefs.json")
+    monkeypatch.setattr(dashboards_module, "DASHBOARDS_FILE", data_dir / "dashboards.json")
+    monkeypatch.setattr(source_prefs, "CONNECTORS_FILE", data_dir / "connectors.json")
+    monkeypatch.setattr(yangjibao_module, "YJB_TOKEN_FILE", data_dir / "yjb_token.json")
+    monkeypatch.setattr(yangjibao_module, "YJB_STATE_FILE", data_dir / "yjb_state.json")
+    monkeypatch.setattr(yangjibao_module, "YJB_SECRET_FILE", data_dir / "yjb_secret.json")
 
     _reset_process_state()
     try:
