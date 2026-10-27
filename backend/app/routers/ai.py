@@ -24,7 +24,7 @@ import requests
 from fastapi import APIRouter, Body
 
 from backend.app import config
-from backend.app.core import atomic
+from backend.app.core import atomic, netfix
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import utils
 
@@ -201,10 +201,18 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
                          "测试超时（15 秒）：请检查网络或 base_url 是否可达。",
                          data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
-    except Exception as exc:  # noqa: BLE001 - 网络类异常统一中文
-        logger.warning("AI 测试连接失败：%s", type(exc).__name__)
+    except requests.exceptions.RequestException as exc:
+        # 真实网络类异常（连接拒绝/DNS 失败/TLS 等）：中文分因，保留 latency_ms
+        logger.warning("AI 测试连接失败（网络类 %s）：%s", type(exc).__name__, exc)
         return api_error(ErrorCode.UPSTREAM_ERROR,
                          "无法连接 AI 接口：请检查网络连通性与 base_url 是否正确。",
+                         data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
+    except Exception as exc:  # noqa: BLE001 - 未预期内部异常：记录堆栈，报 INTERNAL_ERROR
+        # 第五轮 P1：代码缺陷（如未导入的 netfix 触发 NameError）绝不能被伪装成"网络问题"，
+        # 否则用户排查方向被误导、测试也会误判为绿。此处记录完整堆栈并返回内部错误码。
+        logger.exception("AI 测试连接出现内部异常（非网络类）：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR,
+                         "服务内部异常，请稍后重试；如持续出现请查看 logs/app.log。",
                          data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
 
     latency_ms = int((time.time() - started) * 1000)
@@ -301,10 +309,16 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     except requests.exceptions.Timeout:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
                          "AI 响应超时（90 秒），请稍后重试或缩短问题。", data={"configured": True})
-    except Exception as exc:  # noqa: BLE001 - 网络类异常统一中文
-        logger.warning("AI 对话连接失败：%s", type(exc).__name__)
+    except requests.exceptions.RequestException as exc:
+        logger.warning("AI 对话连接失败（网络类 %s）：%s", type(exc).__name__, exc)
         return api_error(ErrorCode.UPSTREAM_ERROR,
                          "无法连接 AI 接口，请检查网络与 base_url 是否正确。", data={"configured": True})
+    except Exception as exc:  # noqa: BLE001 - 未预期内部异常：记录堆栈，报 INTERNAL_ERROR
+        # 第五轮 P1：同 /test，内部缺陷不得伪装成网络问题
+        logger.exception("AI 对话出现内部异常（非网络类）：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR,
+                         "服务内部异常，请稍后重试；如持续出现请查看 logs/app.log。",
+                         data={"configured": True})
 
     if response.status_code in (401, 403):
         return api_error(ErrorCode.UNAUTHORIZED, "AI 接口鉴权失败，请到设置页更新 api_key。",
