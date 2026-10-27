@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,6 +59,82 @@ _EDGAR_SUB = "https://data.sec.gov/submissions/CIK{cik}.json"
 _EDGAR_ARCHIVE = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 # EDGAR 强制要求可识别 UA，否则返回 403（设计基准 §7.2）
 _EDGAR_UA = "OpenBB-CN/1.0.5 (local research tool; contact: local-user)"
+
+# 中文/英文常用名 → 代码（阶段 8.1）：HKEX prefix 仅认代码/繁体/英文，
+# EDGAR 仅认 ticker/英文名，故内置常用别名做一次归一；未命中时再走源站原名检索，
+# 仍失败则返回带示例代码的中文提示（绝不静默返回空）。
+_HK_NAME_ALIASES: Dict[str, str] = {
+    "腾讯": "00700", "腾讯控股": "00700", "阿里": "09988", "阿里巴巴": "09988",
+    "美团": "03690", "小米": "01810", "小米集团": "01810", "比亚迪": "01211",
+    "京东": "09618", "京东集团": "09618", "网易": "09999", "快手": "01024",
+    "中芯国际": "00981", "中芯": "00981", "中国移动": "00941", "工商银行": "01398",
+    "建设银行": "00939", "中国平安": "02318", "招商银行": "03968", "理想汽车": "02015",
+    "小鹏汽车": "09868", "蔚来": "09866", "百度": "09888", "百度集团": "09888",
+    "商汤": "00020", "联想": "00992", "联想集团": "00992", "中兴通讯": "00763",
+    "中海油": "00883", "中国海洋石油": "00883", "药明生物": "02269", "农夫山泉": "09633",
+    "香港交易所": "00388", "汇丰": "00005", "汇丰控股": "00005",
+}
+_HK_EN_ALIASES: Dict[str, str] = {
+    "tencent": "00700", "alibaba": "09988", "meituan": "03690", "xiaomi": "01810",
+    "byd": "01211", "jd": "09618", "netease": "09999", "kuaishou": "01024",
+    "smic": "00981", "china mobile": "00941", "icbc": "01398", "ccb": "00939",
+    "ping an": "02318", "cmb": "03968", "li auto": "02015", "xpeng": "09868",
+    "nio": "09866", "baidu": "09888", "lenovo": "00992", "zte": "00763",
+    "cnooc": "00883", "wuxi biologies": "02269", "nongfu": "09633", "hkex": "00388",
+    "hsbc": "00005",
+}
+_US_NAME_ALIASES: Dict[str, str] = {
+    "苹果": "AAPL", "微软": "MSFT", "英伟达": "NVDA", "特斯拉": "TSLA",
+    "谷歌": "GOOGL", "亚马逊": "AMZN", "脸书": "META", "台积电": "TSM",
+    "博通": "AVGO", "英特尔": "INTC", "甲骨文": "ORCL", "超微": "AMD",
+    "超威": "AMD", "美光": "MU", "高通": "QCOM", "奈飞": "NFLX",
+    "腾讯": "TCEHY", "阿里": "BABA", "阿里巴巴": "BABA", "京东": "JD",
+    "拼多多": "PDD", "百度": "BIDU", "网易": "NTES", "蔚来": "NIO",
+    "小鹏": "XPEV", "理想": "LI", "哔哩哔哩": "BILI", "贝壳": "BEKE",
+    "沃尔玛": "WMT", "可口可乐": "KO", "摩根大通": "JPM", "伯克希尔": "BRK-B",
+}
+
+
+def _hk_alias_code(keyword: str) -> str:
+    """把中文/英文常用名归一为 5 位港股代码。
+
+    Args:
+        keyword: 用户输入（代码 / 中文简称 / 英文名）。
+
+    Returns:
+        str: 5 位代码；无法归一返回空串。
+    """
+    text = str(keyword or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{1,5}", text):
+        return text.zfill(5)
+    if text in _HK_NAME_ALIASES:
+        return _HK_NAME_ALIASES[text]
+    lowered = text.lower()
+    if lowered in _HK_EN_ALIASES:
+        return _HK_EN_ALIASES[lowered]
+    for name, code in _HK_NAME_ALIASES.items():
+        if name and name in text:  # "腾讯控股" 包含 "腾讯"
+            return code
+    return ""
+
+
+def _us_alias_ticker(keyword: str) -> str:
+    """把中文常用名 / 英文小写名归一为美股 ticker。
+
+    Args:
+        keyword: 用户输入。
+
+    Returns:
+        str: ticker（大写）；无法归一返回空串。
+    """
+    text = str(keyword or "").strip()
+    if not text:
+        return ""
+    if text in _US_NAME_ALIASES:
+        return _US_NAME_ALIASES[text]
+    return ""
 
 # 巨潮反爬较严：两次请求之间至少间隔 1.5s（设计基准 §7.2）
 _CNINFO_MIN_GAP = 1.5
@@ -317,7 +394,7 @@ def _cninfo_query(
                 doc_url=f"{_CNINFO_STATIC}{adjunct}" if adjunct else "",
             )
         )
-    return rows, total, "巨潮资讯法定披露原文，按披露时间倒序；部分记录源站仅精确到日，故只显示日期"
+    return rows, total, "巨潮资讯法定披露原文，按披露时间倒序；部分记录源站仅精确到日，故只显示日期；列表接口不提供摘要（摘要需打开原文），港股/美股摘要见各自口径"
 
 
 def _em_query(
@@ -478,10 +555,12 @@ def _hkex_stock_id(keyword: str) -> Optional[Dict[str, str]]:
     Returns:
         Optional[Dict[str, str]]: ``{"stockId": "7609", "code": "00700", "name": "騰訊控股"}``；无匹配返回 None。
     """
+    # 阶段 8.1：简体中文名先归一为 5 位代码（HKEX prefix 仅认代码/繁体/英文）
+    lookup = _hk_alias_code(keyword) or keyword
     resp = netfix.http_request(
         "GET",
         _HKEX_PREFIX,
-        params={"callback": "cb", "lang": "ZH", "type": "A", "name": keyword, "market": "SEHK"},
+        params={"callback": "cb", "lang": "ZH", "type": "A", "name": lookup, "market": "SEHK"},
         headers={"Referer": "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=zh"},
         timeout=config.DATASOURCE_TIMEOUT,
     )
@@ -530,7 +609,9 @@ def search_hk(*, q: str, type_value: str, since: str, page: int, page_size: int)
         logger.warning("HKEX 代码解析失败：%s", exc)
         return [], 0, "HKEX披露易", "HKEX 代码解析暂不可用（网络异常或限频），请稍后重试"
     if not target:
-        return [], 0, "HKEX披露易", "HKEX 未检索到与该关键词匹配的港股，请检查 5 位代码或公司简称"
+        return ([], 0, "HKEX披露易",
+                f"港股未匹配到「{keyword}」：请尝试 5 位代码（如 00700、09988）或繁体/英文全称"
+                "（HKEX 仅认代码、繁体名与英文名）")
 
     start = _since_start(since) or (utils.today_bj() - timedelta(days=365))
     resp = netfix.http_request(
@@ -577,6 +658,10 @@ def search_hk(*, q: str, type_value: str, since: str, page: int, page_size: int)
         except ValueError:
             pub = raw_time
         link = str(item.get("FILE_LINK") or "").strip()
+        # 阶段 8.2：HKEX 不提供正文摘要，源站唯一的描述字段是公告类别（SHORT_TEXT），
+        # 如实填入 summary 并在 caliber 注明口径，避免前端把「无摘要」误显示成缺失。
+        summary = str(item.get("SHORT_TEXT") or "").replace("<br/>", " ").strip()
+        summary = re.sub(r"\s+", " ", summary)
         rows.append(
             _row(
                 title=title,
@@ -587,12 +672,15 @@ def search_hk(*, q: str, type_value: str, since: str, page: int, page_size: int)
                 source="HKEX披露易",
                 pub_time=pub,
                 doc_url=f"{_HKEX_BASE}{link}" if link else "",
+                summary=summary,
             )
         )
     filtered = [r for r in rows if type_value == "全部" or r["type"] == type_value]
     filtered = [r for r in filtered if _in_range(r["pubTime"] or "", since)]
     sliced = filtered[(page - 1) * page_size: page * page_size]
-    return sliced, len(filtered), "HKEX披露易", "港交所披露易原文（繁体标题按披露原文展示），时间为香港时间＝北京时间"
+    return (sliced, len(filtered), "HKEX披露易",
+            "港交所披露易原文（繁体标题按披露原文展示），时间为香港时间＝北京时间；"
+            "摘要为源站公告类别（HKEX 不提供正文摘要），正文请打开原文")
 
 
 # =============================================================
@@ -639,6 +727,10 @@ def _edgar_resolve(keyword: str) -> Optional[Dict[str, Any]]:
         Optional[Dict[str, Any]]: ``{"ticker": "NVDA", "cik": 1045810, "title": "NVIDIA CORP"}``；无匹配返回 None。
     """
     mapping = _edgar_tickers()
+    alias = _us_alias_ticker(keyword)
+    if alias and alias in mapping:
+        item = mapping[alias]
+        return {"ticker": alias, "cik": item["cik_str"], "title": item["title"]}
     upper = keyword.upper().strip()
     if upper in mapping:
         item = mapping[upper]
@@ -672,7 +764,9 @@ def search_us(*, q: str, type_value: str, since: str, page: int, page_size: int)
         return [], 0, "SEC EDGAR", "美股检索需输入 ticker（如 NVDA、AAPL）或英文公司名；EDGAR 不支持无关键词的全市场检索"
     target = _edgar_resolve(keyword)
     if not target:
-        return [], 0, "SEC EDGAR", "EDGAR 未检索到与该关键词匹配的美股申报人，请改用 ticker（如 NVDA）或英文公司名"
+        return ([], 0, "SEC EDGAR",
+                f"美股未匹配到「{keyword}」：请尝试 ticker（如 AAPL、NVDA、TCEHY）或英文公司名"
+                "（EDGAR 仅认 ticker 与英文申报人名称）")
 
     cik = f"{int(target['cik']):010d}"
     resp = netfix.http_request(
@@ -687,6 +781,8 @@ def search_us(*, q: str, type_value: str, since: str, page: int, page_size: int)
     accept = recent.get("acceptanceDateTime") or []
     accessions = recent.get("accessionNumber") or []
     documents = recent.get("primaryDocument") or []
+    descriptions = recent.get("primaryDocDescription") or []   # 阶段 8.2：表种描述（如 FORM 4 / 10-K）
+    item_nos = recent.get("items") or []                        # 8-K 项目编号（如 2.02,9.01）
 
     rows: List[Dict[str, str]] = []
     for idx, form in enumerate(forms):
@@ -710,6 +806,12 @@ def search_us(*, q: str, type_value: str, since: str, page: int, page_size: int)
         doc = str(documents[idx] if idx < len(documents) else "")
         doc_url = _EDGAR_ARCHIVE.format(cik=int(target["cik"]), acc=acc_no, doc=doc) if acc_no and doc else ""
         title = f"{target['title']} · {form} 申报（{pub[:10]}）"  # EDGAR 无标题字段，按表种+日期如实拼接
+        # 阶段 8.2：EDGAR 无正文摘要，用源站 primaryDocDescription（表种描述）+ items（8-K 项目）
+        desc = str(descriptions[idx] if idx < len(descriptions) else "").strip()
+        item_no = str(item_nos[idx] if idx < len(item_nos) else "").strip()
+        summary = desc
+        if item_no:
+            summary = f"{desc} · 项目 {item_no}" if desc else f"8-K 项目 {item_no}"
         rows.append(
             _row(
                 title=title,
@@ -720,6 +822,7 @@ def search_us(*, q: str, type_value: str, since: str, page: int, page_size: int)
                 source="SEC EDGAR",
                 pub_time=pub,
                 doc_url=doc_url,
+                summary=summary,
             )
         )
     rows.sort(key=lambda r: r["pubTime"], reverse=True)
@@ -728,7 +831,8 @@ def search_us(*, q: str, type_value: str, since: str, page: int, page_size: int)
         sliced,
         len(rows),
         "SEC EDGAR",
-        "SEC EDGAR 官方申报原文；发布时间由 acceptanceDateTime(UTC) 换算北京时间，美东盘后申报对应北京次日凌晨",
+        "SEC EDGAR 官方申报原文；发布时间由 acceptanceDateTime(UTC) 换算北京时间，美东盘后申报对应北京次日凌晨；"
+        "摘要为源站表种描述（primaryDocDescription）与 8-K 项目编号，EDGAR 不提供正文摘要",
     )
 
 
