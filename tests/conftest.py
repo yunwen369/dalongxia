@@ -24,7 +24,7 @@ import pytest
 from backend.app import config
 from backend.app.core import audit as audit_module
 from backend.app.core import cache as cache_module
-from backend.app.core import resilient, source_prefs, user_prefs
+from backend.app.core import resilient, source_prefs, user_prefs, v8_guard
 from backend.app.datasource import tencent
 
 
@@ -39,6 +39,9 @@ def _reset_process_state() -> None:
     with resilient._CIRCUIT_LOCK:  # noqa: SLF001 - 熔断表有独立锁
         resilient._CIRCUIT_UNTIL.clear()
     tencent._EXISTS_CACHE.clear()  # noqa: SLF001 - 存在性探测缓存
+    # 第五轮 P1-01：V8 熔断/半开是进程级状态，跨用例会互相污染
+    # （修复前未重置 → 「用例全绿但真实服务会被打挂」的假绿成因之一）
+    v8_guard.reset_state()
 
 
 @pytest.fixture(autouse=True)

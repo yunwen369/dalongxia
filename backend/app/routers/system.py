@@ -23,7 +23,7 @@ from fastapi import APIRouter, Body
 from fastapi.responses import FileResponse
 
 from backend.app import config
-from backend.app.core import cache, capabilities
+from backend.app.core import cache, capabilities, v8_guard
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import utils
 
@@ -53,7 +53,7 @@ def health() -> Dict[str, Any]:
     """健康检查接口。
 
     Returns:
-        Dict[str, Any]: {"data": {build, app, 数据源状态, ...}, "error": null}
+        Dict[str, Any]: {"data": {build, app, 数据源状态, v8 引擎状态, ...}, "error": null}
     """
     ai_config = config.load_ai_config()
     data = {
@@ -64,6 +64,9 @@ def health() -> Dict[str, Any]:
         "port": config.PORT,
         "datasources": _datasource_status(),
         "cache": cache.stats(),
+        # 第五轮 P1-01：暴露同花顺 V8 通道健康态（熔断/半开/最近成功时间），
+        # 修复前 v8_health() 无调用方，熔断在外部完全不可观测。
+        "v8": v8_guard.v8_health(),
         # 仅暴露是否已配置与来源，绝不返回密钥内容
         "ai": {"configured": ai_config.configured, "source": ai_config.source},
         "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),
