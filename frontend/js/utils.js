@@ -165,7 +165,9 @@
    * @param {HTMLElement|string} container DOM 容器或其 id
    * @param {Array} columns 列定义
    * @param {Array} rows 记录行列表
-   * @param {Object} options 可选项：{tableClass, wrapClass, maxHeightClass, onRowClick, nullText, emptyText}
+   * @param {Object} options 可选项：{tableClass, wrapClass, maxHeightClass, onRowClick, nullText, emptyText,
+   *   selectable: {key, selected, onChange}} —— 传入 selectable 时首列渲染勾选框，
+   *   表头勾选框为全选/反选；onChange 回传当前选中的 key 数组（R6-09 / F6-09）。
    * @returns {*} 处理结果
    */
   function renderTable(container, columns, rows, options) {
@@ -192,9 +194,47 @@
       : null;
     var target = wrap || container;
 
+    // R6-09：可选行（仅自选股等需要批量操作的表格启用，未传时行为与旧版完全一致）
+    var sel = opts.selectable || null;
+    var selectedKeys = [];
+    var rowKey = null;
+    if (sel) {
+      rowKey = typeof sel.key === "function"
+        ? sel.key
+        : function (row) { return String(row[sel.key]); };
+      (sel.selected || []).forEach(function (item) { selectedKeys.push(String(item)); });
+    }
+
+    /** 触发选中集变化回调。
+     * @returns {void} 无返回值
+     */
+    function emitSelection() {
+      if (sel && typeof sel.onChange === "function") {
+        sel.onChange(selectedKeys.slice());
+      }
+    }
+
     var table = el("table", opts.tableClass || "pg-table");
     var thead = el("thead");
     var headRow = el("tr");
+    var headBox = null;
+    if (sel) {
+      var headCell = el("th", "col-check");
+      headBox = document.createElement("input");
+      headBox.type = "checkbox";
+      headBox.setAttribute("aria-label", t("common.selectAll"));
+      headBox.addEventListener("change", function () {
+        selectedKeys = headBox.checked
+          ? rows.map(function (row) { return String(rowKey(row)); })
+          : [];
+        tbody.querySelectorAll("input[data-row-key]").forEach(function (node) {
+          node.checked = headBox.checked;
+        });
+        emitSelection();
+      });
+      headCell.appendChild(headBox);
+      headRow.appendChild(headCell);
+    }
     columns.forEach(function (column) {
       var label = column.title !== undefined
         ? column.title
@@ -211,6 +251,34 @@
         tr.addEventListener("click", function () {
           opts.onRowClick(row);
         });
+      }
+      if (sel) {
+        var key = String(rowKey(row));
+        var checkCell = el("td", "col-check");
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.setAttribute("data-row-key", key);
+        box.checked = selectedKeys.indexOf(key) >= 0;
+        // 勾选不得触发整行跳转
+        box.addEventListener("click", function (event) { event.stopPropagation(); });
+        box.addEventListener("change", function () {
+          if (box.checked) {
+            if (selectedKeys.indexOf(key) < 0) {
+              selectedKeys.push(key);
+            }
+          } else {
+            selectedKeys = selectedKeys.filter(function (item) { return item !== key; });
+          }
+          if (headBox) {
+            headBox.checked = selectedKeys.length === rows.length && rows.length > 0;
+          }
+          emitSelection();
+        });
+        checkCell.appendChild(box);
+        tr.appendChild(checkCell);
+        if (selectedKeys.indexOf(key) >= 0) {
+          tr.classList.add("row-selected");
+        }
       }
       columns.forEach(function (column) {
         var cls = column.cls || "";
@@ -235,6 +303,9 @@
     target.appendChild(table);
     if (wrap) {
       container.appendChild(wrap);
+    }
+    if (headBox) {
+      headBox.checked = selectedKeys.length === rows.length && rows.length > 0;
     }
   }
 

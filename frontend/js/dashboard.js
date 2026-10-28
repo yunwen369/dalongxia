@@ -517,10 +517,43 @@
     return node;
   }
 
-  /** 统一请求（中文错误）。
+  /** 单请求超时（毫秒）。超过即中断并按错误态收口，避免整块卡在"加载中"。 */
+  var FETCH_TIMEOUT_MS = 12000;
+
+  /** 同时在飞的请求上限（HTTP/1.1 同域连接数上限，超出只会排队等待）。 */
+  var MAX_CONCURRENT = 6;
+  var activeRequests = 0;
+  var requestQueue = [];
+
+  /** 驱动请求队列：空出名额就取下一个任务执行。
+   * @returns {void} 无返回值
+   */
+  function pumpQueue() {
+    while (activeRequests < MAX_CONCURRENT && requestQueue.length) {
+      var job = requestQueue.shift();
+      activeRequests += 1;
+      job.run().then(job.resolve, job.reject).then(function () {
+        activeRequests -= 1;
+        pumpQueue();
+      });
+    }
+  }
+
+  /** 把任务放进受限并发队列。
+   * @param {Function} run 返回 Promise 的任务函数
+   * @returns {Promise} 任务结果
+   */
+  function enqueueRequest(run) {
+    return new Promise(function (resolve, reject) {
+      requestQueue.push({ run: run, resolve: resolve, reject: reject });
+      pumpQueue();
+    });
+  }
+
+  /** 统一请求（中文错误；12s 超时 + 并发上限 6）。
    * @param {string} path 接口路径
    * @param {Object} params 查询参数对象
-   * @returns {*} 处理结果
+   * @returns {Promise} data 段
    */
   function fetchJson(path, params) {
     var query = new URLSearchParams();
@@ -528,19 +561,39 @@
       query.append(key, params[key]);
     });
     var url = path + (query.toString() ? "?" + query.toString() : "");
-    return fetch(url, { cache: "no-store" })
-      .catch(function () {
-        throw new Error(t("error.network"));
-      })
-      .then(function (response) { return response.json(); })
-      .then(function (body) {
-        if (body && body.error) {
-          var error = new Error(body.error);
-          error.code = body.error_code;
+    return enqueueRequest(function () {
+      var controller = typeof AbortController === "function" ? new AbortController() : null;
+      var timer = controller
+        ? window.setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS)
+        : null;
+      return fetch(url, controller ? { cache: "no-store", signal: controller.signal }
+        : { cache: "no-store" })
+        .catch(function (error) {
+          throw new Error(error && error.name === "AbortError"
+            ? t("dashboard.timeout")
+            : t("error.network"));
+        })
+        .then(function (response) { return response.json(); })
+        .then(function (body) {
+          if (body && body.error) {
+            var error = new Error(body.error);
+            error.code = body.error_code;
+            throw error;
+          }
+          return body.data || {};
+        })
+        .then(function (data) {
+          if (timer) {
+            window.clearTimeout(timer);
+          }
+          return data;
+        }, function (error) {
+          if (timer) {
+            window.clearTimeout(timer);
+          }
           throw error;
-        }
-        return body.data || {};
-      });
+        });
+    });
   }
 
   /** 渲染表格（可排序 + 可导出 CSV）。
@@ -727,6 +780,8 @@
     // 柱状图默认带名称+数值标签；折线图点数多，保持悬停 + 图例，不铺标签。
     var showLabels = recipe.labels === true || (recipe.bar === true && recipe.labels !== false);
     var rotate = labels.length > 8 && recipe.rotate !== false ? 38 : 0;
+    // R6-08 降级链第一级：标签多时先缩字号（10 → 9 → 8），再交给截断与 hideOverlap
+    var labelFont = labels.length > 24 ? 8 : (labels.length > 14 ? 9 : 10);
     chart.setOption({
       backgroundColor: "transparent",
       tooltip: { trigger: "axis" },
@@ -737,7 +792,7 @@
           color: textColor,
           interval: 0,
           rotate: rotate,
-          fontSize: 10,
+          fontSize: labelFont,
           hideOverlap: !rotate,
           formatter: function (value) {
             var text = String(value == null ? "" : value);
@@ -761,7 +816,8 @@
         label: showLabels ? {
           show: true,
           position: "top",
-          fontSize: 9,
+          // 降级链第二级：柱子多时标签同步缩一号，避免"全画但全挤在一起"
+          fontSize: Math.max(8, labelFont - 1),
           color: textColor,
           formatter: recipe.labelUnit === "pct"
             ? function (param) { return (param.value > 0 ? "+" : "") + param.value + "%"; }
@@ -1152,22 +1208,28 @@
     return copy;
   }
 
-  /** 打开板块选择浮层：搜索 + 复选 + 展示数量 + 应用。
+  /** 板块选择上限（超出必然标签重叠，与设计基准 F6-07 一致）。 */
+  var SECTOR_MAX_PICK = 30;
+
+  /** 打开板块选择浮层：搜索 + 排序 + 复选 + 展示数量 + 应用。
    *
-   * 规格（设计基准 F6-07）：默认展示 20；可在 10/20/30/50/全部 之间切换；
-   * 勾选用于只看指定行业；选 0 个 = 全部参与过滤（与"全部"档位配合即为全量）。
+   * 规格（设计基准 F6-07）：锚定在「选行业」按钮下方弹出（420px 宽，最大高 60vh）；
+   * 默认展示 20；可在 10/20/30/50/全部 之间切换；最多勾选 30 个，超出禁用「应用」；
+   * 勾选为空表示"全部板块参与排序后取前 N"。
    *
    * @param {Object} entry 组件条目（含 id / params）
    * @param {Object} meta 组件元数据（标题）
+   * @param {HTMLElement} anchor 触发按钮（用于定位；缺省居中）
    * @returns {void} 无返回值（异步拉取列表后挂载浮层）
    */
-  function openSectorPicker(entry, meta) {
+  function openSectorPicker(entry, meta, anchor) {
     var picker = SECTOR_PICKERS[entry.id];
     if (!picker) {
       return;
     }
     var recipe = RECIPES[entry.id] || {};
     var overlay = el("div", "dash-picker-mask");
+    overlay.classList.add("is-anchored");
     var panel = el("div", "dash-picker");
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-label", t(picker.labelKey));
@@ -1207,6 +1269,29 @@
     });
     panel.appendChild(countRow);
 
+    // R6-07：排序切换（涨跌幅 / 成交额 / 名称），与展示数量同排
+    var sortRow = el("div", "dash-picker-row dash-picker-sort");
+    sortRow.appendChild(el("span", "dash-picker-label", t("dashboard.pick.sortBy")));
+    var sortButtons = [];
+    var sortKey = "pct";
+    [
+      ["pct", t("dashboard.pick.sortPct")],
+      ["amount", t("dashboard.pick.sortAmount")],
+      ["name", t("dashboard.pick.sortName")]
+    ].forEach(function (option) {
+      var chip = el("button", "pg-tab" + (option[0] === sortKey ? " active" : ""), option[1]);
+      chip.type = "button";
+      chip.addEventListener("click", function () {
+        sortKey = option[0];
+        sortButtons.forEach(function (node) { node.classList.remove("active"); });
+        chip.classList.add("active");
+        renderList();
+      });
+      sortButtons.push(chip);
+      sortRow.appendChild(chip);
+    });
+    panel.appendChild(sortRow);
+
     var listHost = el("div", "dash-picker-list");
     listHost.appendChild(el("div", "pg-state", t("state.loading")));
     panel.appendChild(listHost);
@@ -1228,8 +1313,24 @@
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
 
+    // R6-07：锚定在触发按钮下方弹出；空间不足时自动翻转，始终留在视口内
+    if (anchor && anchor.getBoundingClientRect) {
+      var anchorRect = anchor.getBoundingClientRect();
+      var panelWidth = panel.offsetWidth || 420;
+      var panelHeight = panel.offsetHeight || 420;
+      var left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - panelWidth - 12));
+      var top = anchorRect.bottom + 6;
+      if (top + panelHeight > window.innerHeight - 8) {
+        top = Math.max(8, anchorRect.top - panelHeight - 6);
+      }
+      panel.style.position = "fixed";
+      panel.style.left = left + "px";
+      panel.style.top = top + "px";
+      panel.style.maxHeight = Math.min(420, Math.round(window.innerHeight * 0.6)) + "px";
+    }
+
     var chosen = selection.boards.slice();
-    var allNames = [];
+    var allItems = [];
 
     /** 关闭浮层并移除节点。
      * @returns {void} 无返回值
@@ -1258,22 +1359,47 @@
       }
     });
 
-    /** 重绘计数文案与「全选/清空」可用态。
+    /** 重绘计数文案、超限提示与「应用」可用态。
      * @returns {void} 无返回值
      */
     function refreshCounter() {
-      counter.textContent = t("dashboard.pick.selected", { n: chosen.length, total: allNames.length })
+      counter.textContent = t("dashboard.pick.selected", { n: chosen.length, total: allItems.length })
         + (currentLimit > 0 ? " · " + t("dashboard.pick.showCount") + " " + currentLimit : "");
+      var over = chosen.length > SECTOR_MAX_PICK;
+      counter.classList.toggle("over-limit", over);
+      apply.disabled = over;
+      if (over) {
+        counter.textContent = t("dashboard.pick.overLimit", { n: SECTOR_MAX_PICK })
+          + " · " + t("dashboard.pick.selected", { n: chosen.length, total: allItems.length });
+      }
     }
 
-    /** 按搜索词与选中态重绘列表。
+    /** 按搜索词、排序键与选中态重绘列表。
      * @returns {void} 无返回值
      */
     function renderList() {
       var keyword = (search.value || "").trim().toLowerCase();
+      var sorted = allItems.slice().sort(function (a, b) {
+        if (sortKey === "name") {
+          return String(a.name).localeCompare(String(b.name), "zh-CN");
+        }
+        var left = Number(a[sortKey]);
+        var right = Number(b[sortKey]);
+        if (!isFinite(left)) {
+          left = -Infinity;
+        }
+        if (!isFinite(right)) {
+          right = -Infinity;
+        }
+        return right - left;
+      });
       listHost.innerHTML = "";
       var shown = 0;
-      allNames.forEach(function (name) {
+      sorted.forEach(function (item) {
+        var name = String(item.name || "");
+        if (!name) {
+          return;
+        }
         if (keyword && name.toLowerCase().indexOf(keyword) < 0) {
           return;
         }
@@ -1288,12 +1414,18 @@
               chosen.push(name);
             }
           } else {
-            chosen = chosen.filter(function (item) { return item !== name; });
+            chosen = chosen.filter(function (entryName) { return entryName !== name; });
           }
           refreshCounter();
         });
         row.appendChild(box);
         row.appendChild(el("span", "dash-picker-name", name));
+        // 名称常显：列表里直接给出涨跌幅，避免"勾选前不知道是什么"
+        if (typeof item.pct === "number") {
+          var pctNode = el("span", "dash-picker-pct " + (item.pct > 0 ? "up" : item.pct < 0 ? "down" : "flat"),
+            (item.pct > 0 ? "+" : "") + item.pct + "%");
+          row.appendChild(pctNode);
+        }
         listHost.appendChild(row);
       });
       if (!shown) {
@@ -1304,7 +1436,12 @@
 
     search.addEventListener("input", renderList);
     selectAll.addEventListener("click", function () {
-      chosen = allNames.slice();
+      // 全选受上限约束：只取前 30 个（避免"全选后应用被禁用"的困惑）
+      chosen = allItems.slice(0, SECTOR_MAX_PICK).map(function (item) { return String(item.name || ""); })
+        .filter(Boolean);
+      if (allItems.length > SECTOR_MAX_PICK) {
+        toast(t("dashboard.pick.limit", { n: SECTOR_MAX_PICK }));
+      }
       renderList();
     });
     clearAll.addEventListener("click", function () {
@@ -1312,6 +1449,10 @@
       renderList();
     });
     apply.addEventListener("click", function () {
+      if (chosen.length > SECTOR_MAX_PICK) {
+        toast(t("dashboard.pick.overLimit", { n: SECTOR_MAX_PICK }));
+        return;
+      }
       var params = Object.assign({}, entry.params || {});
       if (chosen.length) {
         params.boards = chosen.join(",");
@@ -1332,8 +1473,8 @@
     // 拉取板块列表（与卡片同一接口，保证"看到的可选"与"能展示的"一致）
     fetchJson(recipe.path, recipe.params || {}).then(function (data) {
       var list = data[picker.listKey] || [];
-      allNames = list.map(function (item) { return String(item.name || ""); }).filter(Boolean);
-      if (!allNames.length) {
+      allItems = list.filter(function (item) { return String(item.name || ""); });
+      if (!allItems.length) {
         listHost.innerHTML = "";
         listHost.appendChild(el("div", "pg-state",
           (data.caliber || t("state.empty"))));
@@ -1384,7 +1525,7 @@
         : t(pickerDef.labelKey);
       pick.addEventListener("click", function (event) {
         event.stopPropagation();
-        openSectorPicker(entry, meta);
+        openSectorPicker(entry, meta, pick);
       });
       head.appendChild(pick);
       var summary = el("span", "dash-pick-summary",
@@ -1416,7 +1557,14 @@
     remove.title = t("dashboard.removeWidget");
     remove.addEventListener("click", function (event) {
       event.stopPropagation();
+      // R6-01：移除组件加二次确认（原实现点一下即删，误触代价高且无撤销）
+      if (!window.confirm(t("dashboard.removeWidgetConfirm", { name: meta.title || entry.id }))) {
+        return;
+      }
       var dash = activeDashboard();
+      if (!dash) {
+        return;
+      }
       dash.widgets.splice(index, 1);
       saveState(true);
       render();
@@ -1433,6 +1581,12 @@
     card.addEventListener("dragstart", function (event) {
       draggedIndex = index;
       event.dataTransfer.effectAllowed = "move";
+    });
+    // R6-01：卡片右键菜单（改参数 / 复位拉伸 / 移除），不冒泡到画布菜单
+    card.addEventListener("contextmenu", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      openWidgetMenu(entry, index, meta, event.clientX, event.clientY);
     });
     card.addEventListener("dragover", function (event) {
       event.preventDefault();
@@ -1458,21 +1612,42 @@
     widthHandle.setAttribute("role", "slider");
     widthHandle.setAttribute("aria-label", t("dashboard.dragResize"));
     widthHandle.addEventListener("keydown", function (event) {
-      var step = 0;
+      // R6-04：键盘完整路径 —— ←/→ 调宽 ±4 列、↑/↓ 调高 ±40px、
+      // Home 满宽、Delete 复位到 1/2 宽 + 默认高度
+      var spanStep = 0;
+      var heightStep = 0;
       if (event.key === "ArrowLeft") {
-        step = -4;
+        spanStep = -4;
       } else if (event.key === "ArrowRight") {
-        step = 4;
+        spanStep = 4;
+      } else if (event.key === "ArrowUp") {
+        heightStep = -40;
+      } else if (event.key === "ArrowDown") {
+        heightStep = 40;
       } else if (event.key === "Home") {
-        step = 48 - entry.span;
+        spanStep = 48 - entry.span;
+      } else if (event.key === "Delete") {
+        entry.span = 24;
+        delete entry.h;
+        card.style.gridColumn = "span 24";
+        card.style.minHeight = "";
+        saveState(true);
+        return;
       }
-      if (!step) {
+      if (!spanStep && !heightStep) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      entry.span = Math.max(8, Math.min(48, entry.span + step));
-      card.style.gridColumn = "span " + entry.span;
+      if (spanStep) {
+        entry.span = Math.max(8, Math.min(48, entry.span + spanStep));
+        card.style.gridColumn = "span " + entry.span;
+      }
+      if (heightStep) {
+        var current = entry.h || Math.round(card.getBoundingClientRect().height);
+        entry.h = Math.max(120, Math.min(900, Math.round((current + heightStep) / 8) * 8));
+        card.style.minHeight = entry.h + "px";
+      }
       saveState(true);
     });
     widthHandle.addEventListener("pointerdown", function (event) {
@@ -1484,17 +1659,25 @@
       }
       var colWidth = grid.getBoundingClientRect().width / 48;
       var startX = event.clientX;
+      var startY = event.clientY;
       var startSpan = entry.span;
+      var startHeight = Math.round(card.getBoundingClientRect().height);
       widthHandle.setPointerCapture(event.pointerId);
-      /** 拖动中实时改宽度：按 48 列栅格取整，限制 8~48 列。
+      /** 拖动中实时改宽高：右下角手柄双向（宽吸附 48 列 8~48，高 120~900 步进 8px）。
        * @param {PointerEvent} moveEvent 指针移动事件
        * @returns {void} 无返回值
        */
       function onMove(moveEvent) {
-        var delta = Math.round((moveEvent.clientX - startX) / colWidth);
-        var next = Math.max(8, Math.min(48, startSpan + delta));
+        var deltaX = Math.round((moveEvent.clientX - startX) / colWidth);
+        var next = Math.max(8, Math.min(48, startSpan + deltaX));
         entry.span = next;
         card.style.gridColumn = "span " + next;
+        var deltaY = moveEvent.clientY - startY;
+        if (Math.abs(deltaY) >= 4) {
+          var height = Math.max(120, Math.min(900, Math.round((startHeight + deltaY) / 8) * 8));
+          entry.h = height;
+          card.style.minHeight = height + "px";
+        }
       }
       /** 松手后落盘并解除监听。 */
       function onUp() {
@@ -1551,7 +1734,12 @@
     body.innerHTML = "";
     // 四态规范（§7.9）：显式标记 loading，巡检与 wait_blocks 才能等到收口
     body.setAttribute("data-state", "loading");
-    body.appendChild(el("div", "pg-state", t("state.loading")));
+    // R6-05：固定 3 行骨架占位（不再用单行文字），卡片高度不因加载态跳变
+    var skeleton = el("div", "pg-skeleton");
+    for (var skeletonIndex = 0; skeletonIndex < 3; skeletonIndex += 1) {
+      skeleton.appendChild(el("div", "pg-skeleton-row"));
+    }
+    body.appendChild(skeleton);
     var recipe = RECIPES[entry.id];
     if (!recipe) {
       body.innerHTML = "";
@@ -1703,6 +1891,11 @@
       toolbar.appendChild(more);
 
       toolbar.appendChild(el("span", "pg-spacer"));
+      // R6-05：刷新进度（"刷新中 3/6"），全部收口后自动隐藏
+      var progress = el("span", "dash-progress", "");
+      progress.id = "dash-progress";
+      progress.hidden = true;
+      toolbar.appendChild(progress);
       var save = el("button", "pg-btn", t("dashboard.save"));
       save.type = "button";
       save.addEventListener("click", function () { saveState(false); });
@@ -1732,7 +1925,51 @@
         });
       }
       container.appendChild(grid);
+      watchProgress();
     });
+  }
+
+  /** 刷新进度监视器的定时器句柄（同一时刻只保留一个）。 */
+  var progressTimer = null;
+
+  /** 监视卡片收口情况并更新「刷新中 x/y」文案（R6-05）。
+   *
+   * 每 120ms 统计一次 `#dash-grid .pg-body[data-state=loading]`，全部收口后自动隐藏。
+   * 采用轮询而非计数器，是因为 loadWidget 有「无渲染器 / 缺 symbol / 空态 / 错误」多条
+   * 提前返回路径，逐个打点容易漏计。
+   *
+   * @returns {void} 无返回值
+   */
+  function watchProgress() {
+    if (progressTimer) {
+      window.clearInterval(progressTimer);
+      progressTimer = null;
+    }
+    var node = document.getElementById("dash-progress");
+    if (!node) {
+      return;
+    }
+    var started = Date.now();
+    progressTimer = window.setInterval(function () {
+      var grid = document.getElementById("dash-grid");
+      var current = document.getElementById("dash-progress");
+      if (!grid || !current) {
+        window.clearInterval(progressTimer);
+        progressTimer = null;
+        return;
+      }
+      var all = grid.querySelectorAll(".dash-widget").length;
+      var loading = grid.querySelectorAll('.dash-widget .pg-body[data-state="loading"]').length;
+      if (!loading || Date.now() - started > 60000) {
+        current.hidden = true;
+        current.textContent = "";
+        window.clearInterval(progressTimer);
+        progressTimer = null;
+        return;
+      }
+      current.hidden = false;
+      current.textContent = t("dashboard.refreshing", { done: all - loading, total: all });
+    }, 120);
   }
 
   /** 打开「新建仪表板」输入弹窗：工具栏按钮与侧栏入口共用同一实现。
@@ -2391,6 +2628,96 @@
     }
   }
 
+  /** 组件卡片右键菜单（R6-01 / F6-01）：改参数 / 复位拉伸 / 移除。
+   *
+   * 与画布右键菜单分开：卡片内右键不冒泡到画布，避免拖拽与菜单互相干扰（冲突检查 #1/#2）。
+   *
+   * @param {Object} entry 组件条目
+   * @param {number} index 卡片在 widgets 中的下标
+   * @param {Object} meta 组件元数据
+   * @param {number} x 视口 X
+   * @param {number} y 视口 Y
+   * @returns {void} 无返回值
+   */
+  function openWidgetMenu(entry, index, meta, x, y) {
+    closeCanvasMenu();
+    var recipeDef = RECIPES[entry.id];
+    var paramKeys = recipeDef ? Object.keys(recipeDef.params || {}).concat(Object.keys(entry.params || {})) : [];
+    var uniqueKeys = paramKeys.filter(function (key, position) { return paramKeys.indexOf(key) === position; });
+
+    var mask = el("div", "dash-ctx-mask");
+    var menu = el("div", "dash-ctx-menu");
+    menu.setAttribute("role", "menu");
+    menu.appendChild(el("div", "dash-ctx-group", meta.title || entry.id));
+
+    /** 追加一个菜单项。
+     * @param {string} label 文案
+     * @param {Function} run 执行函数
+     * @param {boolean} disabled 是否禁用
+     * @returns {void} 无返回值
+     */
+    function addItem(label, run, disabled) {
+      var button = el("button", "dash-ctx-item", label);
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      if (disabled) {
+        button.disabled = true;
+      } else {
+        button.addEventListener("click", function () {
+          closeCanvasMenu();
+          run();
+        });
+      }
+      menu.appendChild(button);
+    }
+
+    addItem(t("dashboard.editParams") + "…", function () {
+      editWidgetParams(entry, uniqueKeys);
+    }, !uniqueKeys.length);
+    addItem(t("dashboard.resetSize"), function () {
+      entry.span = 24;
+      delete entry.h;
+      saveState(true);
+      render();
+    });
+    menu.appendChild(el("div", "dash-ctx-sep"));
+    var removeItem = el("button", "dash-ctx-item danger", t("dashboard.removeWidget"));
+    removeItem.type = "button";
+    removeItem.setAttribute("role", "menuitem");
+    removeItem.addEventListener("click", function () {
+      closeCanvasMenu();
+      if (!window.confirm(t("dashboard.removeWidgetConfirm", { name: meta.title || entry.id }))) {
+        return;
+      }
+      var dash = activeDashboard();
+      if (dash) {
+        dash.widgets.splice(index, 1);
+        saveState(true);
+        render();
+      }
+    });
+    menu.appendChild(removeItem);
+
+    mask.appendChild(menu);
+    document.body.appendChild(mask);
+    canvasMenuNode = mask;
+    var width = menu.offsetWidth || 200;
+    var height = menu.offsetHeight || 160;
+    menu.style.left = Math.max(6, Math.min(x, window.innerWidth - width - 8)) + "px";
+    menu.style.top = Math.max(6, Math.min(y, window.innerHeight - height - 8)) + "px";
+    mask.addEventListener("click", function (event) {
+      if (event.target === mask) {
+        closeCanvasMenu();
+      }
+    });
+    document.addEventListener("keydown", function onKey(event) {
+      if (event.key === "Escape") {
+        document.removeEventListener("keydown", onKey);
+        closeCanvasMenu();
+      }
+    });
+  }
+
   /** 绑定画布右键：卡片内不拦截（卡片菜单另行处理），空白处弹画布菜单。
    * @param {HTMLElement} grid 画布网格节点
    * @returns {void} 无返回值
@@ -2402,6 +2729,58 @@
       }
       event.preventDefault();
       openCanvasMenu(event.clientX, event.clientY);
+    });
+    bindDashboardShortcuts();
+  }
+
+  /** 仪表板快捷键是否已绑定（全局只绑一次，避免每次渲染叠加监听器）。 */
+  var shortcutsBound = false;
+
+  /** 绑定仪表板快捷键（R6-01 / F6-01）。
+   *
+   * - `Ctrl+N` 新建仪表板 / `F2` 重命名当前板 / `Ctrl+S` 保存布局
+   * - `Shift+F10` 或菜单键：在画布空白处唤出操作菜单（键盘可达路径）
+   *
+   * 仅在 `#/dashboard` 生效；输入框/文本域聚焦时不拦截，避免抢走打字。
+   *
+   * @returns {void} 无返回值
+   */
+  function bindDashboardShortcuts() {
+    if (shortcutsBound) {
+      return;
+    }
+    shortcutsBound = true;
+    document.addEventListener("keydown", function (event) {
+      var view = (location.hash || "").replace(/^#\/?/, "").split("?")[0];
+      if (view !== "dashboard") {
+        return;
+      }
+      var tag = (event.target && event.target.tagName) || "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || (event.target && event.target.isContentEditable)) {
+        return;
+      }
+      var mod = event.ctrlKey || event.metaKey;
+      if (mod && (event.key === "n" || event.key === "N")) {
+        event.preventDefault();
+        openCreateDashboard();
+        return;
+      }
+      if (mod && (event.key === "s" || event.key === "S")) {
+        event.preventDefault();
+        saveState(false);
+        return;
+      }
+      if (event.key === "F2") {
+        event.preventDefault();
+        renameDashboard();
+        return;
+      }
+      if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
+        event.preventDefault();
+        var grid = document.getElementById("dash-grid");
+        var rect = grid ? grid.getBoundingClientRect() : { left: 120, top: 120 };
+        openCanvasMenu(rect.left + 40, rect.top + 40);
+      }
     });
   }
 

@@ -370,7 +370,7 @@
    * @param {*} onRowClick 行点击回调
    * @param {*} maxHeightClass 最大高度类名
    */
-  function renderTable(body, columns, rows, onRowClick, maxHeightClass) {
+  function renderTable(body, columns, rows, onRowClick, maxHeightClass, selectable) {
     if (!rows || rows.length === 0) {
       setEmpty(body, t("state.empty"));
       return;
@@ -380,7 +380,9 @@
       wrapClass: "pg-table-wrap",
       maxHeightClass: maxHeightClass,
       onRowClick: onRowClick,
-      nullText: t("value.none")
+      nullText: t("value.none"),
+      // R6-09：可选行（自选股批量操作）；不传时与旧行为完全一致
+      selectable: selectable
     });
     body.setAttribute("data-state", "default");
   }
@@ -6651,6 +6653,233 @@
    * @param {boolean} force 是否强制刷新
    * @returns {void} 无返回值（异步渲染）
    */
+  // ---------- R6-09 / F6-09：自选股批量操作状态 ----------
+  /** 当前自选行缓存（批量操作按 symbol@market 反查行对象）。 */
+  var watchRows = [];
+  /** 当前选中的行键（symbol@market）。 */
+  var watchSelected = [];
+  /** 批量栏宿主（表格上方，随选中集重绘）。 */
+  var watchBulkHost = null;
+
+  /** 渲染自选股批量操作栏（选中 ≥1 行时显示）。
+   *
+   * 规格（设计基准 F6-09）：`已选 3 · [批量删除] [批量加图表] [导出CSV] [取消]`；
+   * 批量删除二次确认并列出标的，逐条删除、部分失败逐条提示。
+   *
+   * @returns {void} 无返回值
+   */
+  function paintWatchBulkBar() {
+    if (!watchBulkHost) {
+      return;
+    }
+    watchBulkHost.innerHTML = "";
+    if (!watchSelected.length) {
+      watchBulkHost.hidden = true;
+      return;
+    }
+    watchBulkHost.hidden = false;
+    watchBulkHost.appendChild(el("span", "wl-bulk-count",
+      t("watchlist.bulk.selected", { n: watchSelected.length })));
+
+    /** 取当前选中的行对象。
+     * @returns {Array<Object>} 选中行列表
+     */
+    function pickedRows() {
+      return watchRows.filter(function (row) {
+        return watchSelected.indexOf(row.symbol + "@" + row.market) >= 0;
+      });
+    }
+
+    var del = el("button", "pg-btn", t("watchlist.bulk.delete"));
+    del.type = "button";
+    del.addEventListener("click", function () {
+      var targets = pickedRows();
+      if (!targets.length) {
+        return;
+      }
+      var names = targets.map(function (row) { return row.name || row.symbol; }).join("、");
+      if (!window.confirm(t("watchlist.bulk.deleteConfirm", { names: names, n: targets.length }))) {
+        return;
+      }
+      var failed = [];
+      var done = 0;
+      /** 串行删除：逐条反馈，避免并发触发写锁。
+       * @param {number} index 当前下标
+       * @returns {void} 无返回值
+       */
+      function step(index) {
+        if (index >= targets.length) {
+          watchSelected = [];
+          if (failed.length) {
+            toast(t("watchlist.bulk.deletePartial", { ok: done, fail: failed.join("、") }));
+          } else {
+            toast(t("watchlist.bulk.deleteDone", { n: done }));
+          }
+          loadWatchlist(true);
+          return;
+        }
+        var row = targets[index];
+        sendJson("DELETE", "/api/watchlist/" + encodeURIComponent(row.symbol)
+          + "?market=" + encodeURIComponent(row.market)).then(function () {
+          done += 1;
+          step(index + 1);
+        }).catch(function () {
+          failed.push(row.name || row.symbol);
+          step(index + 1);
+        });
+      }
+      step(0);
+    });
+    watchBulkHost.appendChild(del);
+
+    var toBoard = el("button", "pg-btn", t("watchlist.bulk.toBoard"));
+    toBoard.type = "button";
+    toBoard.addEventListener("click", function () {
+      var targets = pickedRows();
+      if (!targets.length || !window.Dashboard || !window.Dashboard.addWidgetById) {
+        return;
+      }
+      var added = 0;
+      targets.forEach(function (row) {
+        if (row.market === "fund") {
+          return;
+        }
+        window.Dashboard.addWidgetById("ST-01", { symbol: row.symbol, market: row.market });
+        added += 1;
+      });
+      toast(t("watchlist.bulk.toBoardDone", { n: added }));
+      watchSelected = [];
+      paintWatchBulkBar();
+    });
+    watchBulkHost.appendChild(toBoard);
+
+    var csv = el("button", "pg-btn", t("watchlist.bulk.export"));
+    csv.type = "button";
+    csv.addEventListener("click", function () {
+      var targets = pickedRows();
+      if (!targets.length) {
+        return;
+      }
+      var head = ["代码", "名称", "市场", "最新价", "涨跌", "涨幅%", "成交额", "PE"];
+      var lines = [head.join(",")];
+      targets.forEach(function (row) {
+        var quote = row.quote || {};
+        lines.push([row.symbol, row.name || "", row.market || "",
+          quote.price === null || quote.price === undefined ? "" : quote.price,
+          quote.change === null || quote.change === undefined ? "" : quote.change,
+          quote.pct === null || quote.pct === undefined ? "" : quote.pct,
+          quote.amount === null || quote.amount === undefined ? "" : quote.amount,
+          quote.pe_ttm === null || quote.pe_ttm === undefined ? "" : quote.pe_ttm].join(","));
+      });
+      var blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+      var link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "watchlist_" + new Date().toISOString().slice(0, 10) + ".csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    });
+    watchBulkHost.appendChild(csv);
+
+    var cancel = el("button", "pg-btn ghost", t("watchlist.bulk.cancel"));
+    cancel.type = "button";
+    cancel.addEventListener("click", function () {
+      watchSelected = [];
+      loadWatchlist(true);
+    });
+    watchBulkHost.appendChild(cancel);
+  }
+
+  /** 渲染自选股空态（含「搜索代码直接加自选」）。
+   *
+   * 规格（设计基准 F6-09 空态）：0 条时给「从个股详情页点 ★ 添加」之外，
+   * 额外提供搜索框，可直接按代码/名称检索并加入自选，避免必须先去个股页。
+   *
+   * @param {HTMLElement} body 内容容器
+   * @param {string} hint 后端下发的空态说明（可为空）
+   * @returns {void} 无返回值
+   */
+  function paintWatchlistEmpty(body, hint) {
+    body.innerHTML = "";
+    var box = el("div", "pg-state");
+    box.setAttribute("data-state", "empty");
+    box.appendChild(el("div", "pg-state-title", t("watchlist.emptyTitle")));
+    box.appendChild(el("div", "pg-state-hint", hint || t("watchlist.empty")));
+
+    var bar = el("div", "wl-addbar");
+    var input = document.createElement("input");
+    input.type = "search";
+    input.className = "wl-addbar-input";
+    input.placeholder = t("watchlist.addPlaceholder");
+    input.setAttribute("aria-label", t("watchlist.addPlaceholder"));
+    bar.appendChild(input);
+    var searchBtn = el("button", "pg-btn primary", t("watchlist.addSearch"));
+    searchBtn.type = "button";
+    bar.appendChild(searchBtn);
+    box.appendChild(bar);
+
+    var resultHost = el("div", "wl-addresult");
+    box.appendChild(resultHost);
+
+    /** 执行检索并渲染「加入自选」候选。
+     * @returns {void} 无返回值
+     */
+    function doSearch() {
+      var keyword = (input.value || "").trim();
+      if (!keyword) {
+        toast(t("watchlist.addNeedKeyword"));
+        return;
+      }
+      resultHost.innerHTML = "";
+      resultHost.appendChild(el("div", "pg-state", t("state.loading")));
+      api("/api/market/search", { q: keyword }).then(function (data) {
+        var items = data.items || [];
+        resultHost.innerHTML = "";
+        if (!items.length) {
+          resultHost.appendChild(el("div", "pg-state", t("watchlist.addNoMatch")));
+          return;
+        }
+        items.slice(0, 8).forEach(function (item) {
+          var row = el("div", "wl-addrow");
+          row.appendChild(el("b", "", item.symbol));
+          row.appendChild(el("span", "wl-addrow-name", item.name || ""));
+          row.appendChild(el("span", "pg-spacer"));
+          var add = el("button", "pg-btn", t("watchlist.addAction"));
+          add.type = "button";
+          add.addEventListener("click", function () {
+            add.disabled = true;
+            sendJson("POST", "/api/watchlist", {
+              symbol: item.symbol,
+              market: item.market || "a",
+              name: item.name || ""
+            }).then(function () {
+              toast(t("watchlist.added"));
+              loadWatchlist(true);
+            }).catch(function (error) {
+              add.disabled = false;
+              toast(error.message || t("state.errorHint"));
+            });
+          });
+          row.appendChild(add);
+          resultHost.appendChild(row);
+        });
+      }).catch(function (error) {
+        resultHost.innerHTML = "";
+        resultHost.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+      });
+    }
+
+    searchBtn.addEventListener("click", doSearch);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        doSearch();
+      }
+    });
+    body.appendChild(box);
+    body.setAttribute("data-state", "empty");
+  }
+
   /** W-03：渲染侧栏「自选股」分组树（我的自选 + 市场分组 + 数量徽章）。
    * 数据源与 W-02 chips 相同（counts.by_market），点击分组进入自选页并预过滤。
    * @param {Object} byMarket 市场 → 数量 映射
@@ -6733,7 +6962,8 @@
           });
           return;
         }
-        setEmpty(body2, data.empty_note || t("watchlist.empty"), function () { loadWatchlist(true); });
+        // R6-09 / F6-09：空态给「搜索框直接加自选」，不只让用户去个股页
+        paintWatchlistEmpty(body2, data.empty_note || t("watchlist.empty"));
         return;
       }
       renderTable(body2, [
@@ -6787,7 +7017,21 @@
         } else {
           window.location.hash = "#/stock?symbol=" + row.symbol + "&market=" + row.market;
         }
+      }, null, {
+        // R6-09 / F6-09：勾选列 + 表头全选，变化后重绘批量栏
+        key: function (row) { return row.symbol + "@" + row.market; },
+        selected: watchSelected,
+        onChange: function (keys) {
+          watchSelected = keys;
+          paintWatchBulkBar();
+        }
       });
+      // R6-09：批量栏插到表格上方（renderTable 会清空容器，故在其后 insertBefore）
+      watchRows = rows;
+      watchBulkHost = el("div", "wl-bulk");
+      watchBulkHost.hidden = true;
+      body2.insertBefore(watchBulkHost, body2.firstChild);
+      paintWatchBulkBar();
       // W-02：分组筛选 chips 必须在 renderTable 之后追加——renderTable 会清空容器
       var chips = el("div", "pg-tabs");
       [

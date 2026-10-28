@@ -264,6 +264,89 @@
     settings: "system"
   };
 
+  /** 面包屑层级表（R6-13 / F6-13）：视图 → [[名称, 跳转视图或 null], ...]。
+   * 最后一层为当前页（不可点）；前面各层点击回对应一级/二级页。
+   */
+  const CRUMBS = {
+    home: [],
+    dashboard: [["nav.dashboard", "dashboard"], ["dashboard.mine", null]],
+    "dashboard-manage": [["nav.dashboard", "dashboard"], ["nav.dashboardManage", null]],
+    "widget-library": [["nav.dashboard", "dashboard"], ["sidebar.library", null]],
+    watchlist: [["nav.watchlist", "watchlist"], ["sidebar.myWatchlist", null]],
+    news: [["nav.newsGroup", "news"], ["nav.news", null]],
+    sectors: [["nav.market", "sectors"], ["nav.sectors", "sectors"], ["nav.sectorsIndustry", null]],
+    stock: [["nav.market", "sectors"], ["nav.stock", null]],
+    charting: [["nav.market", "sectors"], ["nav.charting", null]],
+    "sector-val": [["nav.market", "sectors"], ["nav.sectorVal", null]],
+    lhb: [["nav.money", "lhb"], ["nav.lhb", null]],
+    portfolio: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]],
+    fund: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]],
+    yjb: [["nav.yjb", "yjb"], ["nav.yjbHoldings", null]],
+    connectors: [["nav.system", "settings"], ["nav.connectors", null]],
+    settings: [["nav.system", "settings"], ["nav.settings", null]]
+  };
+
+  /** 渲染面包屑（同页面只有一个导航项高亮，面包屑体现三级归属）。
+   * @param {string} view 当前视图标识
+   * @returns {void} 无返回值
+   */
+  function renderCrumb(view) {
+    const host = document.getElementById("crumb");
+    if (!host) {
+      return;
+    }
+    host.innerHTML = "";
+    const chain = CRUMBS[view] || [];
+    if (!chain.length) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    chain.forEach(function (item, index) {
+      const isLast = index === chain.length - 1;
+      const label = t(item[0]);
+      if (isLast || !item[1]) {
+        host.appendChild(elSpan("crumb-item current", label));
+      } else {
+        const link = elSpan("crumb-item", label);
+        link.setAttribute("role", "link");
+        link.setAttribute("tabindex", "0");
+        link.dataset.view = item[1];
+        /** 点击上级回跳。
+         * @returns {void} 无返回值
+         */
+        const go = function () { window.location.hash = "#/" + item[1]; };
+        link.addEventListener("click", go);
+        link.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            go();
+          }
+        });
+        host.appendChild(link);
+      }
+      if (!isLast) {
+        host.appendChild(elSpan("crumb-sep", "/"));
+      }
+    });
+  }
+
+  /** 创建带类名与文本的 span（面包屑专用，避免与 Utils.el 的语义混淆）。
+   * @param {string} cls 类名
+   * @param {string} text 文本
+   * @returns {HTMLElement} span 节点
+   */
+  function elSpan(cls, text) {
+    const node = document.createElement("span");
+    if (cls) {
+      node.className = cls;
+    }
+    if (text !== undefined && text !== null) {
+      node.textContent = String(text);
+    }
+    return node;
+  }
+
   /** 按当前视图高亮顶栏一级项（同组多个二级视图共用同一个高亮）。
    * @param {string} view 当前视图标识
    * @returns {void} 无返回值
@@ -278,6 +361,7 @@
       const itemGroup = item.getAttribute("data-group") || "";
       item.classList.toggle("active", !!group && itemGroup === group);
     });
+    renderCrumb(view);
   }
 
   /** 绑定主菜单点击。 */

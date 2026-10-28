@@ -60,6 +60,26 @@ def _port_open(host: str = HOST, port: int = PORT, timeout: float = 0.6) -> bool
         return sock.connect_ex((host, port)) == 0
 
 
+def _show_info(message: str, title: str = "") -> None:
+    """跨形态显示中文提示框（信息图标），失败时打印到控制台。
+
+    Args:
+        message: 提示正文。
+        title: 标题，缺省用应用名。
+    """
+    printed = False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, title or WINDOW_TITLE, 0x40)
+            printed = True
+        except Exception:  # noqa: BLE001 - 无 GUI 时退回控制台
+            printed = False
+    if not printed:
+        print(f"[提示] {message}", flush=True)
+
+
 def _data_dir() -> Path:
     """运行时数据目录：冻结形态取 EXE 同级 data\\，开发形态取工程内 data\\。
 
@@ -356,6 +376,15 @@ def main() -> int:
             return True
         if not tray_state["hint_shown"]:
             tray_state["hint_shown"] = True
+            # R6-12：首次点 X 明确告知"窗口已隐藏、程序仍在后台"，并说明如何真正退出
+            _show_info(
+                "已最小化到托盘，程序仍在后台运行（本地服务与数据刷新继续）。\n\n"
+                "要重新打开：双击任务栏通知区的 OpenBB 图标。\n"
+                "要彻底退出：右键该图标 → 退出。\n\n"
+                "也可以在「设置 → 启动与关闭」里改成「直接退出程序」。\n"
+                "（本提示每次启动只在首次关闭时出现一次）",
+                WINDOW_TITLE,
+            )
             print("[桌面模式] 窗口已隐藏，程序在后台运行；右键托盘图标可退出", flush=True)
         return False
 

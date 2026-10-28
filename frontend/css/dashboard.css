@@ -585,3 +585,80 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* R6-07：选择器锚定模式（不再全屏居中遮挡画布） */
+.dash-picker-mask.is-anchored {
+  background: rgba(0, 0, 0, 0.28);
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.dash-picker-mask.is-anchored .dash-picker {
+  width: 420px;
+  max-height: 60vh;
+}
+
+.dash-picker-sort .pg-tab {
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
+.dash-picker-pct {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-picker-counter.over-limit {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.dash-picker .pg-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* R6-05：加载骨架（固定 3 行，高度与默认内容接近，避免刷新时卡片跳变） */
+.pg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 2px;
+}
+
+.pg-skeleton-row {
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--border) 37%, var(--bg-hover) 63%);
+  background-size: 400% 100%;
+  animation: pg-skeleton-shine 1.4s ease infinite;
+}
+
+.pg-skeleton-row:nth-child(1) { width: 92%; }
+.pg-skeleton-row:nth-child(2) { width: 78%; }
+.pg-skeleton-row:nth-child(3) { width: 60%; }
+
+@keyframes pg-skeleton-shine {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-skeleton-row { animation: none; }
+}
+
+/* R6-05：工具栏刷新进度 */
+.dash-progress {
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-progress[hidden] {
+  display: none;
+}

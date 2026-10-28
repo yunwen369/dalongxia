@@ -1035,3 +1035,97 @@
   color: var(--text-dim);
   line-height: 1.6;
 }
+
+/* =============================================================
+ * R6-09 / F6-09：自选股勾选列、批量操作栏、空态加自选
+ * ============================================================= */
+.pg-table th.col-check,
+.pg-table td.col-check {
+  width: 34px;
+  text-align: center;
+  padding-left: 8px;
+  padding-right: 4px;
+}
+
+.pg-table .col-check input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.pg-table tr.row-selected {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.wl-bulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.wl-bulk-count {
+  font-size: var(--fs-aux);
+  color: var(--text);
+  font-weight: 500;
+  margin-right: 4px;
+}
+
+.wl-addbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.wl-addbar-input {
+  width: 300px;
+  max-width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: var(--fs-body);
+}
+
+.wl-addresult {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  max-width: 520px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.wl-addrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font-size: var(--fs-aux);
+}
+
+.wl-addrow b {
+  font-variant-numeric: tabular-nums;
+}
+
+.wl-addrow-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

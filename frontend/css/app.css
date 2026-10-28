@@ -1400,3 +1400,64 @@ html[data-font="lg"] {
 @media (min-resolution: 1.25dppx) {
   .fs-item { padding: 8px 10px; }
 }
+
+/* =============================================================
+ * R6-13 / F6-13：面包屑与侧栏三级标签
+ * ============================================================= */
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-aux);
+  color: var(--text-muted);
+  margin-left: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.crumb[hidden] {
+  display: none;
+}
+
+.crumb-item {
+  white-space: nowrap;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+
+.crumb-item[role="link"] {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.crumb-item[role="link"]:hover,
+.crumb-item[role="link"]:focus-visible {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  outline: none;
+}
+
+.crumb-item.current {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.crumb-sep {
+  color: var(--border-strong);
+  user-select: none;
+}
+
+/* 侧栏三级目录：只读层级标签（缩进 + 更小字号），不做死链 */
+.sidebar-sub-label {
+  display: block;
+  padding: 3px 12px 3px 30px;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
+.sidebar-sub-label::before {
+  content: "·";
+  margin-right: 5px;
+  color: var(--border-strong);
+}

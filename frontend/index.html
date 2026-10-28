@@ -99,8 +99,11 @@
         <div class="sidebar-heading" data-i18n="nav.market">市场</div>
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectors">板块</li>
+          <!-- R6-13：三级目录以只读层级标签呈现（不做「点了没反应」的死链） -->
+          <span class="sidebar-sub-label" data-i18n="sidebar.sub.industryConcept">行业 / 概念</span>
           <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股</li>
           <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表</li>
+          <span class="sidebar-sub-label" data-i18n="sidebar.sub.klineMinute">K 线 / 分时 / 划线</span>
           <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">估值</li>
         </ul>
         <div class="sidebar-divider"></div>
@@ -131,6 +134,8 @@
       <main class="workspace" role="main">
         <div class="toolbar">
           <span class="page-title" id="page-title" data-i18n="page.home">首页 · 市场总览</span>
+          <!-- R6-13 / F6-13：面包屑（一级 / 二级 / 三级，逐级可点回） -->
+          <nav class="crumb" id="crumb" aria-label="面包屑"></nav>
           <span class="badge" id="build-badge" data-i18n="health.buildLoading">构建标识加载中</span>
           <span class="badge" id="health-badge" data-i18n="health.checking">健康检查中</span>
           <span class="toolbar-spacer"></span>
