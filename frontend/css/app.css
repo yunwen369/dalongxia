@@ -722,6 +722,18 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.pg-kpi-acc:hover {
+  border-color: var(--border-strong);
+}
+
+/* R6-11：当前选中账户高亮（与 chips 同一状态，点卡片等于点 chip） */
+.pg-kpi-acc.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .pg-kpi-acc-head {

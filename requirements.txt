@@ -26,6 +26,9 @@ segno==1.6.6
 click==8.5.0
 pywebview==6.2.1
 pythonnet==3.2.1
+# R6-12 / F6-14：点关闭按钮最小化到托盘（pystray 提供托盘菜单，pillow 供图标加载）
+pystray==0.19.5
+pillow==11.3.0
 
 # ---------- 开发与测试 ----------
 pytest==9.1.1

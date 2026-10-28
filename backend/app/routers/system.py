@@ -23,7 +23,7 @@ from fastapi import APIRouter, Body
 from fastapi.responses import FileResponse
 
 from backend.app import config
-from backend.app.core import cache, capabilities, v8_guard
+from backend.app.core import cache, capabilities, user_prefs, v8_guard
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import utils
 
@@ -103,6 +103,53 @@ def cache_stats() -> Dict[str, Any]:
         "caliber": "内存字节数按 JSON 序列化长度估算，仅表示量级；布局为 data/dashboards.json",
         "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
         "is_realtime": True,
+    })
+
+
+@router.get("/system/desktop-prefs")
+def get_desktop_prefs() -> Dict[str, Any]:
+    """桌面壳偏好（R6-12 / F6-14）：点击关闭按钮的行为。
+
+    Returns:
+        Dict[str, Any]: {"data": {"close_action": "tray"|"quit", "options": [...]}, "error": null}
+    """
+    return ok({
+        "close_action": user_prefs.get_str("close_action"),
+        "options": ["tray", "quit"],
+        "source": "本机 data/user_prefs.json",
+        "caliber": "tray=最小化到托盘（默认）；quit=直接退出并停止本地服务",
+        "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
+        "is_realtime": True,
+    })
+
+
+@router.put("/system/desktop-prefs")
+def set_desktop_prefs(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """写入桌面壳偏好（仅接受 tray / quit）。
+
+    Args:
+        payload: 请求体，形如 {"close_action": "tray"}。
+
+    Returns:
+        Dict[str, Any]: {"data": {"close_action": ...}, "error": null}
+
+    Raises:
+        None: 参数非法时走统一错误结构返回。
+    """
+    value = str(payload.get("close_action") or "").strip()
+    if value not in ("tray", "quit"):
+        return api_error(ErrorCode.INVALID_PARAM, "close_action 仅支持 tray（最小化到托盘）或 quit（直接退出）")
+    try:
+        prefs = user_prefs.set_str("close_action", value)
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001 - 落盘失败统一转可读错误
+        return api_error(ErrorCode.INTERNAL_ERROR, f"偏好保存失败：{exc}")
+    logger.info("桌面壳关闭行为已设为 %s", value)
+    return ok({
+        "close_action": prefs.get("close_action"),
+        "source": "本机 data/user_prefs.json",
+        "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
     })
 
 

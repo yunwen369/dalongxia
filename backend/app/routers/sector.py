@@ -110,6 +110,53 @@ def _status_now() -> tuple[str, str, bool]:
     return utils.now_text(now), status, is_realtime
 
 
+def _pack_sectors(
+    payload: Dict[str, Any],
+    list_keys: Sequence[str],
+    source: str,
+    caliber: str,
+    as_of: Optional[str],
+    market_status: str,
+    is_realtime: bool,
+) -> Dict[str, Any]:
+    """列表型板块响应的统一包装：空结果按 EMPTY_DATA 语义补齐 available 与中文说明。
+
+    背景（R6-15 / BUG-R6-06）：同花顺限频时上游返回空 DataFrame 而不抛异常，原实现直接
+    `_pack(items=[])`，对外表现为「source=同花顺 + 0 条 + error=null」。用户看到的是
+    「0 个行业」而不是「数据暂不可用」，违反规范 §6.3 空/错分离与 §11.5 数据类不得降级。
+
+    Args:
+        payload: 待包装的数据主体（含一个或多个列表字段）。
+        list_keys: 参与「是否有数据」判定的列表字段名。
+        source: 数据源标识。
+        caliber: 原口径说明。
+        as_of: 数据时间（北京时间）。
+        market_status: 市场状态文案。
+        is_realtime: 是否为盘中实时数据。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；空结果时 data.available=False
+            且 caliber 改写为可读原因。
+    """
+    body = dict(payload)
+    total = 0
+    for key in list_keys:
+        value = body.get(key)
+        if isinstance(value, list):
+            total += len(value)
+    available = total > 0
+    final_caliber = caliber
+    if not available:
+        prefix = source or "上游"
+        final_caliber = (
+            f"{prefix}板块数据暂不可用（源站返回空，可能为限频或盘前未更新），"
+            f"请稍后重试；原口径：{caliber or '—'}"
+        )
+        body["empty_hint"] = "UPSTREAM_EMPTY"
+    body["available"] = available
+    return _pack(body, source, final_caliber, as_of, market_status, is_realtime)
+
+
 def _run_chain(
     cache_key: str,
     ttl: int,
@@ -212,8 +259,9 @@ def sector_industry(market: str = Query("a", description="a/hk/us（cn 为 a 的
         return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return _pack_sectors(
         {"items": items, "count": len(items), "market": public_market, "kind": "industry"},
+        ["items"],
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -242,8 +290,9 @@ def sector_concept(market: str = Query("a", description="a/hk/us（cn 为 a 的�
         return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return _pack_sectors(
         {"items": items, "count": len(items), "market": public_market, "kind": "concept"},
+        ["items"],
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -283,8 +332,9 @@ def sector_heatmap(
         return _failure(result, {"nodes": [], "market": public_market, "kind": kind_value})
     nodes = sector_provider.heatmap_from_items(result["data"] or [])
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return _pack_sectors(
         {"nodes": nodes, "count": len(nodes), "market": public_market, "kind": kind_value},
+        ["nodes"],
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -314,8 +364,9 @@ def sector_summary(market: str = Query("a", description="a/hk/us（cn 为 a 的�
     summary = sector_provider.summary_from_items(result["data"] or [], selected)
     summary = {**summary, "market": public_market}  # 对外口径 a/hk/us（第五轮阶段 4 统一）
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return _pack_sectors(
         summary,
+        ["gainers", "losers", "inflow"],
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,
@@ -538,8 +589,9 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
         return _failure(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return _pack_sectors(
         {"items": items, "count": len(items), "market": public_market},
+        ["items"],
         result.get("source") or "",
         result.get("caliber") or "",
         as_of,

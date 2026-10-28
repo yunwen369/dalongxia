@@ -977,3 +977,61 @@
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* =============================================================
+ * R6-12 / F6-14：设置页「启动与关闭」单选组
+ * ============================================================= */
+.set-close-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.set-close-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.set-close-row:hover {
+  border-color: var(--border-strong);
+}
+
+.set-close-row.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.set-close-row input[type="radio"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  flex: 0 0 14px;
+}
+
+.set-close-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.set-close-text b {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.set-close-text span {
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  line-height: 1.6;
+}

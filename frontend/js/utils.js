@@ -314,6 +314,35 @@
     return option;
   }
 
+  /** 构建标准区块卡（标题行 + spacer + 副标题 + body）。
+   *
+   * 唯一实现：pages.js 与 dashboard.js 共用（R6-01 修复 —— 原先 pages.js 在 IIFE 内
+   * 私有定义、dashboard.js 裸调用导致 `ReferenceError: buildCard is not defined`，
+   * 仪表板管理页因此整页空白）。
+   *
+   * @param {string} id 区块编号（同时作为卡片 DOM id）
+   * @param {string} title 卡片标题
+   * @param {string} gridClass 栅格类名（如 g-12）
+   * @param {string} extra 副标题文本（可为空）
+   * @returns {{card: HTMLElement, body: HTMLElement}} 卡片节点与内容容器
+   */
+  function buildCard(id, title, gridClass, extra) {
+    var card = el("section", "pg-card " + (gridClass || ""));
+    if (id) {
+      card.id = id;
+    }
+    var head = el("div", "pg-card-head");
+    head.appendChild(el("span", "pg-card-title", title));
+    if (extra) {
+      head.appendChild(el("span", "pg-card-sub", extra));
+    }
+    head.appendChild(el("span", "pg-spacer"));
+    card.appendChild(head);
+    var body = el("div", "pg-body");
+    card.appendChild(body);
+    return { card: card, body: body };
+  }
+
   window.Utils = {
     el: el,
     t: t,
@@ -323,6 +352,7 @@
     trendClass: trendClass,
     api: api,
     renderTable: renderTable,
-    buildCandlestickOption: buildCandlestickOption
+    buildCandlestickOption: buildCandlestickOption,
+    buildCard: buildCard
   };
 })();

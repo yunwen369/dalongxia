@@ -967,13 +967,23 @@ def get_collect(estimates: bool = True) -> Dict[str, Any]:
         account_id = item.get("account_id", item.get("id"))
         if account_id in (None, ""):
             continue
+        hold_cost = _as_float(item.get("hold_cost"))
+        hold_income = _as_float(item.get("hold_income"))
+        # R6-11 / F6-12：账户级「资产」= 持仓成本 + 累计持有收益。
+        # 上游 account_collect 不下发该字段，但三项合计与 total_assets 恒等
+        # （2026-10-28 实测：28,704.90+92,475.61+26,796.77 = 147,977.28），
+        # 因此可直接推导，无需额外接口；任一分量为 None 时资产也给 None，避免 0 值误导。
+        assets = None
+        if hold_cost is not None and hold_income is not None:
+            assets = round(hold_cost + hold_income, 2)
         accounts.append({
             "id": str(account_id),
             "title": str(item.get("title") or ""),
+            "assets": assets,
             "today_income": _as_float(item.get("today_income")) if estimates else None,
             "today_income_rate": _as_float(item.get("today_income_rate")) if estimates else None,
-            "hold_income": _as_float(item.get("hold_income")),
-            "hold_cost": _as_float(item.get("hold_cost")),
+            "hold_income": hold_income,
+            "hold_cost": hold_cost,
             "up": int(_as_float(item.get("up")) or 0),
             "down": int(_as_float(item.get("down")) or 0),
         })

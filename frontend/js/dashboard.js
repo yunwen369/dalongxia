@@ -15,6 +15,8 @@
   var t = window.Utils.t;
   var el = window.Utils.el;
   var toast = window.Utils.toast;
+  // R6-01：buildCard 唯一实现挂在 Utils（原先裸调用未导出的函数 → 管理页 ReferenceError 整页空白）
+  var buildCard = window.Utils.buildCard;
   // 本 IIFE 内需独立引用格式化/涨跌色工具（pages.js 的 fmt/pctClass 不在本作用域）
   var fmt = window.Utils.fmt;
   var fmtPct = window.Utils.fmtPct;
@@ -26,6 +28,51 @@
 
   var state = { dashboards: [], activeId: "", registry: null };
 
+  // R6-03：图表实例生命周期集中管理
+  // 原缺陷：每次 renderChart 都 echarts.init 且从不 dispose，并在渲染函数内
+  // window.addEventListener("resize") —— 实测 6 轮刷新 JS 堆 260MB→2394MB、
+  // canvas 1→0（图表消失）。此处统一「重绘前释放 + 全局单一 resize」。
+  var resizeListenerBound = false;
+
+  /** 释放 root 子树内所有 ECharts 实例（重复 init 前必须调用）。
+   * @param {HTMLElement} root 待清理的 DOM 子树（可为 null）
+   * @returns {void} 无返回值
+   */
+  function disposeChartsIn(root) {
+    if (!root || !window.echarts || typeof root.querySelectorAll !== "function") {
+      return;
+    }
+    root.querySelectorAll(".pg-chart").forEach(function (node) {
+      var instance = window.echarts.getInstanceByDom(node);
+      if (instance) {
+        instance.dispose();
+      }
+    });
+  }
+
+  /** 绑定全局唯一的 resize 监听器：遍历仪表板内的图表实例统一 resize。
+   * 严禁在渲染函数里逐次 addEventListener（监听器只增不减 → 抖动 + 泄漏）。
+   * @returns {void} 无返回值
+   */
+  function bindGlobalChartResize() {
+    if (resizeListenerBound) {
+      return;
+    }
+    resizeListenerBound = true;
+    window.addEventListener("resize", function () {
+      if (!window.echarts) {
+        return;
+      }
+      document.querySelectorAll("#dash-grid .pg-chart").forEach(function (node) {
+        var instance = window.echarts.getInstanceByDom(node);
+        if (instance) {
+          instance.resize();
+        }
+      });
+    });
+  }
+
+
   /** 本地化格式。
    * @returns {*} 处理结果
    */
@@ -33,11 +80,20 @@
     return window.L10N;
   }
 
-  /** 读取本地布局；损坏或缺失时返回默认仪表板。 */
   /** 读取布局：先取本地缓存秒开，再异步对齐后端 data/dashboards.json。
    * 后端有数据时以后端为准（多标签页/换浏览器后仍能恢复），本地仅作兜底缓存。
+   *
+   * R6-02 / R6-08 修复：
+   *  1) 加 `state._serverLoaded` 一次性标记 —— 原先每次调用都发请求并在回调里无条件
+   *     `renderDashboard()`，与「点刷新」叠加成一次点击 3 次全量渲染（实测 renderCalls 1→3）；
+   *  2) 回调里先比较数据是否真的变了，未变则不重绘；
+   *  3) 后端为空而本地有时，主动回写一次（首次同步），否则管理页永远读到 0 个仪表板。
+   *
+   * @param {Object} opts 选项：`{force:true}` 强制重新拉取，`{render:false}` 不触发重绘
+   * @returns {void} 无返回值（异步对齐，失败保留本地缓存）
    */
-  function loadState() {
+  function loadState(opts) {
+    var options = opts || {};
     var raw = null;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
@@ -68,11 +124,19 @@
       state.dashboards = [buildDefaultDashboard()];
       state.activeId = state.dashboards[0].id;
     }
+    // 同一会话只对齐一次后端；需要强制刷新时传 {force:true}
+    if (state._serverLoaded && !options.force) {
+      return;
+    }
+    state._serverLoaded = true;
+    var shouldRender = options.render !== false;
     // R3-02：异步拉取后端配置（失败时保留本地缓存，不阻断渲染）
     fetchJson("/api/dashboards", {}).then(function (data) {
-      if (data && Array.isArray(data.dashboards) && data.dashboards.length) {
-        state.dashboards = data.dashboards;
-        state.activeId = data.activeId || data.dashboards[0].id;
+      var serverList = data && Array.isArray(data.dashboards) ? data.dashboards : [];
+      if (serverList.length) {
+        var changed = JSON.stringify(serverList) !== JSON.stringify(state.dashboards);
+        state.dashboards = serverList;
+        state.activeId = data.activeId || serverList[0].id;
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify({
             dashboards: state.dashboards,
@@ -81,12 +145,16 @@
         } catch (error) {
           // 本地缓存写失败不影响已渲染内容
         }
-        if (typeof window.renderDashboard === "function") {
+        if (changed && shouldRender && typeof window.renderDashboard === "function") {
           window.renderDashboard();
         }
+      } else if (state.dashboards.length) {
+        // 首次同步：后端空、本地有默认板 → 静默回写，保证两端一致（管理页可见）
+        saveState(true);
       }
     }).catch(function () {
-      // 后端不可用时静默降级到本地缓存（离线/只读场景）
+      // 后端不可用时静默降级到本地缓存；允许下次再试
+      state._serverLoaded = false;
     });
   }
 
@@ -327,7 +395,85 @@
     // 养基宝（需已绑定；未绑定时后端返回 UPSTREAM_ERROR，卡片走错误态）
     "Y-05": { kind: "yjbCollect", path: "/api/fund/yjb/collect", params: {} },
     "Y-06": { kind: "table", path: "/api/fund/yjb/holdings", params: { account_id: "all" },
-              cols: ["code", "name", "pct", "money", "hold_earn", "account_title"] }
+              cols: ["code", "name", "pct", "money", "hold_earn", "account_title"] },
+
+    // ===== R6-04：补齐 23 个组件渲染器（原覆盖率 17/49 = 35%，其余组件添加后只显示"无渲染器"） =====
+    // 行情类
+    "ST-03": { kind: "chart", path: "/api/stock/realtime-panel", params: {}, pick: "minute", x: "time", y: "price", labels: false },
+    "ST-05": { kind: "news", path: "/api/stock/realtime-panel", params: {}, pick: "news" },
+    "ST-06": { kind: "profile", path: "/api/stock/realtime-panel", params: {}, pick: "forecast",
+               fields: [["org_count", "机构数", "int"], ["target_low", "目标价下限", "num"],
+                        ["target_avg", "目标价均值", "num"], ["target_high", "目标价上限", "num"],
+                        ["target_samples", "样本数", "int"], ["caliber_note", "口径", "text"]] },
+    "ST-07": { kind: "news", path: "/api/stock/realtime-panel", params: {}, pick: "news" },
+    "ST-08": { kind: "profile", path: "/api/stock/profile", params: {},
+               fields: [["name", "名称", "text"], ["industry", "行业", "text"], ["board", "板块", "text"],
+                        ["listing_date", "上市日", "text"], ["reg_capital", "注册资本(万)", "num"],
+                        ["total_mv", "总市值(元)", "num0"], ["pe_ttm", "PE(TTM)", "num"],
+                        ["pb", "PB", "num"], ["employees", "员工数", "int"], ["province", "省份", "text"]] },
+    "ST-09": { kind: "finTable", path: "/api/stock/financial-summary", params: {} },
+    "ST-10": { kind: "table", path: "/api/stock/holders", params: {}, pick: "top10",
+               cols: ["rank", "name", "ratio", "hold_num", "change_text"] },
+    // 板块估值
+    "V-02": { kind: "table", path: "/api/sector/kline", params: { board: t("dashboard.defaultBoard"), market: "a" },
+              pick: "items", cols: ["date", "close", "open", "high", "low", "volume"] },
+    "V-03": { kind: "table", path: "/api/sector/cons", params: { board: t("dashboard.defaultBoard"), market: "a" },
+              pick: "items", cols: ["code", "name", "pct", "price", "weight"] },
+    "V-04": { kind: "news", path: "/api/news/sector-search", params: { sector: t("dashboard.defaultBoard") }, pick: "items" },
+    // 资讯
+    "N-05": { kind: "table", path: "/api/news/financial-search", params: { market: "a", q: "茅台" }, pick: "list",
+              cols: ["company", "title", "type", "pubTime", "source"] },
+    // 基金
+    "F-01": { kind: "profile", path: "/api/fund/info", params: { code: "017811" },
+              fields: [["name", "基金简称", "text"], ["full_name", "基金全称", "text"],
+                       ["keeper", "基金公司", "text"], ["manager", "基金经理", "text"],
+                       ["found_date", "成立日", "text"], ["scale", "规模", "text"],
+                       ["risk_level", "风险等级", "text"], ["trustee", "托管银行", "text"]] },
+    "F-02": { kind: "chart", path: "/api/fund/nav", params: { code: "017811", size: 120 },
+              pick: "items", x: "date", y: "nav", labels: false },
+    "F-05": { kind: "table", path: "/api/fund/dividend", params: { code: "017811" }, pick: "items",
+              cols: ["date", "dividend", "type"] },
+    // 组合 / 自选
+    "P-04": { kind: "table", path: "/api/portfolio/analysis", params: {}, pick: "distribution",
+              cols: ["label", "count", "value_cny", "ratio"] },
+    "W-01": { kind: "profile", path: "/api/watchlist", params: {}, pick: "counts",
+              fields: [["total", "自选总数", "int"], ["up", "上涨", "int"], ["down", "下跌", "int"], ["flat", "平盘", "int"]] },
+    "W-02": { kind: "table", path: "/api/watchlist", params: {}, pick: "items",
+              cols: ["symbol", "name", "market"] },
+    // 资金
+    "L-01": { kind: "chart", path: "/api/moneyflow/northbound", params: {}, pick: "items",
+              x: "date", y: "net", labels: false },
+    "L-02": { kind: "table", path: "/api/moneyflow/north-top", params: {}, pick: "items",
+              cols: ["name", "net_buy", "date"] },
+    "L-03": { kind: "table", path: "/api/moneyflow/lhb", params: {}, pick: "items",
+              cols: ["date", "code", "name", "close", "pct", "net_buy"] },
+    "L-04": { kind: "table", path: "/api/moneyflow/lhb-institution", params: {}, pick: "items",
+              cols: ["date", "code", "name", "buy_orgs", "sell_orgs", "net_buy"] },
+    "L-05": { kind: "table", path: "/api/moneyflow/lhb-broker", params: {}, pick: "items",
+              cols: ["date", "name", "buy_amount", "sell_amount", "net_buy"] },
+    // 养基宝实时估值
+    "Y-04": { kind: "profile", path: "/api/fund/yjb/realtime", params: { code: "017811" },
+              fields: [["code", "基金代码", "text"], ["nav", "估算净值", "num4"],
+                       ["nav_date", "净值日期", "text"], ["day_growth", "估算涨跌", "pct"],
+                       ["source", "数据源", "text"]] }
+  };
+
+  /** 不可作为自动刷新组件的条目（R6-04：如实登记，不造假渲染）。
+   *
+   * 两类：
+   *  1) `control: true` —— 页面控件（筛选器/表单/告知书），放进仪表板无意义；
+   *  2) `control: false` —— 接口真实不可用（需登录/需手动 POST），标注原因并禁用「添加」。
+   */
+  var UNAVAILABLE = {
+    "S-01": { control: true, reason: "市场切换是页面控件，请用组件的「改参数 → market」切换" },
+    "S-02": { control: true, reason: "行业/概念切换是页面控件，请用组件的「选行业」控件" },
+    "N-01": { control: true, reason: "三级板块树是页面筛选器，不单独成卡" },
+    "P-02": { control: true, reason: "新增持仓为表单控件，请在持仓页操作" },
+    "Y-01": { control: true, reason: "合规告知书为一次性确认控件，请在养基宝页阅读" },
+    "Y-02": { control: true, reason: "绑定状态为连接器状态控件，请在养基宝页查看" },
+    "Y-03": { control: true, reason: "扫码绑定需交互，无法作为自动刷新组件" },
+    "N-04": { control: false, reason: "AI 复核需手动触发（POST 接口），不作为自动刷新组件" },
+    "F-06": { control: false, reason: "基金持仓分布需登录蛋卷账号，依规范已禁用该通道；可改用「F-04 重仓股」" }
   };
 
   /** 表头本地化映射（字段名 → i18n key）。 */
@@ -560,6 +706,9 @@
       container.appendChild(el("div", "pg-state", t("state.empty")));
       return;
     }
+    // R6-03：同一容器禁止重复 init（旧实例先释放），否则新 canvas 不会挂载
+    disposeChartsIn(container);
+    container.innerHTML = "";
     var box = el("div", "pg-chart");
     container.appendChild(box);
     var chart = window.echarts ? window.echarts.init(box) : null;
@@ -574,13 +723,27 @@
     var down = styles.getPropertyValue("--down").trim() || "#00b061";
     var labels = items.map(function (item) { return item[recipe.x]; });
     var values = items.map(function (item) { return item[recipe.y]; });
+    // R6-07：名称常显（用户要求"展示出来的数据都要写明什么行业/个股/基金"）。
+    // 柱状图默认带名称+数值标签；折线图点数多，保持悬停 + 图例，不铺标签。
+    var showLabels = recipe.labels === true || (recipe.bar === true && recipe.labels !== false);
+    var rotate = labels.length > 8 && recipe.rotate !== false ? 38 : 0;
     chart.setOption({
       backgroundColor: "transparent",
       tooltip: { trigger: "axis" },
-      grid: { left: 56, right: 16, top: 20, bottom: 28 },
+      grid: { left: 56, right: 16, top: showLabels ? 28 : 20, bottom: rotate ? 64 : 28 },
       xAxis: {
         type: "category", data: labels,
-        axisLabel: { color: textColor, interval: Math.max(0, Math.floor(labels.length / 8)) },
+        axisLabel: {
+          color: textColor,
+          interval: 0,
+          rotate: rotate,
+          fontSize: 10,
+          hideOverlap: !rotate,
+          formatter: function (value) {
+            var text = String(value == null ? "" : value);
+            return text.length > 6 ? text.slice(0, 5) + "…" : text;
+          }
+        },
         axisLine: { lineStyle: { color: borderColor } }
       },
       yAxis: {
@@ -594,10 +757,18 @@
           return { value: value, itemStyle: { color: value > 0 ? up : down } };
         }) : values,
         showSymbol: false,
-        lineStyle: { width: 1.6 }
+        lineStyle: { width: 1.6 },
+        label: showLabels ? {
+          show: true,
+          position: "top",
+          fontSize: 9,
+          color: textColor,
+          formatter: recipe.labelUnit === "pct"
+            ? function (param) { return (param.value > 0 ? "+" : "") + param.value + "%"; }
+            : undefined
+        } : { show: false }
       }]
     });
-    window.addEventListener("resize", function () { chart.resize(); });
   }
 
   /** 渲染资讯流（真实新闻 + 本地情绪标签）。
@@ -636,22 +807,56 @@
    */
   function renderWidgetBody(body, data, recipe, widget) {
     body.innerHTML = "";
+    // R6-04：统一取列表 —— recipe.pick 优先，否则 items / nodes / list
+    var picked = recipe.pick ? data[recipe.pick] : null;
+    var rows = (recipe.pick && Array.isArray(picked) ? picked
+      : (data.items || data.nodes || data.list || [])).filter(function (item) { return item; });
+
     if (recipe.kind === "table") {
-      var rows = (data.items || data.nodes || []).filter(function (item) { return item; });
-      renderTable(body, rows, recipe.cols, widget);
+      if (!rows.length) {
+        appendExplanation(body, data);
+        return;
+      }
+      // 行数上限：长表（板块 K 线 261 行等）只展示最近 N 行并注明，避免一次性铺满卡片
+      var maxRows = recipe.maxRows || 200;
+      var shown = rows;
+      if (rows.length > maxRows) {
+        shown = rows.slice(-maxRows);
+      }
+      renderTable(body, shown, recipe.cols, widget);
+      if (shown.length !== rows.length) {
+        body.appendChild(el("div", "pg-card-sub",
+          t("dashboard.tableTrimmed", { shown: shown.length, total: rows.length })));
+      }
       return;
     }
     if (recipe.kind === "chart") {
-      renderChart(body, data[recipe.pick] || [], recipe);
+      if (!rows.length) {
+        appendExplanation(body, data);
+        return;
+      }
+      renderChart(body, rows, recipe);
       return;
     }
     if (recipe.kind === "news") {
-      renderNews(body, data.items || []);
+      if (!rows.length) {
+        appendExplanation(body, data);
+        return;
+      }
+      renderNews(body, rows);
       return;
     }
     if (recipe.kind === "metrics") {
       var payload = recipe.pick === "self" ? data : data[recipe.pick];
       renderMetrics(body, payload, widget);
+      return;
+    }
+    if (recipe.kind === "profile") {
+      renderProfile(body, data, recipe);
+      return;
+    }
+    if (recipe.kind === "finTable") {
+      renderFinTable(body, data);
       return;
     }
     if (recipe.kind === "yjbCollect") {
@@ -682,6 +887,15 @@
           head.appendChild(el("span", "pg-kpi-acc-name", acc.title || acc.id));
           head.appendChild(el("span", "pg-kpi-acc-id", acc.up + "↑/" + acc.down + "↓"));
           box.appendChild(head);
+          // R6-11：账户资产 = hold_cost + hold_income（后端若已下发 assets 则直接用）
+          var assets = acc.assets;
+          if (assets === undefined || assets === null) {
+            assets = (Number(acc.hold_cost) || 0) + (Number(acc.hold_income) || 0);
+          }
+          var lineAssets = el("div", "pg-kpi-acc-row");
+          lineAssets.appendChild(el("span", "", t("yjb.acc.assets")));
+          lineAssets.appendChild(el("b", "", fmt(assets, 2)));
+          box.appendChild(lineAssets);
           var line = el("div", "pg-kpi-acc-row");
           line.appendChild(el("span", "", t("yjb.kpi.todayIncome")));
           line.appendChild(el("b", pctClass(acc.today_income),
@@ -712,6 +926,116 @@
       body.appendChild(grid);
       body.setAttribute("data-state", "default");
     }
+  }
+
+  /** 空数据时的说明块（R6-15：空错分离 —— 空结果必须带来源/口径说明，禁止静默空白）。
+   * @param {HTMLElement} body 内容容器
+   * @param {Object} data 接口 data 段
+   * @returns {void} 无返回值
+   */
+  function appendExplanation(body, data) {
+    var box = el("div", "pg-state");
+    box.appendChild(el("div", "pg-state-title", t("state.empty")));
+    var hint = data.note || data.empty_note || data.caliber || "";
+    if (hint) {
+      box.appendChild(el("div", "pg-state-hint", hint));
+    }
+    body.appendChild(box);
+    body.setAttribute("data-state", "empty");
+  }
+
+  /** 渲染键值档案（按 recipe.fields 声明的字段顺序，缺值显示「无数据」占位）。
+   * @param {HTMLElement} container DOM 容器
+   * @param {Object} data 接口 data 段
+   * @param {Object} recipe 渲染配方（含 pick / fields）
+   * @returns {void} 无返回值
+   */
+  function renderProfile(container, data, recipe) {
+    var source = recipe.pick && recipe.pick !== "self" ? (data[recipe.pick] || {}) : data;
+    var fields = recipe.fields || [];
+    var grid = el("div", "pg-metric-grid");
+    var shown = 0;
+    fields.forEach(function (field) {
+      var key = field[0];
+      var label = field[1];
+      var kind = field[2] || "text";
+      var value = source[key];
+      if (value === undefined || value === null || value === "") {
+        value = t("value.none");
+        kind = "text";
+      } else if (kind === "num0") {
+        value = L().num(value, 0);
+      } else if (kind === "num4") {
+        value = L().num(value, 4);
+      } else if (kind === "num") {
+        value = L().num(value, 2);
+      } else if (kind === "int") {
+        value = L().num(value, 0);
+      } else if (kind === "pct") {
+        value = L().pct(value);
+      } else {
+        value = String(value);
+      }
+      var cell = el("div", "pg-metric-cell");
+      cell.appendChild(el("div", "pg-metric-label", label));
+      var cls = kind === "pct" && typeof source[key] === "number"
+        ? (source[key] > 0 ? "up" : source[key] < 0 ? "down" : "flat") : "";
+      cell.appendChild(el("div", "pg-metric-value " + cls, value));
+      grid.appendChild(cell);
+      shown += 1;
+    });
+    if (!shown) {
+      appendExplanation(container, data);
+      return;
+    }
+    container.appendChild(grid);
+  }
+
+  /** 渲染财务摘要矩阵（行=指标，列=报告期）。
+   * @param {HTMLElement} container DOM 容器
+   * @param {Object} data `/api/stock/financial-summary` 的 data 段
+   * @returns {void} 无返回值
+   */
+  function renderFinTable(container, data) {
+    var periods = data.periods || [];
+    var metrics = data.metrics || [];
+    if (!periods.length || !metrics.length) {
+      appendExplanation(container, data);
+      return;
+    }
+    /** 报告期 20260630 → 2026-06-30（保持可读且不引入歧义）。
+     * @param {string} value 期次字符串
+     * @returns {string} 格式化后的日期
+     */
+    function fmtPeriod(value) {
+      var text = String(value || "");
+      if (text.length !== 8) {
+        return text;
+      }
+      return text.slice(0, 4) + "-" + text.slice(4, 6) + "-" + text.slice(6, 8);
+    }
+    var wrap = el("div", "pg-table-wrap");
+    var table = el("table", "pg-table");
+    var thead = el("thead");
+    var headRow = el("tr");
+    headRow.appendChild(el("th", "", t("dashboard.fin.metric")));
+    periods.forEach(function (period) {
+      headRow.appendChild(el("th", "num", fmtPeriod(period)));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    metrics.forEach(function (metric) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "", metric.name || metric.key || ""));
+      (metric.values || []).forEach(function (value) {
+        tr.appendChild(el("td", "num", value === null || value === undefined ? t("value.none") : L().num(value, 2)));
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    container.appendChild(wrap);
   }
 
   // =============================================================
@@ -765,6 +1089,266 @@
     });
   }
 
+  // =============================================================
+  // R6-07 / F6-07：板块类组件的内容选择器（默认展示 20，可选 10/20/30/50/全部）
+  // =============================================================
+
+  /** 需要「选行业 / 选概念」控件的组件及其默认展示数量。
+   * 与设计基准 F6-07 一致：热点图、行业排行、概念排行、板块资金流共用同一控件与同一份参数。
+   */
+  var SECTOR_PICKERS = {
+    "S-03": { labelKey: "dashboard.pick.sector", listKey: "nodes", defaultLimit: 20, mode: "industry" },
+    "S-04": { labelKey: "dashboard.pick.sector", listKey: "items", defaultLimit: 20, mode: "industry" },
+    "S-05": { labelKey: "dashboard.pick.concept", listKey: "items", defaultLimit: 20, mode: "concept" },
+    "S-07": { labelKey: "dashboard.pick.sector", listKey: "items", defaultLimit: 20, mode: "industry" }
+  };
+
+  /** 展示数量档位（0 表示全部）。 */
+  var SECTOR_COUNTS = [10, 20, 30, 50, 0];
+
+  /** 取该组件在当前参数下应展示的板块名集合。
+   * @param {Object} params 组件参数（含 boards / limit）
+   * @param {Object} picker 选择器配置
+   * @returns {{boards: string[], limit: number}} 已选板块与展示数量
+   */
+  function pickerSelection(params, picker) {
+    var raw = String((params && params.boards) || "").trim();
+    var boards = raw ? raw.split(",").map(function (item) { return item.trim(); }).filter(Boolean) : [];
+    var limit = params && params.limit !== undefined && params.limit !== ""
+      ? Number(params.limit) : picker.defaultLimit;
+    if (!isFinite(limit) || limit < 0) {
+      limit = picker.defaultLimit;
+    }
+    return { boards: boards, limit: limit };
+  }
+
+  /** 按参数裁剪列表：先按已选板块过滤，再按展示数量截断（保持接口原有排序）。
+   * @param {Object} data 接口 data 段
+   * @param {Object} picker 选择器配置
+   * @param {Object} params 组件参数
+   * @returns {Object} 新的 data 段（不改原对象）
+   */
+  function applySectorFilter(data, picker, params) {
+    var listKey = picker.listKey;
+    var list = data[listKey];
+    if (!Array.isArray(list) || !list.length) {
+      return data;
+    }
+    var selection = pickerSelection(params, picker);
+    var rows = list;
+    if (selection.boards.length) {
+      rows = rows.filter(function (item) {
+        return selection.boards.indexOf(String(item.name || "")) >= 0;
+      });
+    }
+    if (selection.limit > 0) {
+      rows = rows.slice(0, selection.limit);
+    }
+    var copy = Object.assign({}, data);
+    copy[listKey] = rows;
+    if (listKey === "nodes") {
+      copy.count = rows.length;
+    }
+    return copy;
+  }
+
+  /** 打开板块选择浮层：搜索 + 复选 + 展示数量 + 应用。
+   *
+   * 规格（设计基准 F6-07）：默认展示 20；可在 10/20/30/50/全部 之间切换；
+   * 勾选用于只看指定行业；选 0 个 = 全部参与过滤（与"全部"档位配合即为全量）。
+   *
+   * @param {Object} entry 组件条目（含 id / params）
+   * @param {Object} meta 组件元数据（标题）
+   * @returns {void} 无返回值（异步拉取列表后挂载浮层）
+   */
+  function openSectorPicker(entry, meta) {
+    var picker = SECTOR_PICKERS[entry.id];
+    if (!picker) {
+      return;
+    }
+    var recipe = RECIPES[entry.id] || {};
+    var overlay = el("div", "dash-picker-mask");
+    var panel = el("div", "dash-picker");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", t(picker.labelKey));
+
+    var head = el("div", "dash-picker-head");
+    head.appendChild(el("span", "dash-picker-title", t(picker.labelKey) + " · " + (meta.title || entry.id)));
+    var closeBtn = el("button", "pg-btn dash-btn", t("action.close"));
+    closeBtn.type = "button";
+    head.appendChild(closeBtn);
+    panel.appendChild(head);
+
+    var searchRow = el("div", "dash-picker-row");
+    var search = document.createElement("input");
+    search.type = "search";
+    search.className = "dash-picker-search";
+    search.placeholder = t("dashboard.pick.search");
+    search.setAttribute("aria-label", t("dashboard.pick.search"));
+    searchRow.appendChild(search);
+    panel.appendChild(searchRow);
+
+    var countRow = el("div", "dash-picker-row dash-picker-counts");
+    countRow.appendChild(el("span", "dash-picker-label", t("dashboard.pick.showCount")));
+    var selection = pickerSelection(entry.params, picker);
+    var currentLimit = selection.limit;
+    var countButtons = [];
+    SECTOR_COUNTS.forEach(function (value) {
+      var label = value === 0 ? t("dashboard.pick.countAll") : String(value);
+      var chip = el("button", "pg-tab" + (value === currentLimit ? " active" : ""), label);
+      chip.type = "button";
+      chip.addEventListener("click", function () {
+        currentLimit = value;
+        countButtons.forEach(function (node) { node.classList.remove("active"); });
+        chip.classList.add("active");
+      });
+      countButtons.push(chip);
+      countRow.appendChild(chip);
+    });
+    panel.appendChild(countRow);
+
+    var listHost = el("div", "dash-picker-list");
+    listHost.appendChild(el("div", "pg-state", t("state.loading")));
+    panel.appendChild(listHost);
+
+    var foot = el("div", "dash-picker-foot");
+    var counter = el("span", "dash-picker-counter", "");
+    foot.appendChild(counter);
+    var selectAll = el("button", "pg-btn", t("dashboard.pick.all"));
+    selectAll.type = "button";
+    var clearAll = el("button", "pg-btn", t("dashboard.pick.clear"));
+    clearAll.type = "button";
+    var apply = el("button", "pg-btn primary", t("dashboard.pick.apply"));
+    apply.type = "button";
+    foot.appendChild(selectAll);
+    foot.appendChild(clearAll);
+    foot.appendChild(apply);
+    panel.appendChild(foot);
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    var chosen = selection.boards.slice();
+    var allNames = [];
+
+    /** 关闭浮层并移除节点。
+     * @returns {void} 无返回值
+     */
+    function close() {
+      if (overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+      document.removeEventListener("keydown", onEsc);
+    }
+
+    /** Esc 关闭。
+     * @param {KeyboardEvent} event 键盘事件
+     * @returns {void} 无返回值
+     */
+    function onEsc(event) {
+      if (event.key === "Escape") {
+        close();
+      }
+    }
+    document.addEventListener("keydown", onEsc);
+    closeBtn.addEventListener("click", close);
+    overlay.addEventListener("click", function (event) {
+      if (event.target === overlay) {
+        close();
+      }
+    });
+
+    /** 重绘计数文案与「全选/清空」可用态。
+     * @returns {void} 无返回值
+     */
+    function refreshCounter() {
+      counter.textContent = t("dashboard.pick.selected", { n: chosen.length, total: allNames.length })
+        + (currentLimit > 0 ? " · " + t("dashboard.pick.showCount") + " " + currentLimit : "");
+    }
+
+    /** 按搜索词与选中态重绘列表。
+     * @returns {void} 无返回值
+     */
+    function renderList() {
+      var keyword = (search.value || "").trim().toLowerCase();
+      listHost.innerHTML = "";
+      var shown = 0;
+      allNames.forEach(function (name) {
+        if (keyword && name.toLowerCase().indexOf(keyword) < 0) {
+          return;
+        }
+        shown += 1;
+        var row = el("label", "dash-picker-item");
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = chosen.indexOf(name) >= 0;
+        box.addEventListener("change", function () {
+          if (box.checked) {
+            if (chosen.indexOf(name) < 0) {
+              chosen.push(name);
+            }
+          } else {
+            chosen = chosen.filter(function (item) { return item !== name; });
+          }
+          refreshCounter();
+        });
+        row.appendChild(box);
+        row.appendChild(el("span", "dash-picker-name", name));
+        listHost.appendChild(row);
+      });
+      if (!shown) {
+        listHost.appendChild(el("div", "pg-state", t("state.empty")));
+      }
+      refreshCounter();
+    }
+
+    search.addEventListener("input", renderList);
+    selectAll.addEventListener("click", function () {
+      chosen = allNames.slice();
+      renderList();
+    });
+    clearAll.addEventListener("click", function () {
+      chosen = [];
+      renderList();
+    });
+    apply.addEventListener("click", function () {
+      var params = Object.assign({}, entry.params || {});
+      if (chosen.length) {
+        params.boards = chosen.join(",");
+      } else {
+        delete params.boards;
+      }
+      if (currentLimit > 0) {
+        params.limit = currentLimit;
+      } else {
+        params.limit = 0;
+      }
+      entry.params = params;
+      saveState(true);
+      close();
+      render();
+    });
+
+    // 拉取板块列表（与卡片同一接口，保证"看到的可选"与"能展示的"一致）
+    fetchJson(recipe.path, recipe.params || {}).then(function (data) {
+      var list = data[picker.listKey] || [];
+      allNames = list.map(function (item) { return String(item.name || ""); }).filter(Boolean);
+      if (!allNames.length) {
+        listHost.innerHTML = "";
+        listHost.appendChild(el("div", "pg-state",
+          (data.caliber || t("state.empty"))));
+        return;
+      }
+      renderList();
+    }).catch(function (error) {
+      listHost.innerHTML = "";
+      var box = el("div", "pg-state");
+      box.appendChild(el("div", "pg-state-title", t("state.errorTitle")));
+      box.appendChild(el("div", "pg-state-hint", error.message));
+      listHost.appendChild(box);
+    });
+  }
+
   /** 构建一张组件卡（含拖拽、宽度调整、移除、CSV）。
    * @param {*} entry 列表项 / 组件条目
    * @param {number} index 序号（从 0 开始）
@@ -788,6 +1372,29 @@
     head.appendChild(el("span", "pg-card-title", meta.title));
     // UI-02：区块编号（S-03/N-03 等）只作 HTML id，不再作为副标题渲染到界面
     head.appendChild(el("span", "pg-spacer"));
+
+    // R6-07：板块类组件提供「选行业 / 选概念」控件（默认展示 20，可调 10/20/30/50/全部）
+    var pickerDef = SECTOR_PICKERS[entry.id];
+    if (pickerDef) {
+      var pick = el("button", "pg-btn dash-btn", t(pickerDef.labelKey));
+      pick.type = "button";
+      var applied = pickerSelection(entry.params, pickerDef);
+      pick.title = applied.boards.length
+        ? t("dashboard.pick.selected", { n: applied.boards.length, total: applied.boards.length })
+        : t(pickerDef.labelKey);
+      pick.addEventListener("click", function (event) {
+        event.stopPropagation();
+        openSectorPicker(entry, meta);
+      });
+      head.appendChild(pick);
+      var summary = el("span", "dash-pick-summary",
+        t("dashboard.pick.summary", {
+          mode: t(pickerDef.labelKey),
+          n: applied.limit > 0 ? applied.limit : "\u221E",
+          total: applied.boards.length ? applied.boards.length : "\u2014"
+        }));
+      head.appendChild(summary);
+    }
 
     // 改参数（R3-11）：按配方声明的参数键生成弹窗（标的 symbol / 周期 period 等）
     var recipeDef = RECIPES[entry.id];
@@ -939,6 +1546,8 @@
    * @param {Object} meta 元数据对象
    */
   function loadWidget(body, card, entry, meta) {
+    // R6-03：重绘前释放本卡旧图表实例，避免实例与 canvas 累积
+    disposeChartsIn(body);
     body.innerHTML = "";
     // 四态规范（§7.9）：显式标记 loading，巡检与 wait_blocks 才能等到收口
     body.setAttribute("data-state", "loading");
@@ -958,8 +1567,9 @@
     }
     // P2-01：合并配方默认参数与用户传入参数（ST 系列不再硬编码 symbol）
     var params = Object.assign({}, recipe.params || {}, entry.params || {});
-    // 股票类组件需 symbol 参数，否则进入空态引导（由命令面板或组件库带入当前标的）
-    if (recipe.path.indexOf("/api/stock/realtime-panel") === 0 && !params.symbol) {
+    // 个股类组件必须带 symbol：覆盖全部 /api/stock/* 接口（原先只判 realtime-panel，
+    // 导致 ST-08/ST-09/ST-10 直接打后端拿 400 并以「请求参数不合法：symbol」错误态收场）。
+    if (recipe.path.indexOf("/api/stock/") === 0 && !params.symbol) {
       body.innerHTML = "";
       var hint = el("div", "pg-state");
       hint.appendChild(el("div", "pg-state-title", t("dashboard.stockEmptyTitle")));
@@ -975,8 +1585,21 @@
     }
     fetchJson(recipe.path, params)
       .then(function (data) {
+        disposeChartsIn(body);
         body.innerHTML = "";
-        renderWidgetBody(body, data, recipe, meta);
+        // R6-07：板块类组件按「已选行业 + 展示数量」裁剪后渲染（默认 20，可调）
+        var pickerDef = SECTOR_PICKERS[entry.id];
+        var payload = pickerDef ? applySectorFilter(data, pickerDef, entry.params) : data;
+        var pickedList = pickerDef ? (payload[pickerDef.listKey] || []) : [];
+        if (pickerDef && Array.isArray(data[pickerDef.listKey]) && data[pickerDef.listKey].length
+            && !pickedList.length) {
+          // 选了行业但这批数据里一个都不匹配 → 明确空态，不显示空白
+          body.appendChild(el("div", "pg-state",
+            t("dashboard.pick.empty", { label: t(pickerDef.labelKey) })));
+          body.setAttribute("data-state", "empty");
+          return;
+        }
+        renderWidgetBody(body, payload, recipe, meta);
         // 重新加载时先清掉旧徽章，避免重复叠加
         card.querySelectorAll(".dash-badges").forEach(function (node) { node.remove(); });
         var badges = el("div", "dash-badges");
@@ -1038,6 +1661,9 @@
     loadRegistry().then(function () {
       // R3-02：侧栏分组树与页内内容同步刷新
       renderSidebar();
+      // R6-03：全量重建前释放旧图表实例 + 确保全局 resize 监听器只注册一次
+      disposeChartsIn(container);
+      bindGlobalChartResize();
       container.innerHTML = "";
       // 四态之一：一个仪表板都没有（用户删光或首次空仓）→ 引导态，不自动造假数据
       if (!state.dashboards.length) {
@@ -1058,36 +1684,23 @@
       });
       toolbar.appendChild(tabs);
 
-      var addDash = el("button", "pg-btn", "+ " + t("dashboard.new"));
+      var addDash = el("button", "pg-btn primary", "+ " + t("dashboard.new"));
       addDash.type = "button";
       addDash.addEventListener("click", openCreateDashboard);
       toolbar.appendChild(addDash);
 
-      // R3-02：当前仪表板的重命名/复制/分组/删除/排序（原位管理，不离开当前页）
-      var manage = [
-        { label: t("dashboard.rename"), run: renameDashboard },
-        { label: t("dashboard.duplicate"), run: duplicateDashboard },
-        { label: t("dashboard.groupTitle"), run: groupDashboard },
-        { label: t("dashboard.moveLeft"), run: function () { moveDashboard(-1); } },
-        { label: t("dashboard.moveRight"), run: function () { moveDashboard(1); } },
-        { label: t("dashboard.remove"), run: deleteDashboard }
-      ];
-      manage.forEach(function (action) {
-        var button = el("button", "pg-btn", action.label);
-        button.type = "button";
-        button.addEventListener("click", action.run);
-        toolbar.appendChild(button);
+      // R6-08 / F6-01：8 个操作按钮收进「⋯ 更多」，与画布右键菜单共用同一份定义。
+      // 原来 11 个控件平铺整行，且与侧栏「新建仪表板 / 管理 / 组件库」三处重复。
+      var more = el("button", "pg-btn", "⋯ " + t("dashboard.more"));
+      more.type = "button";
+      more.id = "dash-more-btn";
+      more.setAttribute("aria-haspopup", "menu");
+      more.addEventListener("click", function (event) {
+        event.stopPropagation();
+        var rect = more.getBoundingClientRect();
+        openCanvasMenu(rect.left, rect.bottom + 4);
       });
-
-      var library = el("button", "pg-btn", t("dashboard.library"));
-      library.type = "button";
-      library.addEventListener("click", openLibrary);
-      toolbar.appendChild(library);
-
-      var templates = el("button", "pg-btn", t("dashboard.templates"));
-      templates.type = "button";
-      templates.addEventListener("click", openTemplates);
-      toolbar.appendChild(templates);
+      toolbar.appendChild(more);
 
       toolbar.appendChild(el("span", "pg-spacer"));
       var save = el("button", "pg-btn", t("dashboard.save"));
@@ -1099,6 +1712,8 @@
 
       var grid = el("div", "pg-grid dash-grid");
       grid.id = "dash-grid";
+      // R6-08：画布空白处右键唤出同一份操作菜单
+      bindCanvasMenu(grid);
       // R3-12：接收组件库拖入的组件（自定义 MIME，与卡片换位拖拽互不干扰）
       bindCanvasDrop(grid);
       var dash = activeDashboard();
@@ -1392,30 +2007,46 @@
           info.appendChild(el("div", "dash-lib-meta",
             t("dashboard.libSpan", { n: item.span || "—" })));
           var actions = el("div", "dash-lib-actions");
+          // R6-04：页面控件与禁用通道组件不可添加 —— 禁用按钮并写明原因（禁止静默失败）
+          var blocked = UNAVAILABLE[item.id];
           var add = el("button", "pg-btn primary", t("action.add"));
           add.type = "button";
-          add.addEventListener("click", function (event) {
-            event.stopPropagation();
-            addWidgetById(item.id);
-            if (options.onAdded) {
-              options.onAdded(item);
-            }
-            toast(t("dashboard.widgetAdded", { name: item.title || item.id }));
-          });
+          if (blocked) {
+            add.textContent = t("dashboard.addDisabled");
+            add.disabled = true;
+            add.title = blocked.reason;
+            add.classList.add("is-disabled");
+            info.appendChild(el("div", "dash-lib-blocked",
+              (blocked.control ? t("dashboard.controlOnly") : t("dashboard.unavailable")) + "：" + blocked.reason));
+          } else {
+            add.addEventListener("click", function (event) {
+              event.stopPropagation();
+              addWidgetById(item.id);
+              if (options.onAdded) {
+                options.onAdded(item);
+              }
+              toast(t("dashboard.widgetAdded", { name: item.title || item.id }));
+            });
+          }
           actions.appendChild(add);
           info.appendChild(actions);
           card.appendChild(info);
 
           // 拖拽入位：拖动到仪表板画布即完成添加（与画布 drop 监听配对）
-          card.addEventListener("dragstart", function (event) {
-            event.dataTransfer.setData("application/x-openbb-widget", item.id);
-            event.dataTransfer.setData("text/plain", item.id);
-            event.dataTransfer.effectAllowed = "copy";
-            card.classList.add("dragging");
-          });
-          card.addEventListener("dragend", function () {
-            card.classList.remove("dragging");
-          });
+          if (!blocked) {
+            card.addEventListener("dragstart", function (event) {
+              event.dataTransfer.setData("application/x-openbb-widget", item.id);
+              event.dataTransfer.setData("text/plain", item.id);
+              event.dataTransfer.effectAllowed = "copy";
+              card.classList.add("dragging");
+            });
+            card.addEventListener("dragend", function () {
+              card.classList.remove("dragging");
+            });
+          } else {
+            card.setAttribute("draggable", "false");
+            card.classList.add("is-blocked");
+          }
           listHost.appendChild(card);
         });
       });
@@ -1653,6 +2284,127 @@
     container.setAttribute("data-state", "default");
   }
 
+  /** 打开中的画布菜单遮罩节点（同一时刻只允许一个）。 */
+  var canvasMenuNode = null;
+
+  /** 关闭画布右键菜单。
+   * @returns {void} 无返回值
+   */
+  function closeCanvasMenu() {
+    if (canvasMenuNode && canvasMenuNode.parentNode) {
+      canvasMenuNode.parentNode.removeChild(canvasMenuNode);
+    }
+    canvasMenuNode = null;
+  }
+
+  /** 画布操作菜单的条目定义（右键与「⋯ 更多」共用，保证单一实现）。
+   * @returns {Array<Object>} 菜单项列表（含分隔线与分组标题）
+   */
+  function canvasMenuItems() {
+    return [
+      { group: t("dashboard.ctxGroupBoard") },
+      { label: t("dashboard.new"), hint: "Ctrl+N", run: openCreateDashboard },
+      { label: t("dashboard.rename"), hint: "F2", run: renameDashboard },
+      { label: t("dashboard.duplicate"), run: duplicateDashboard },
+      { label: t("dashboard.groupTitle") + "…", run: groupDashboard },
+      { sep: true },
+      { group: t("dashboard.ctxGroupOrder") },
+      { label: t("dashboard.moveLeft"), run: function () { moveDashboard(-1); } },
+      { label: t("dashboard.moveRight"), run: function () { moveDashboard(1); } },
+      { sep: true },
+      { label: t("dashboard.library") + "…", run: openLibrary },
+      { label: t("dashboard.templates") + "…", run: openTemplates },
+      { label: t("dashboard.save"), hint: "Ctrl+S", run: function () { saveState(false); } },
+      { sep: true },
+      { label: t("dashboard.remove"), danger: true, run: deleteDashboard }
+    ];
+  }
+
+  /** 打开画布操作菜单（锚定到视口坐标，自动避让边界）。
+   * @param {number} x 视口 X 坐标
+   * @param {number} y 视口 Y 坐标
+   * @returns {void} 无返回值
+   */
+  function openCanvasMenu(x, y) {
+    closeCanvasMenu();
+    if (!state.dashboards.length) {
+      toast(t("dashboard.noneHint"));
+      return;
+    }
+    var mask = el("div", "dash-ctx-mask");
+    var menu = el("div", "dash-ctx-menu");
+    menu.setAttribute("role", "menu");
+
+    canvasMenuItems().forEach(function (item) {
+      if (item.sep) {
+        menu.appendChild(el("div", "dash-ctx-sep"));
+        return;
+      }
+      if (item.group) {
+        menu.appendChild(el("div", "dash-ctx-group", item.group));
+        return;
+      }
+      var button = el("button", "dash-ctx-item" + (item.danger ? " danger" : ""), item.label);
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      if (item.hint) {
+        button.appendChild(el("span", "pg-spacer"));
+        button.appendChild(el("span", "dash-ctx-hint", item.hint));
+      }
+      button.addEventListener("click", function () {
+        closeCanvasMenu();
+        item.run();
+      });
+      menu.appendChild(button);
+    });
+
+    mask.appendChild(menu);
+    document.body.appendChild(mask);
+    canvasMenuNode = mask;
+
+    var width = menu.offsetWidth || 214;
+    var height = menu.offsetHeight || 320;
+    menu.style.left = Math.max(6, Math.min(x, window.innerWidth - width - 8)) + "px";
+    menu.style.top = Math.max(6, Math.min(y, window.innerHeight - height - 8)) + "px";
+
+    mask.addEventListener("click", function (event) {
+      if (event.target === mask) {
+        closeCanvasMenu();
+      }
+    });
+    mask.addEventListener("contextmenu", function (event) {
+      event.preventDefault();
+      closeCanvasMenu();
+      openCanvasMenu(event.clientX, event.clientY);
+    });
+    document.addEventListener("keydown", onCanvasMenuKey);
+
+    /** 菜单键盘处理：Esc 关闭。
+     * @param {KeyboardEvent} event 键盘事件
+     * @returns {void} 无返回值
+     */
+    function onCanvasMenuKey(event) {
+      if (event.key === "Escape") {
+        document.removeEventListener("keydown", onCanvasMenuKey);
+        closeCanvasMenu();
+      }
+    }
+  }
+
+  /** 绑定画布右键：卡片内不拦截（卡片菜单另行处理），空白处弹画布菜单。
+   * @param {HTMLElement} grid 画布网格节点
+   * @returns {void} 无返回值
+   */
+  function bindCanvasMenu(grid) {
+    grid.addEventListener("contextmenu", function (event) {
+      if (event.target.closest && event.target.closest(".dash-widget")) {
+        return;
+      }
+      event.preventDefault();
+      openCanvasMenu(event.clientX, event.clientY);
+    });
+  }
+
   /** 绑定画布拖拽入位：接收组件库拖入的组件 id（R3-12 L-02）。
    * @param {HTMLElement} grid 仪表板画布网格节点
    * @returns {void} 无返回值
@@ -1729,12 +2481,23 @@
    * @param {Object} params 用户传入参数（如 symbol/market，P2-01 透传当前标的）
    */
   function addWidgetById(widgetId, params) {
+    // R6-04：页面控件 / 禁用通道组件不允许加入仪表板，如实说明原因
+    var blocked = UNAVAILABLE[widgetId];
+    if (blocked) {
+      toast(blocked.reason);
+      return;
+    }
     // 命令面板可能在未进入仪表板前调用，此时 state 尚未装载 → 先补 loadState，
     // 否则 activeDashboard() 取空数组会抛 TypeError（P2-01 相关）
     if (!state.dashboards.length) {
       loadState();
     }
     var dash = activeDashboard();
+    if (!dash) {
+      // 兜底：无当前仪表板时不得抛 TypeError（原先 dash.widgets 会直接崩）
+      toast(t("dashboard.noneHint"));
+      return;
+    }
     if (dash.widgets.some(function (entry) { return entry.id === widgetId; })) {
       toast(t("dashboard.duplicateWidget"));
       return;
@@ -1836,6 +2599,28 @@
     loadState();
     render();
   };
+
+  // R6-01 补强：首屏直达二级路由时补渲染一次。
+  // 背景：index.html 的脚本顺序是 utils → pages → ... → dashboard，pages.js 的 route()
+  // 在首屏执行时 window.Dashboard 尚未定义，`if (window.Dashboard && ...)` 分支被
+  // 静默跳过，之后再无触发 → #/dashboard-manage 首屏进来是整页空白（只有切换 hash 才渲染）。
+  // 这里在 dashboard.js 完成导出后主动补一次，覆盖"收藏夹/深链直接打开"的场景。
+  (function bootOnDeepLink() {
+    var raw = (location.hash || "").replace(/^#\/?/, "").split("?")[0];
+    if (raw === "dashboard-manage") {
+      var manageBox = document.getElementById("page-dashboard-manage");
+      if (manageBox) {
+        renderDashboardManage(manageBox);
+      }
+    } else if (raw === "widget-library") {
+      var libraryBox = document.getElementById("page-widget-library");
+      if (libraryBox) {
+        renderLibraryPage(libraryBox);
+      }
+    } else if (raw === "dashboard") {
+      window.renderDashboard();
+    }
+  })();
 
   // 时序兜底：pages.js 先于本文件执行，首次进入 #/dashboard 时 renderDashboard 尚未定义，
   // 故本文件加载完成后按当前 hash 补渲染一次（否则首屏空白，刷新后才出现）。

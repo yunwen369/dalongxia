@@ -22,6 +22,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -57,6 +58,51 @@ def _port_open(host: str = HOST, port: int = PORT, timeout: float = 0.6) -> bool
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
         return sock.connect_ex((host, port)) == 0
+
+
+def _data_dir() -> Path:
+    """运行时数据目录：冻结形态取 EXE 同级 data\\，开发形态取工程内 data\\。
+
+    Returns:
+        Path: 数据目录路径（可能不存在）。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "data"
+    return PROJECT_DIR / "data"
+
+
+def _load_close_action() -> str:
+    """读取「点击关闭按钮」的偏好：tray（最小化到托盘）/ quit（直接退出）。
+
+    默认 `tray`（用户 2026-10-29 裁决：默认最小化到托盘）。
+    文件缺失或值非法同样回落 `tray`；只有显式写入 `"quit"` 才直接退出。
+    托盘不可用（未装 pystray / 系统无通知区）时，调用方会退回直接退出，
+    不会出现"关不掉的窗口"。
+
+    Returns:
+        str: "tray" 或 "quit"。
+    """
+    prefs_file = _data_dir() / "user_prefs.json"
+    try:
+        payload = json.loads(prefs_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "tray"
+    if isinstance(payload, dict) and str(payload.get("close_action") or "") == "quit":
+        return "quit"
+    return "tray"
+
+
+def _open_data_dir() -> None:
+    """打开数据目录（托盘菜单项，失败时静默）。"""
+    target = _data_dir()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(str(target))  # noqa: S606 - 仅打开目录，非执行用户文件
+        else:
+            subprocess.Popen(["xdg-open", str(target)])  # noqa: S603,S607
+    except Exception as exc:  # noqa: BLE001 - 打开失败不影响主流程
+        print(f"[桌面模式] 打开数据目录失败：{type(exc).__name__}", flush=True)
 
 
 def _health(timeout: float = 1.5) -> Optional[dict]:
@@ -142,8 +188,10 @@ def run_check() -> int:
     print(f"监听地址：{BASE_URL}", flush=True)
     print(f"图标：{ICON_PATH}（存在={ICON_PATH.exists()}）", flush=True)
     try:
-        import webview  # noqa: F401
+        import importlib.util
 
+        if importlib.util.find_spec("webview") is None:
+            raise ImportError("webview 未安装")
         print("pywebview：已安装", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"pywebview：未安装（{type(exc).__name__}）", flush=True)
@@ -217,8 +265,112 @@ def main() -> int:
         text_select=True,
     )
 
+    # R6-12 / F6-14：关闭行为可配置（默认最小化到托盘，可在设置页改为直接退出）
+    tray_state: dict = {"icon": None, "quit": False, "hint_shown": False}
+
+    def _tray_icon_image():
+        """构建托盘图标（优先用 assets/icon.ico，缺失时生成纯色方块兜底）。
+
+        Returns:
+            PIL.Image.Image | None: 图标对象；PIL 不可用时返回 None。
+        """
+        try:
+            from PIL import Image
+        except Exception:  # noqa: BLE001 - 无 PIL 时退回无图标模式
+            return None
+        if ICON_PATH.exists():
+            try:
+                return Image.open(str(ICON_PATH))
+            except Exception:  # noqa: BLE001 - 图标损坏时继续走兜底
+                pass
+        return Image.new("RGB", (64, 64), (180, 125, 160))
+
+    def _show_window() -> None:
+        """从托盘恢复主窗口。"""
+        try:
+            window.show()
+            window.restore()
+        except Exception as exc:  # noqa: BLE001 - 恢复失败不应崩溃
+            print(f"[桌面模式] 恢复窗口失败：{type(exc).__name__}", flush=True)
+
+    def _quit_from_tray() -> None:
+        """托盘「退出」：停止托盘、销毁窗口并停掉本次拉起的服务。"""
+        tray_state["quit"] = True
+        icon = tray_state.get("icon")
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:  # noqa: BLE001 - 停止失败不阻断退出
+                pass
+            tray_state["icon"] = None
+        try:
+            window.destroy()
+        except Exception:  # noqa: BLE001 - 窗口已销毁时忽略
+            pass
+        if process is not None:
+            _stop_server(process)
+        print("[桌面模式] 已从托盘退出，服务已停止", flush=True)
+
+    def _start_tray() -> None:
+        """启动托盘图标（失败时静默降级，窗口仍可正常使用）。"""
+        if tray_state.get("icon") is not None:
+            return
+        try:
+            import pystray
+            from pystray import MenuItem as Item
+        except Exception as exc:  # noqa: BLE001 - 未安装托盘依赖
+            print(f"[桌面模式] 托盘不可用（{type(exc).__name__}），关闭按钮将保持直接退出", flush=True)
+            return
+        image = _tray_icon_image()
+        if image is None:
+            return
+        menu = pystray.Menu(
+            Item("显示主窗口", lambda: _show_window(), default=True),
+            Item("打开数据目录", lambda: _open_data_dir()),
+            pystray.Menu.SEPARATOR,
+            Item("退出", lambda: _quit_from_tray()),
+        )
+        icon = pystray.Icon("openbb-cn", image, WINDOW_TITLE, menu)
+        tray_state["icon"] = icon
+        threading.Thread(target=icon.run, name="openbb-tray", daemon=True).start()
+        print("[桌面模式] 已最小化到托盘（托盘图标右键可退出）", flush=True)
+
+    def on_closing() -> bool:
+        """窗口关闭拦截：tray 模式隐藏窗口，quit 模式放行（保持原行为）。
+
+        Returns:
+            bool: True 允许关闭；False 取消关闭（隐藏到托盘）。
+        """
+        if tray_state["quit"]:
+            return True
+        if _load_close_action() != "tray":
+            return True
+        _start_tray()
+        if tray_state.get("icon") is None:
+            # 托盘不可用 → 不静默吞掉关闭动作，按直接退出处理
+            return True
+        try:
+            window.hide()
+        except Exception as exc:  # noqa: BLE001 - 隐藏失败则放行关闭
+            print(f"[桌面模式] 隐藏窗口失败：{type(exc).__name__}", flush=True)
+            return True
+        if not tray_state["hint_shown"]:
+            tray_state["hint_shown"] = True
+            print("[桌面模式] 窗口已隐藏，程序在后台运行；右键托盘图标可退出", flush=True)
+        return False
+
+    window.events.closing += on_closing
+
     def on_closed() -> None:
-        """窗口关闭：停止本次拉起的服务，避免残留进程。"""
+        """窗口真正关闭：停止托盘与本次拉起的服务，避免残留进程。"""
+        tray_state["quit"] = True
+        icon = tray_state.get("icon")
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:  # noqa: BLE001 - 停止失败不阻断退出
+                pass
+            tray_state["icon"] = None
         if process is not None:
             _stop_server(process)
             print("[桌面模式] 服务已停止，进程退出", flush=True)

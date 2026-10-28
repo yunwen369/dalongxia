@@ -242,6 +242,44 @@
     }
   }
 
+  /** 视图 → 顶栏一级项分组映射（R6-13：顶栏只放 8 个一级项，二级视图高亮其所属一级）。
+   * 未登记的视图（如 dashboard-manage / widget-library）按前缀兜底。
+   */
+  const VIEW_GROUP = {
+    home: "",
+    dashboard: "dashboard",
+    "dashboard-manage": "dashboard",
+    "widget-library": "dashboard",
+    watchlist: "watchlist",
+    news: "news",
+    sectors: "market",
+    stock: "market",
+    charting: "market",
+    "sector-val": "market",
+    lhb: "money",
+    portfolio: "portfolio",
+    fund: "portfolio",
+    yjb: "yjb",
+    connectors: "system",
+    settings: "system"
+  };
+
+  /** 按当前视图高亮顶栏一级项（同组多个二级视图共用同一个高亮）。
+   * @param {string} view 当前视图标识
+   * @returns {void} 无返回值
+   */
+  function syncNavActive(view) {
+    const nav = document.getElementById("main-nav");
+    if (!nav) {
+      return;
+    }
+    const group = VIEW_GROUP[view] !== undefined ? VIEW_GROUP[view] : "";
+    nav.querySelectorAll(".nav-item").forEach(function (item) {
+      const itemGroup = item.getAttribute("data-group") || "";
+      item.classList.toggle("active", !!group && itemGroup === group);
+    });
+  }
+
   /** 绑定主菜单点击。 */
   function bindNavigation() {
     const nav = document.getElementById("main-nav");
@@ -254,11 +292,8 @@
       if (!button) {
         return;
       }
-      nav.querySelectorAll(".nav-item").forEach(function (item) {
-        item.classList.remove("active");
-      });
-      button.classList.add("active");
       const view = button.getAttribute("data-view");
+      syncNavActive(view);
       if (title) {
         title.textContent = VIEW_TITLES[view] || button.textContent;
       }
@@ -441,6 +476,12 @@
 
     loadHealth();
   }
+
+  // R6-13：导出导航高亮同步给 pages.js 路由复用（单一实现，不重复维护映射表）
+  window.App = {
+    syncNavActive: syncNavActive,
+    VIEW_GROUP: VIEW_GROUP
+  };
 
   // defer 脚本执行时 DOM 已解析完成，可直接初始化
   init();

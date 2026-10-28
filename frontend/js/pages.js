@@ -327,18 +327,9 @@
    * @returns {Object} 处理结果
    */
   function buildCard(id, title, gridClass, extra) {
-    var card = el("section", "pg-card " + gridClass);
-    card.id = id;
-    var head = el("div", "pg-card-head");
-    head.appendChild(el("span", "pg-card-title", title));
-    if (extra) {
-      head.appendChild(el("span", "pg-card-sub", extra));
-    }
-    head.appendChild(el("span", "pg-spacer"));
-    card.appendChild(head);
-    var body = el("div", "pg-body");
-    card.appendChild(body);
-    return { card: card, body: body };
+    // R6-01：委托到唯一实现 window.Utils.buildCard，dashboard.js 亦复用同一函数，
+    // 避免「IIFE 私有定义 + 跨文件裸调用」导致的 ReferenceError。
+    return window.Utils.buildCard(id, title, gridClass, extra);
   }
 
   /** 释放并重建图表实例（避免路由切换后残留旧图）。
@@ -478,9 +469,12 @@
       titleNode.textContent = title;
     }
     // 同步左侧菜单选中态
-    document.querySelectorAll("#main-nav .nav-item").forEach(function (item) {
-      item.classList.toggle("active", item.getAttribute("data-view") === (name === "home" ? "home" : name));
-    });
+    // R6-13：顶栏 8 个一级项 —— 按视图所属分组高亮（同组多个二级视图共用同一高亮），
+    // 不再用 data-view 全等匹配（否则 dashboard-manage / widget-library 等二级页会全部灭灯）。
+    // 映射表唯一实现放在 app.js 并导出为 window.App.syncNavActive。
+    if (window.App && typeof window.App.syncNavActive === "function") {
+      window.App.syncNavActive(name);
+    }
 
     disposeCharts();
     if (!VIEW_IDS[name]) {
@@ -2501,7 +2495,8 @@
     timer: null,     // 输入防抖计时器（300ms）
     rows: [],        // 已累积结果（「加载更多」追加）
     total: 0,        // 源站总命中数
-    loading: false   // 加载中禁止重复提交
+    loading: false,  // 加载中禁止重复提交
+    expanded: false  // R6-10：新闻页内联财报区是否展开（跨路由重绘后保持）
   };
 
   var FS_MARKETS = [["all", "fs.market.all"], ["a", "fs.market.a"], ["hk", "fs.market.hk"], ["us", "fs.market.us"]];
@@ -2560,14 +2555,23 @@
   /** 渲染财报/公告搜索页（FS 唯一实现页，对齐原型 fs 视图）。
    * @param {HTMLElement} container 页面容器（#page-news）
    */
-  function renderFinancialSearch(container) {
+  function renderFinancialSearch(container, inline) {
+    var embedded = inline === true;
     container.innerHTML = "";
     container.setAttribute("data-fs", "1");  // 标记当前容器是 FS 视图，返回时据此重建新闻壳
 
     var toolbar = el("div", "page-toolbar");
-    var back = el("button", "fs-back", t("fs.back"));
+    // R6-10 / F6-11：内联模式下按钮语义为「收起」，深链模式下为「返回」
+    var back = el("button", "fs-back", embedded ? t("fs.collapse") : t("fs.back"));
     back.type = "button";
     back.addEventListener("click", function () {
+      if (embedded) {
+        container.innerHTML = "";
+        container.removeAttribute("data-fs");
+        container.hidden = true;
+        fsState.expanded = false;
+        return;
+      }
       window.location.hash = "#/news";
     });
     toolbar.appendChild(back);
@@ -3046,10 +3050,41 @@
     entryText.appendChild(el("div", "d", t("fs.entry.desc")));
     entryBox.appendChild(entryText);
     entryBox.appendChild(el("div", "go", t("fs.entry.go")));
+    // R6-10 / F6-11：默认就地展开（原实现跳转 #/news?fs=1 会整页替换、资讯流消失）。
+    // 「在新页面打开」保留深链语义，供分享/书签使用。
     entryBox.addEventListener("click", function () {
+      var host = document.getElementById("fs-inline");
+      if (!host) {
+        return;
+      }
+      if (fsState.expanded) {
+        host.innerHTML = "";
+        host.hidden = true;
+        fsState.expanded = false;
+        return;
+      }
+      host.hidden = false;
+      fsState.expanded = true;
+      renderFinancialSearch(host, true);
+      host.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    // 深链按钮：单独一个小按钮，点了才跳整页
+    var openPage = el("button", "pg-btn dash-btn", t("fs.entry.openPage"));
+    openPage.type = "button";
+    openPage.addEventListener("click", function (event) {
+      event.stopPropagation();
       window.location.hash = "#/news?fs=1";
     });
+    entryBox.appendChild(openPage);
     fsEntryCard.body.appendChild(entryBox);
+    // 内联结果宿主：默认隐藏，点入口卡后就地展开
+    var inlineHost = el("div", "fs-inline");
+    inlineHost.id = "fs-inline";
+    inlineHost.hidden = !fsState.expanded;
+    fsEntryCard.body.appendChild(inlineHost);
+    if (fsState.expanded) {
+      renderFinancialSearch(inlineHost, true);
+    }
     fsEntryCard.body.setAttribute("data-state", "default");
     grid.appendChild(fsEntryCard.card);
 
@@ -4575,6 +4610,11 @@
   // 估算展示偏好（Y-05/Y-06 角标「一键关闭」）：true=盘中估算口径，false=回退 T+1 官方净值。
   // 只影响展示口径，不关闭数据通道；持久化在本机 localStorage，用户可随时恢复。
   var yjbPrefs = { estimates: true };
+  // R6-11 / F6-12：账户维度单一状态源 —— 账户概览与持仓估值两张卡共用，
+  // 切换一次两卡同时变（原缺陷：概览卡没有切换控件，三账户永远合并显示）。
+  var yjbAccount = "all";
+  /** 账户概览最近一次接口数据（切换账户时本地重绘，不重复请求养基宝）。 */
+  var yjbCollectCache = null;
   try {
     yjbPrefs.estimates = window.localStorage.getItem("openbb-yjb-estimates") !== "0";
   } catch (error) {
@@ -4609,7 +4649,7 @@
       setYjbEstimates(!yjbPrefs.estimates);
       toast(yjbPrefs.estimates ? t("yjb.estimates.onToast") : t("yjb.estimates.offToast"));
       loadYjbCollect();
-      loadYjbHoldings("all");
+      loadYjbHoldings(yjbAccount);
     });
     wrap.appendChild(button);
     return wrap;
@@ -4727,7 +4767,7 @@
     body.setAttribute("data-state", "default");
     loadYjbStatus();
     loadYjbCollect();
-    loadYjbHoldings("all");
+    loadYjbHoldings(yjbAccount);
   }
 
   /** 加载连接器状态与告知书。 */
@@ -5013,25 +5053,94 @@
     }
     setLoading(body);
     api("/api/fund/yjb/collect", { estimates: yjbPrefs.estimates ? 1 : 0 }).then(function (data) {
-      var card = document.getElementById("Y-05");
-      setBadges(card, data.source, data.caliber);
-      var accounts = data.accounts || [];
-      if (!data.total_assets && !accounts.length) {
-        setEmpty(body, t("yjb.notBoundHint"), function () { loadYjbCollect(); });
-        return;
+      yjbCollectCache = data;
+      paintYjbCollect(body, data);
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadYjbCollect(); });
+    });
+  }
+
+  /** 渲染养基宝账户概览（全部账户合并 或 单账户视图）。
+   *
+   * R6-11 / F6-12：头部 chips 与「持仓与估值」卡共用 `yjbAccount`；
+   * 单账户视图下四张指标卡改用该账户数值，账户小卡高亮当前项。
+   *
+   * @param {HTMLElement} body 内容容器
+   * @param {Object} data `/api/fund/yjb/collect` 的 data 段
+   * @returns {void} 无返回值
+   */
+  function paintYjbCollect(body, data) {
+    var card = document.getElementById("Y-05");
+    setBadges(card, data.source, data.caliber);
+    var accounts = data.accounts || [];
+    if (!data.total_assets && !accounts.length) {
+      setEmpty(body, t("yjb.notBoundHint"), function () { loadYjbCollect(); });
+      return;
+    }
+    body.innerHTML = "";
+    var bar = el("div", "page-toolbar");
+    bar.appendChild(yjbEstimateBadge());
+    bar.appendChild(el("span", "pg-spacer"));
+    // 账户维度 chips：全部 + 各账户（与持仓卡同款，数量来自 accounts）
+    if (accounts.length > 1) {
+      var chips = el("div", "pg-tabs");
+      var options = [{ id: "all", title: t("yjb.hold.all"), n: accounts.length }];
+      accounts.forEach(function (acc) {
+        options.push({ id: acc.id, title: acc.title || acc.id, n: null });
+      });
+      options.forEach(function (opt) {
+        var current = yjbAccount === opt.id || (yjbAccount === "all" && opt.id === "all");
+        var btn = el("button", "pg-tab" + (current ? " active" : ""),
+          opt.title + (opt.id === "all" ? "（" + accounts.length + "）" : ""));
+        btn.type = "button";
+        btn.addEventListener("click", function () {
+          yjbAccount = opt.id;
+          // 概览用本地缓存重绘（养基宝接口 5~9s，切换不该再等一次）；
+          // 持仓卡按账户重新拉取（后端按 account_id 过滤）。
+          if (yjbCollectCache) {
+            paintYjbCollect(body, yjbCollectCache);
+          }
+          loadYjbHoldings(yjbAccount);
+        });
+        chips.appendChild(btn);
+      });
+      bar.appendChild(chips);
+    }
+    bar.appendChild(timeWithBj(t("yjb.asOfBJ") + (data.as_of || t("value.none")), "", "pg-card-sub"));
+    body.appendChild(bar);
+
+    var active = null;
+    if (yjbAccount !== "all") {
+      active = accounts.filter(function (acc) { return acc.id === yjbAccount; })[0] || null;
+    }
+    var kpis = el("div", "pg-kpis");
+    var items;
+    if (active) {
+      // 单账户视图：账户资产（成本+累计收益，后端已下发 assets）+ 今日收益/收益率 + 累计收益 + 涨跌家数
+      var assets = active.assets;
+      if (assets === null || assets === undefined) {
+        assets = (Number(active.hold_cost) || 0) + (Number(active.hold_income) || 0);
       }
-      body.innerHTML = "";
-      var bar = el("div", "page-toolbar");
-      bar.appendChild(yjbEstimateBadge());
-      bar.appendChild(el("span", "pg-spacer"));
-      bar.appendChild(timeWithBj(t("yjb.asOfBJ") + (data.as_of || t("value.none")), "", "pg-card-sub"));
-      body.appendChild(bar);
-      var kpis = el("div", "pg-kpis");
-      // 总资产：元为主体，附「≈万元」便于快速读数（15.55 万级）；关闭估算不影响该值
+      items = [
+        [t("yjb.acc.assets"), fmt(assets, 2), "flat",
+          t("yjb.kpi.yuan") + " ｜ " + t("yjb.kpi.approxWan") + fmt(assets / 10000, 2) + t("yjb.kpi.wanUnit")],
+        [t("yjb.kpi.todayIncome"),
+          active.today_income === null || active.today_income === undefined
+            ? t("value.none")
+            : (active.today_income > 0 ? "+" : "") + fmt(active.today_income, 2),
+          active.today_income === null || active.today_income === undefined ? "flat" : pctClass(active.today_income),
+          yjbPrefs.estimates ? t("yjb.kpi.estimateTag") : t("yjb.kpi.estimateOffTag")],
+        [t("yjb.kpi.todayRate"), fmtPct(active.today_income_rate), pctClass(active.today_income_rate), ""],
+        [t("yjb.kpi.holdIncome"), (active.hold_income > 0 ? "+" : "") + fmt(active.hold_income, 2),
+          pctClass(active.hold_income), t("yjb.kpi.yuan")],
+        [t("yjb.kpi.upDown"), active.up + " / " + active.down, "flat", ""]
+      ];
+    } else {
+      // 全部账户：总资产（元为主体，附「≈万元」便于快速读数）
       var totalAssets = data.total_assets;
       var wanText = (totalAssets === null || totalAssets === undefined)
         ? "" : t("yjb.kpi.approxWan") + fmt(totalAssets / 10000, 2) + t("yjb.kpi.wanUnit");
-      var items = [
+      items = [
         [t("yjb.kpi.totalAssets"), fmt(totalAssets, 2), "flat", t("yjb.kpi.yuan") + (wanText ? " ｜ " + wanText : "")],
         [t("yjb.kpi.todayIncome"),
           data.today_income === null || data.today_income === undefined
@@ -5044,45 +5153,57 @@
           pctClass(data.hold_income), t("yjb.kpi.yuan")],
         [t("yjb.kpi.accounts"), String(accounts.length), "flat", t("yjb.kpi.countTag")]
       ];
-      items.forEach(function (row) {
-        var box = el("div", "pg-kpi");
-        box.appendChild(el("div", "pg-kpi-k", row[0]));
-        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
-        if (row[3]) {
-          box.appendChild(el("div", "pg-kpi-x", row[3]));
-        }
-        kpis.appendChild(box);
-      });
-      body.appendChild(kpis);
-      if (accounts.length) {
-        var list = el("div", "pg-kpi-accounts");
-        accounts.forEach(function (acc) {
-          var box = el("div", "pg-kpi-acc");
-          var head = el("div", "pg-kpi-acc-head");
-          head.appendChild(el("span", "pg-kpi-acc-name", acc.title || acc.id));
-          head.appendChild(el("span", "pg-kpi-acc-id", acc.id));
-          box.appendChild(head);
-          var rows = [
-            [t("yjb.kpi.todayIncome"), (acc.today_income > 0 ? "+" : "") + fmt(acc.today_income, 2), pctClass(acc.today_income)],
-            [t("yjb.kpi.todayRate"), fmtPct(acc.today_income_rate), pctClass(acc.today_income_rate)],
-            [t("yjb.kpi.holdIncome"), (acc.hold_income > 0 ? "+" : "") + fmt(acc.hold_income, 2), pctClass(acc.hold_income)],
-            [t("yjb.kpi.upDown"), acc.up + " / " + acc.down, "flat"]
-          ];
-          rows.forEach(function (r) {
-            var line = el("div", "pg-kpi-acc-row");
-            line.appendChild(el("span", "", r[0]));
-            line.appendChild(el("b", r[2], r[1]));
-            box.appendChild(line);
-          });
-          list.appendChild(box);
-        });
-        body.appendChild(list);
+    }
+    items.forEach(function (row) {
+      var box = el("div", "pg-kpi");
+      box.appendChild(el("div", "pg-kpi-k", row[0]));
+      box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+      if (row[3]) {
+        box.appendChild(el("div", "pg-kpi-x", row[3]));
       }
-      body.appendChild(el("div", "pg-card-sub", t("yjb.collectNote")));
-      body.setAttribute("data-state", "default");
-    }).catch(function (error) {
-      setError(body, error.message || t("state.errorHint"), function () { loadYjbCollect(); });
+      kpis.appendChild(box);
     });
+    body.appendChild(kpis);
+
+    if (accounts.length) {
+      var list = el("div", "pg-kpi-accounts");
+      accounts.forEach(function (acc) {
+        var box = el("div", "pg-kpi-acc" + (active && active.id === acc.id ? " active" : ""));
+        var head = el("div", "pg-kpi-acc-head");
+        head.appendChild(el("span", "pg-kpi-acc-name", acc.title || acc.id));
+        head.appendChild(el("span", "pg-kpi-acc-id", acc.id));
+        box.appendChild(head);
+        var accAssets = acc.assets;
+        if (accAssets === null || accAssets === undefined) {
+          accAssets = (Number(acc.hold_cost) || 0) + (Number(acc.hold_income) || 0);
+        }
+        var rows = [
+          [t("yjb.acc.assets"), fmt(accAssets, 2), "flat"],
+          [t("yjb.kpi.todayIncome"), (acc.today_income > 0 ? "+" : "") + fmt(acc.today_income, 2), pctClass(acc.today_income)],
+          [t("yjb.kpi.todayRate"), fmtPct(acc.today_income_rate), pctClass(acc.today_income_rate)],
+          [t("yjb.kpi.holdIncome"), (acc.hold_income > 0 ? "+" : "") + fmt(acc.hold_income, 2), pctClass(acc.hold_income)],
+          [t("yjb.kpi.upDown"), acc.up + " / " + acc.down, "flat"]
+        ];
+        rows.forEach(function (r) {
+          var line = el("div", "pg-kpi-acc-row");
+          line.appendChild(el("span", "", r[0]));
+          line.appendChild(el("b", r[2], r[1]));
+          box.appendChild(line);
+        });
+        // 点账户小卡等于切 chips（同一 state，单一实现）
+        box.addEventListener("click", function () {
+          yjbAccount = acc.id;
+          if (yjbCollectCache) {
+            paintYjbCollect(body, yjbCollectCache);
+          }
+          loadYjbHoldings(yjbAccount);
+        });
+        list.appendChild(box);
+      });
+      body.appendChild(list);
+    }
+    body.appendChild(el("div", "pg-card-sub", t("yjb.collectNote")));
+    body.setAttribute("data-state", "default");
   }
 
   /** Y-06：养基宝持仓与估值（支持账户 Tab 切换）。
@@ -5412,6 +5533,12 @@
         state.charting.draw = !state.charting.draw;
         draw.textContent = t(state.charting.draw ? "chart.draw.on" : "chart.draw.off");
         toast(t(state.charting.draw ? "chart.draw.opened" : "chart.draw.closed"));
+        // R6-05：开关必须重绘一次 —— 点击监听是在 paintChartingChart 内按
+        // state.charting.draw 决定是否绑定的，不重绘则监听永远不会挂上（原缺陷：
+        // 按钮显示"画线：开"但点主图无任何反应）。
+        if (chartingCache && (chartingCache.kline || chartingCache.minute)) {
+          paintChartingChart(chartingCache.kline, chartingCache.minute);
+        }
       });
     }
     var clear = document.getElementById("ch-draw-clear");
@@ -5675,16 +5802,44 @@
       ]
     }));
     // 画线交互：开启后点击主图，按像素坐标换算价格，添加水平参考线（本地标注不写回数据）
+    //
+    // R6-05 修复：原先用 `params.event.offsetX` —— ECharts 的 click 回调里 params.event 是
+    // zrender 包装事件，**不保证携带 offsetX/offsetY**，取到 undefined 后 convertFromPixel
+    // 返回空、整段逻辑静默跳过，表现为"点了没反应"。改挂 zrender 原始事件（offsetX 为标准字段），
+    // 并对换算结果做区间校验 + 失败提示，禁止静默失败。
     chart.off("click");
-    if (state.charting.draw) {
-      chart.on("click", function (params) {
-        var point = chart.convertFromPixel({ yAxisIndex: 0 }, [params.event.offsetX, params.event.offsetY]);
-        if (point && typeof point[1] === "number") {
-          chartingCache.lines.push(Number(point[1].toFixed(2)));
+    var zr = chart.getZr ? chart.getZr() : null;
+    if (zr) {
+      zr.off("click");
+      if (state.charting.draw) {
+        zr.on("click", function (event) {
+          // convertFromPixel 的 finder 必须能定位到一个完整坐标系：只给 {yAxisIndex} 时
+          // ECharts 5 拿不到 x 轴，返回 undefined（这正是"点了没反应"的第二层原因）。
+          // 优先用 gridIndex:0（主图），失败再退回双轴组合。
+          var px = [event.offsetX, event.offsetY];
+          var point = chart.convertFromPixel({ gridIndex: 0 }, px);
+          if (!point) {
+            point = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, px);
+          }
+          var price = point && typeof point[1] === "number" ? Number(point[1]) : null;
+          if (price === null || !isFinite(price)) {
+            toast(t("chart.draw.failed"));
+            return;
+          }
+          if (price <= 0) {
+            toast(t("chart.draw.outOfRange"));
+            return;
+          }
+          if (chartingCache.lines.length >= 20) {
+            toast(t("chart.draw.limit"));
+            return;
+          }
+          var rounded = Number(price.toFixed(2));
+          chartingCache.lines.push(rounded);
           paintChartingChart(chartingCache.kline, chartingCache.minute);
-          toast(t("chart.draw.added", { price: Number(point[1].toFixed(2)) }));
-        }
-      });
+          toast(t("chart.draw.added", { price: rounded }));
+        });
+      }
     }
     body.setAttribute("data-state", "default");
   }
@@ -5807,6 +5962,11 @@
     var yjbCard = buildCard("ST-YJ", t("set.card.yjb"), "g-12", t("set.card.yjbSub"));
     yjbCard.body.id = "set-yjb-body";
     grid.appendChild(yjbCard.card);
+
+    // —— ST-CL 启动与关闭卡（R6-12 / F6-14）：点关闭按钮时「最小化到托盘 / 直接退出」——
+    var closeCard = buildCard("ST-CL", t("set.card.close"), "g-12", t("set.card.closeSub"));
+    closeCard.body.id = "set-close-body";
+    grid.appendChild(closeCard.card);
 
     // —— S-05 关于卡：版本/许可证/数据源数 + 日志导出 + 恢复出厂 ——
     var aboutCard = buildCard("ST-AB", t("set.card.about"), "g-12", t("set.card.aboutSub"));
@@ -6290,6 +6450,73 @@
     paintSettingsAbout();
     paintSettingsCompliance();
     paintSettingsYjb();
+    paintSettingsClose();
+  }
+
+  /** 渲染「启动与关闭」卡（R6-12 / F6-14）。
+   *
+   * 两个单选项写入 data/user_prefs.json 的 close_action；桌面壳在点关闭按钮时
+   * 读取该值决定「隐藏到托盘」还是「直接退出」。默认 tray。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintSettingsClose() {
+    var body = document.getElementById("set-close-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/system/desktop-prefs", {}).then(function (data) {
+      body.innerHTML = "";
+      var current = data.close_action === "quit" ? "quit" : "tray";
+      var list = el("div", "set-close-list");
+      [
+        ["tray", t("set.close.tray"), t("set.close.trayHint")],
+        ["quit", t("set.close.quit"), t("set.close.quitHint")]
+      ].forEach(function (option) {
+        var row = el("label", "set-close-row" + (current === option[0] ? " active" : ""));
+        var radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "close-action";
+        radio.value = option[0];
+        radio.checked = current === option[0];
+        radio.addEventListener("change", function () {
+          if (!radio.checked) {
+            return;
+          }
+          // Utils.api 只支持 GET，写偏好走原生 fetch（PUT + JSON）
+          fetch("/api/system/desktop-prefs", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ close_action: option[0] })
+          }).then(function (response) {
+            return response.json();
+          }).then(function (payload) {
+            if (payload && payload.error) {
+              throw new Error(payload.error);
+            }
+            current = option[0];
+            body.querySelectorAll(".set-close-row").forEach(function (node) {
+              node.classList.toggle("active", node.contains(radio));
+            });
+            toast(t("set.close.saved"));
+          }).catch(function (error) {
+            toast(error.message || t("state.errorHint"));
+          });
+        });
+        row.appendChild(radio);
+        var text = el("div", "set-close-text");
+        text.appendChild(el("b", "", option[1]));
+        text.appendChild(el("span", "", option[2]));
+        row.appendChild(text);
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+      body.appendChild(el("div", "pg-card-sub", t("set.close.note")));
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintSettingsClose);
+    });
   }
 
   /** 渲染「养基宝连接」卡：绑定/盐/安全存储三态 + 掩码注入签名盐 + 去扫码。

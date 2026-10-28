@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from backend.app import config
 from backend.app.core import atomic
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 PREFS_FILE = config.DATA_DIR / "user_prefs.json"
 _LOCK = threading.Lock()
-_CACHE: Optional[Dict[str, bool]] = None
+_CACHE: Optional[Dict[str, Any]] = None
 
 # 已登记开关及其默认值（新增开关必须先登记，避免拼写错误静默失效）
 DEFAULTS: Dict[str, bool] = {
@@ -33,14 +33,27 @@ DEFAULTS: Dict[str, bool] = {
     "fund_estimation": False,
 }
 
+# 已登记的字符串型偏好（R6-12：桌面壳关闭行为）。
+# 与布尔开关同文件共存：桌面壳 desktop.py 直接读该文件的 close_action 决定
+# 关闭窗口时是隐藏到托盘还是直接退出；默认 tray（用户 2026-10-29 裁决）。
+STR_DEFAULTS: Dict[str, str] = {
+    "close_action": "tray",
+}
 
-def _load_disk() -> Dict[str, bool]:
+# 字符串型偏好的合法取值（写入前校验，非法值拒绝而非静默纠正）
+STR_ALLOWED: Dict[str, tuple] = {
+    "close_action": ("tray", "quit"),
+}
+
+
+def _load_disk() -> Dict[str, Any]:
     """从磁盘读取偏好（只保留已登记键，缺省用默认值）。
 
     Returns:
-        dict: 完整偏好字典。
+        dict: 完整偏好字典（布尔开关 + 字符串偏好）。
     """
-    payload = dict(DEFAULTS)
+    payload: Dict[str, Any] = dict(DEFAULTS)
+    payload.update(STR_DEFAULTS)
     if not PREFS_FILE.exists():
         return payload
     try:
@@ -52,10 +65,14 @@ def _load_disk() -> Dict[str, bool]:
         for key in DEFAULTS:
             if isinstance(raw.get(key), bool):
                 payload[key] = raw[key]
+        for key, allowed in STR_ALLOWED.items():
+            value = raw.get(key)
+            if isinstance(value, str) and value in allowed:
+                payload[key] = value
     return payload
 
 
-def _snapshot() -> Dict[str, bool]:
+def _snapshot() -> Dict[str, Any]:
     """进程内快照（懒加载）。
 
     Returns:
@@ -83,7 +100,7 @@ def get_flag(name: str) -> bool:
     return bool(_snapshot().get(name, DEFAULTS[name]))
 
 
-def set_flag(name: str, value: bool) -> Dict[str, bool]:
+def set_flag(name: str, value: bool) -> Dict[str, Any]:
     """写入单个开关并落盘。
 
     Args:
@@ -91,7 +108,7 @@ def set_flag(name: str, value: bool) -> Dict[str, bool]:
         value: 是否开启。
 
     Returns:
-        dict: 落盘后的全部开关。
+        dict: 落盘后的全部偏好。
 
     Raises:
         KeyError: 开关未登记。
@@ -103,6 +120,55 @@ def set_flag(name: str, value: bool) -> Dict[str, bool]:
     with _LOCK:
         current = _load_disk()
         current[name] = bool(value)
+        try:
+            atomic.atomic_write_json(PREFS_FILE, current, mode=0o600)
+        except OSError as exc:
+            from backend.app.core.errors import NonRetryableError
+
+            raise NonRetryableError(f"偏好写入失败：{exc}") from exc
+        _CACHE = current
+        return dict(current)
+
+
+def get_str(name: str) -> str:
+    """读取字符串型偏好（未登记返回默认值并告警）。
+
+    Args:
+        name: 偏好键名。
+
+    Returns:
+        str: 当前取值。
+    """
+    if name not in STR_DEFAULTS:
+        logger.warning("未登记的字符串偏好：%s（按默认值处理）", name)
+        return ""
+    return str(_snapshot().get(name, STR_DEFAULTS[name]))
+
+
+def set_str(name: str, value: str) -> Dict[str, Any]:
+    """写入字符串型偏好并落盘（取值必须在 STR_ALLOWED 白名单内）。
+
+    Args:
+        name: 偏好键名（必须已在 STR_DEFAULTS 登记）。
+        value: 目标取值。
+
+    Returns:
+        dict: 落盘后的全部偏好。
+
+    Raises:
+        KeyError: 键未登记。
+        ValueError: 取值不在白名单。
+        NonRetryableError: 磁盘写入失败。
+    """
+    global _CACHE
+    if name not in STR_DEFAULTS:
+        raise KeyError(name)
+    allowed = STR_ALLOWED.get(name, ())
+    if value not in allowed:
+        raise ValueError(f"{name} 仅支持 {'/'.join(allowed)}")
+    with _LOCK:
+        current = _load_disk()
+        current[name] = value
         try:
             atomic.atomic_write_json(PREFS_FILE, current, mode=0o600)
         except OSError as exc:

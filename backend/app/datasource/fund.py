@@ -316,6 +316,60 @@ def get_nav(code: str, page: int = 1, size: int = 30) -> Dict[str, Any]:
     }
 
 
+def _all_nav_items(code: str) -> Dict[str, Any]:
+    """拉取基金全历史净值序列（蛋卷分页翻到底，东财降级只取首页）。
+
+    R6-16 / BUG-R6-13：最大回撤必须基于**全历史**，原实现固定 `size=500`，
+    对成立满 2 年的基金只能覆盖最近 500 个交易日，会漏掉更早的更深谷底
+    （2026-10-28 实测 017811：500 条窗口 -46.69% vs 全历史 -47.52%，
+    漏掉 2024-02-05 的谷底）。
+
+    安全约束：
+      1. 最多翻 12 页（蛋卷 size=500 时 894 条仅需 2 页，12 页足够覆盖 6000 个交易日）；
+      2. 任一页失败即停止，返回已拿到的部分（不因后段失败丢掉前段）；
+      3. 东财降级路径分页成本高（pageSize 硬上限 20），只取首页并如实标注来源。
+
+    Args:
+        code: 基金代码。
+
+    Returns:
+        dict: {"items": [...], "source": str, "pages": int, "total": int|None}。
+
+    Raises:
+        ValueError: 首屏无数据。
+    """
+    first = get_nav(code, page=1, size=500)
+    items: List[Dict[str, Any]] = list(first.get("items") or [])
+    source = str(first.get("source") or "")
+    if not items:
+        raise ValueError(f"净值通道均无数据：{code}")
+    if source != "蛋卷":
+        return {"items": items, "source": source, "pages": 1, "total": first.get("total")}
+    try:
+        total_pages = int(first.get("total_pages") or 1)
+    except (TypeError, ValueError):
+        total_pages = 1
+    try:
+        total_items = int(first.get("total") or len(items))
+    except (TypeError, ValueError):
+        total_items = len(items)
+    pages = 1
+    page = 2
+    while page <= min(total_pages, 12) and len(items) < total_items:
+        try:
+            chunk = get_nav(code, page=page, size=500)
+        except Exception as exc:  # noqa: BLE001 - 后段翻页失败保留已得数据
+            logger.info("净值翻页中止（第 %s 页，%s）：%s", page, type(exc).__name__, code)
+            break
+        rows = chunk.get("items") or []
+        if not rows:
+            break
+        items.extend(rows)
+        pages = page
+        page += 1
+    return {"items": items, "source": source, "pages": pages, "total": total_items}
+
+
 def _t1_latest(code: str) -> Dict[str, Any]:
     """T+1 基准净值（蛋卷 derived → 东财 lsjz），供拟合估算取基准，不进入估值链。
 
@@ -851,7 +905,8 @@ def get_drawdown(code: str, start: str = "", end: str = "") -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    payload = get_nav(code, page=1, size=500)
+    # R6-16：全历史序列（原 size=500 会漏掉更早的谷底，最大回撤被算小）
+    payload = _all_nav_items(code)
     items = [item for item in payload["items"] if item.get("nav")]
     items.sort(key=lambda item: item.get("date") or "")
     if start:
@@ -890,7 +945,13 @@ def get_drawdown(code: str, start: str = "", end: str = "") -> Dict[str, Any]:
         "current_drawdown": round(current * 100, 2),
         "series": series[-250:],
         "source": payload.get("source"),
-        "caliber": "基于单位净值自算：dd=NAV/累计峰值-1，最大回撤取序列最小值",
+        # R6-16：口径写明「全历史」及实际样本区间，避免与"最近 500 日"混淆
+        "caliber": (
+            f"基于单位净值全历史自算（{items[0]['date']} 起，共 {len(items)} 条）："
+            "dd=NAV/累计峰值-1，最大回撤取序列最小值；图表仅展示最近 250 个点"
+        ),
+        "sample_size": len(items),
+        "sample_from": items[0]["date"],
     }
 
 

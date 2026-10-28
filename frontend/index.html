@@ -37,20 +37,19 @@
         <span data-i18n="app.name">OpenBB 中文投研工作台</span>
       </div>
 
+      <!-- R6-13 / F6-13：顶栏只放 8 个一级项（原 12 个平级视图）。
+           每个一级项带 data-group，进入该组任一视图都会高亮对应一级项；
+           二级视图在侧栏对应分组下呈现（层级关系，不再互相重复）。
+           首页不再是平级入口：点左上角 Logo 回首页（hash 路由 #/home 保持不变）。 -->
       <nav class="nav" id="main-nav" aria-label="主菜单">
-        <button class="nav-item active" type="button" data-view="home" data-i18n="nav.home">首页</button>
-        <button class="nav-item" type="button" data-view="dashboard" data-i18n="nav.dashboard">仪表板</button>
-        <!-- R3-31：自选股属高频入口，前移到第三位（与侧栏「我的自选」同一视图） -->
-        <button class="nav-item" type="button" data-view="watchlist" data-i18n="nav.watchlist">自选股</button>
-        <button class="nav-item" type="button" data-view="charting" data-i18n="nav.charting">图表</button>
-        <button class="nav-item" type="button" data-view="news" data-i18n="nav.news">新闻</button>
-        <button class="nav-item" type="button" data-view="sectors" data-i18n="nav.sectors">板块</button>
-        <button class="nav-item" type="button" data-view="stock" data-i18n="nav.stock">个股</button>
-        <button class="nav-item" type="button" data-view="sector-val" data-i18n="nav.sectorVal">估值</button>
-        <button class="nav-item" type="button" data-view="lhb" data-i18n="nav.lhb">龙虎榜</button>
-        <button class="nav-item" type="button" data-view="fund" data-i18n="nav.fund">场外基金</button>
-        <button class="nav-item" type="button" data-view="portfolio" data-i18n="nav.portfolio">持仓</button>
-        <button class="nav-item" type="button" data-view="yjb" data-i18n="nav.yjb">养基宝</button>
+        <button class="nav-item" type="button" data-view="dashboard" data-group="dashboard" data-i18n="nav.dashboard">仪表板</button>
+        <button class="nav-item" type="button" data-view="watchlist" data-group="watchlist" data-i18n="nav.watchlist">自选股</button>
+        <button class="nav-item" type="button" data-view="news" data-group="news" data-i18n="nav.newsGroup">资讯</button>
+        <button class="nav-item" type="button" data-view="sectors" data-group="market" data-i18n="nav.market">市场</button>
+        <button class="nav-item" type="button" data-view="lhb" data-group="money" data-i18n="nav.money">资金</button>
+        <button class="nav-item" type="button" data-view="portfolio" data-group="portfolio" data-i18n="nav.portfolioGroup">组合</button>
+        <button class="nav-item" type="button" data-view="yjb" data-group="yjb" data-i18n="nav.yjb">养基宝</button>
+        <button class="nav-item" type="button" data-view="settings" data-group="system" data-i18n="nav.system">系统</button>
       </nav>
 
       <div class="topbar-actions">
@@ -76,7 +75,8 @@
         <!-- R3-02：分组树由 dashboard.js 动态渲染（含重命名/复制/分组/删除后的即时刷新） -->
         <ul class="sidebar-list" id="sidebar-dashboards"></ul>
         <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="dashboard" data-dashboard="new" data-i18n="dashboard.newDash">新建仪表板</li>
+          <!-- R6-08 / F6-02：删除侧栏「新建仪表板」—— 新建入口收敛为工具栏「+ 新建」与画布右键菜单，
+               避免同一操作在侧栏/工具栏/右键三处重复。管理页与组件库为独立路由，保留唯一入口。 -->
           <!-- DS-01/DS-02：管理页与组件库页改为独立路由（可直达 URL），不再是页内工具栏/抽屉独占 -->
           <li class="sidebar-item" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
           <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
@@ -89,14 +89,38 @@
         <!-- W-03：自选分组树（市场分组 + 数量徽章），由 pages.js 按 /api/watchlist 计数动态渲染 -->
         <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
         <div class="sidebar-divider"></div>
-        <!-- 新增功能 ⑥：新闻分组（资讯流 + 财报/公告搜索），与新闻页 N-05 入口卡同跳唯一实现页 -->
-        <div class="sidebar-heading" data-i18n="nav.news">新闻</div>
+        <!-- R6-13 / F6-13：侧栏按一级分组呈现二级入口，组名与顶栏一一对应 -->
+        <div class="sidebar-heading" data-i18n="nav.newsGroup">资讯</div>
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">资讯流</li>
           <li class="sidebar-item" id="side-financial-search" data-action="fs" data-i18n="fs.entry.title">财报 / 公告搜索</li>
         </ul>
         <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="sidebar.system">系统</div>
+        <div class="sidebar-heading" data-i18n="nav.market">市场</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectors">板块</li>
+          <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股</li>
+          <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表</li>
+          <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">估值</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="nav.money">资金</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.lhb">龙虎榜</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="nav.portfolioGroup">组合</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.portfolio">持仓</li>
+          <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fund">场外基金</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="nav.yjb">养基宝</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjb">账户与持仓</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="nav.system">系统</div>
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">数据连接器</li>
           <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.settings">设置</li>

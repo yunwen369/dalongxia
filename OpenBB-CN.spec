@@ -45,6 +45,12 @@ hiddenimports += [
     'webview.platforms.winforms',
     'pythonnet',
     'clr_loader',
+    # R6-12 / F6-14：托盘图标（关闭窗口后最小化到通知区）
+    # pystray 的 Windows 后端按平台动态导入，PyInstaller 静态分析抓不到。
+    'pystray',
+    'pystray._win32',
+    'PIL.Image',
+    'PIL.ImageDraw',
 ]
 # lxml 的 C 扩展（etree/html/_elementtree）与实体映射不被自动收全，
 # 冻结形态下 akshare 的 read_html 通道会抛 LibNotFoundError（阶段 10 L-4 实测发现）
