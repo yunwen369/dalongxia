@@ -1009,7 +1009,14 @@ class TestFrontendViews:
             assert f'id="{container}"' in index, f"视图 {name} 缺容器 {container}"
 
     def test_menu_covers_all_views(self):
-        """index.html 菜单 data-view 集合 = VIEW_IDS 键 + home（不缺不多）。"""
+        """index.html（顶栏 + 侧栏）data-view 并集覆盖 VIEW_IDS 全部视图。
+
+        R6-13 导航重组（2026-10-29）：顶栏由 12 个平级视图收敛为 8 个一级项，
+        二级视图移入侧栏同名分组；首页不再作为平级菜单项，改由左上角 Logo 进入
+        （`#/home` 路由保持可用）。断言从「集合完全相等」改为：
+          - 每个视图都必须有入口（不缺）；
+          - 菜单不得出现 VIEW_IDS 之外的视图（不多，home 例外）。
+        """
         import re
 
         pages = self._read("js/pages.js")
@@ -1017,7 +1024,8 @@ class TestFrontendViews:
         view_block = pages.split("VIEW_IDS")[1].split("};")[0]
         view_ids = set(re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"page-[\w-]+"', view_block))
         menu_views = set(re.findall(r'data-view="([\w-]+)"', index))
-        assert menu_views == view_ids | {"home"}, f"菜单与视图集合不一致：{menu_views ^ (view_ids | {'home'})}"
+        assert view_ids <= menu_views, f"以下视图缺菜单入口：{sorted(view_ids - menu_views)}"
+        assert menu_views <= view_ids | {"home"}, f"菜单出现未登记视图：{sorted(menu_views - view_ids - {'home'})}"
 
     def test_new_views_wired_in_router(self):
         """route() 分发含 charting/settings，renderCharting/renderSettings 已实现。"""
