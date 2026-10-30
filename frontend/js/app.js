@@ -15,23 +15,31 @@
   };
 
   // 页面标题映射：与主菜单 data-view 一一对应（P2-09：统一走 i18n）（P2-09：统一走 i18n）
+  /** 视图 → 页面标题。**直接引用侧栏的 i18n 键**，不另建一套文案：
+   * 标题与侧栏永远同源，避免「板块分析 vs 板块行情」这类不一致。
+   * 缺视图会退化为不更新标题（曾导致 watchlist 继承上一页标题），故必须列全。
+   */
   const VIEW_TITLES = {
     home: t("nav.homeTitle"),
-    charting: t("page.charting"),
-    news: t("page.news"),
-    sectors: t("page.sectors"),
-    stock: t("page.stock"),
-    "sector-val": t("page.sectorVal"),
-    fund: t("page.fund"),
-    portfolio: t("page.portfolio"),
-    yjb: t("page.yjb"),
-    connectors: t("page.connectors"),
-    settings: t("page.settings"),
-    // 第七轮（M1/M2）
-    macro: t("page.macro"),
-    valuation: t("page.valuation"),
-    crowding: t("page.crowding"),
-    "fund-combo": t("page.fundCombo")
+    dashboard: t("page.dashboard"),
+    "dashboard-manage": t("nav.dashboardManage"),
+    "widget-library": t("sidebar.library"),
+    watchlist: t("sidebar.myWatchlist"),
+    news: t("nav.news"),
+    sectors: t("nav.sectors"),
+    macro: t("nav.macro"),
+    valuation: t("nav.valuation"),
+    crowding: t("nav.crowding"),
+    stock: t("nav.stock"),
+    charting: t("nav.charting"),
+    "sector-val": t("nav.sectorVal"),
+    lhb: t("nav.lhb"),
+    portfolio: t("nav.portfolio"),
+    fund: t("nav.fund"),
+    "fund-combo": t("nav.fundCombo"),
+    yjb: t("nav.yjbHoldings"),
+    connectors: t("nav.connectors"),
+    settings: t("nav.settings")
   };
 
   let toastTimer = null;
@@ -576,11 +584,38 @@
   }
 
   // R6-13：导出导航高亮同步给 pages.js 路由复用（单一实现，不重复维护映射表）
+  /** 取视图的显示标题（VIEW_TITLES 唯一实现，pages.js 不再自维护映射表）。
+   * @param {string} view 视图标识
+   * @returns {string} 标题文案；未登记时回退空串（由调用方决定兜底）
+   */
+  function viewTitle(view) {
+    const text = VIEW_TITLES[view];
+    return text === undefined ? "" : text;
+  }
+
   window.App = {
     syncNavActive: syncNavActive,
-    VIEW_GROUP: VIEW_GROUP
+    VIEW_GROUP: VIEW_GROUP,
+    VIEW_TITLES: VIEW_TITLES,
+    viewTitle: viewTitle
   };
 
   // defer 脚本执行时 DOM 已解析完成，可直接初始化
   init();
+
+  // 首屏兜底：pages.js 先于本文件加载，其首次 route() 执行时 window.App 尚未定义，
+  // 标题会停留在 HTML 默认值（「首页 · 市场总览」）。此处补一次同步。
+  (function syncTitleOnBoot() {
+    try {
+      const raw = (location.hash || "").replace(/^#\/?/, "").split("?")[0];
+      const view = raw || "home";
+      const node = document.getElementById("page-title");
+      const text = viewTitle(view);
+      if (node && text) {
+        node.textContent = text;
+      }
+    } catch (error) {
+      // 标题同步失败不影响主流程
+    }
+  })();
 })();

@@ -140,7 +140,9 @@
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
       <main class="workspace" role="main">
         <div class="toolbar">
-          <span class="page-title" id="page-title" data-i18n="page.home">首页 · 市场总览</span>
+          <!-- 标题由路由独占控制（app.js viewTitle）：不带 data-i18n，
+               否则 i18n.apply() 会把已切换的标题重写回「首页 · 市场总览」 -->
+          <span class="page-title" id="page-title">仪表板</span>
           <!-- R6-13 / F6-13：面包屑（一级 / 二级 / 三级，逐级可点回） -->
           <nav class="crumb" id="crumb" aria-label="面包屑"></nav>
           <span class="badge" id="build-badge" data-i18n="health.buildLoading">构建标识加载中</span>

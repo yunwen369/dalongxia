@@ -455,24 +455,12 @@
   function route() {
     var parsed = parseHash();
     var name = parsed.path.split("/")[0] || "home";
-    var title = {
-      home: t("page.home"),
-      sectors: t("page.sectors"),
-      stock: t("page.stock"),
-      "sector-val": t("page.sectorVal"),
-      news: t("page.news"),
-      fund: t("page.fund"),
-      charting: t("page.charting"),
-      watchlist: t("page.watchlist"),
-      lhb: t("page.lhb"),
-      portfolio: t("page.portfolio"),
-      connectors: t("page.connectors"),
-      dashboard: window.I18N ? window.I18N.t("page.dashboard") : t("page.dashboard"),
-      "dashboard-manage": t("page.dashboardManage"),
-      "widget-library": t("page.widgetLibrary"),
-      yjb: t("page.yjb"),
-      settings: t("page.settings")
-    }[name];
+    // 标题统一取 app.js 的 VIEW_TITLES（单一实现）：
+    // 这里原先自维护一份只含 5 个键的映射表，导致 macro/valuation/crowding 等
+    // 视图切过去后标题仍停留在上一页（第七轮补产品图时发现）。
+    var title = window.App && typeof window.App.viewTitle === "function"
+      ? window.App.viewTitle(name)
+      : "";
     var titleNode = document.getElementById("page-title");
     if (titleNode && title) {
       titleNode.textContent = title;
