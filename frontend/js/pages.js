@@ -60,7 +60,10 @@
     "dashboard-manage": "page-dashboard-manage",
     "widget-library": "page-widget-library",
     yjb: "page-yjb",
-    settings: "page-settings"
+    settings: "page-settings",
+    // 第七轮（M1/M2）：宏观与周期、估值分位（均挂在「市场」下的二级页）
+    macro: "page-macro",
+    valuation: "page-valuation"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -520,6 +523,10 @@
       renderYjb();
     } else if (name === "settings") {
       renderSettings();
+    } else if (name === "macro") {
+      renderMacro();
+    } else if (name === "valuation") {
+      renderValuation();
     }
   }
 
@@ -6441,6 +6448,344 @@
   }
 
   /** 渲染置页入口：骨架 + 五卡数据（AI/外观/缓存/合规/关于）。 */
+  // =============================================================
+  // 第七轮 M1：宏观与周期（#/macro）
+  // =============================================================
+  /** 宏观页外壳（指标卡 + 周期象限 + 双轴走势），进入即取数。 */
+  function renderMacro() {
+    var page = document.getElementById(VIEW_IDS.macro);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+    var refresh = el("button", "pg-btn", t("macro.refresh"));
+    refresh.type = "button";
+    refresh.id = "macro-refresh";
+    refresh.addEventListener("click", function () { loadMacro(true); });
+    toolbar.appendChild(refresh);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    toolbar.appendChild(el("span", "pg-card-sub", t("macro.toolbarHint")));
+    page.appendChild(toolbar);
+
+    var grid = el("div", "pg-grid");
+    var kpi = buildCard("MC-01", t("macro.card.kpi"), "g-12", t("macro.card.kpiSub"));
+    kpi.body.id = "mc01-body";
+    grid.appendChild(kpi.card);
+    var quad = buildCard("MC-02", t("macro.card.quad"), "g-5", t("macro.card.quadSub"));
+    quad.body.id = "mc02-body";
+    grid.appendChild(quad.card);
+    var chart = buildCard("MC-03", t("macro.card.chart"), "g-7", t("macro.card.chartSub"));
+    chart.body.id = "mc03-body";
+    grid.appendChild(chart.card);
+    page.appendChild(grid);
+    loadMacro(false);
+  }
+
+  /** 拉取并渲染宏观总览。
+   * @param {boolean} force 是否绕过缓存强制重取
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadMacro(force) {
+    var body = document.getElementById("mc01-body");
+    var quadBody = document.getElementById("mc02-body");
+    var chartBody = document.getElementById("mc03-body");
+    if (!body || !quadBody || !chartBody) {
+      return;
+    }
+    setLoading(body);
+    setLoading(quadBody);
+    setLoading(chartBody);
+    api("/api/macro/overview", { force: force ? 1 : "" }).then(function (data) {
+      var card = document.getElementById("MC-01");
+      setBadges(card, data.source, data.caliber);
+
+      // ---- 指标卡 ----
+      body.innerHTML = "";
+      var grid = el("div", "macro-kpis");
+      (data.indicators || []).forEach(function (item) {
+        var box = el("div", "macro-kpi" + (item.available ? "" : " is-missing"));
+        box.appendChild(el("div", "macro-kpi-name", item.name));
+        if (item.available) {
+          // 宏观指标不套用涨跌红绿：A 股语境里红=涨/好、绿=跌/坏，
+          // 但 CPI/PPI 上行未必是好事（通胀压制估值），M1−M2 收窄也未必是坏事。
+          // 用中性文字 + ↑↓ 箭头表达「方向」，避免把宏观数据误读成利好利空。
+          var arrow = item.direction === "up" ? "↑ " : (item.direction === "down" ? "↓ " : "");
+          var valueText = item.digits === 0 ? fmt(item.value, 0) : fmt(item.value, item.digits);
+          box.appendChild(el("div", "macro-kpi-value", valueText + (item.unit || "")));
+          var deltaText = item.delta === null || item.delta === undefined
+            ? t("macro.noPrev")
+            : (item.delta > 0 ? "+" : "") + fmt(item.delta, item.digits);
+          box.appendChild(el("div", "macro-kpi-delta", arrow + t("macro.vsPrev", { delta: deltaText })));
+          box.appendChild(el("div", "macro-kpi-period", item.period || ""));
+        } else {
+          box.appendChild(el("div", "macro-kpi-value flat", t("macro.unavailable")));
+          box.appendChild(el("div", "macro-kpi-reason", item.reason || ""));
+        }
+        grid.appendChild(box);
+      });
+      body.appendChild(grid);
+      body.setAttribute("data-state", "default");
+
+      // ---- 周期象限 ----
+      var quadrant = data.quadrant || {};
+      quadBody.innerHTML = "";
+      var stage = el("div", "macro-stage");
+      stage.appendChild(el("span", "macro-stage-name", quadrant.stage || t("value.none")));
+      stage.appendChild(el("span", "macro-stage-axis",
+        t("macro.axisSummary", {
+          growth: quadrant.growth === "up" ? t("macro.axis.up") : (quadrant.growth === "down" ? t("macro.axis.down") : t("macro.axis.flat")),
+          inflation: quadrant.inflation === "up" ? t("macro.axis.up") : (quadrant.inflation === "down" ? t("macro.axis.down") : t("macro.axis.flat"))
+        })));
+      quadBody.appendChild(stage);
+
+      var quadBox = el("div", "macro-quad");
+      quadBox.appendChild(el("i", "mq-axis-v"));
+      quadBox.appendChild(el("i", "mq-axis-h"));
+      quadBox.appendChild(el("span", "mq-zone mq-lt", t("macro.quad.stagflation")));
+      quadBox.appendChild(el("span", "mq-zone mq-rt", t("macro.quad.overheat")));
+      quadBox.appendChild(el("span", "mq-zone mq-lb", t("macro.quad.recession")));
+      quadBox.appendChild(el("span", "mq-zone mq-rb", t("macro.quad.recovery")));
+      var dot = el("span", "mq-dot");
+      var growthRight = quadrant.growth === "up";
+      var inflationUp = quadrant.inflation === "up";
+      dot.style.left = growthRight ? "72%" : "26%";
+      dot.style.top = inflationUp ? "26%" : "72%";
+      quadBox.appendChild(dot);
+      quadBody.appendChild(quadBox);
+      quadBody.appendChild(el("div", "macro-conclusion", quadrant.conclusion || ""));
+      quadBody.appendChild(el("div", "pg-card-sub", quadrant.disclaimer || ""));
+      quadBody.setAttribute("data-state", "default");
+
+      // ---- 双轴走势 ----
+      chartBody.innerHTML = "";
+      var pmiSeries = (data.series || {}).pmi || [];
+      var ppiSeries = (data.series || {}).ppi || [];
+      if (!pmiSeries.length && !ppiSeries.length) {
+        chartBody.appendChild(el("div", "pg-state", t("macro.chartEmpty")));
+        chartBody.setAttribute("data-state", "empty");
+        return;
+      }
+      var box = el("div", "pg-chart");
+      chartBody.appendChild(box);
+      var chart = mountChart(box);
+      var theme = chartTheme();
+      if (chart) {
+        var periods = pmiSeries.map(function (item) { return item.period; });
+        var ppiMap = {};
+        ppiSeries.forEach(function (item) { ppiMap[item.period] = item.value; });
+        chart.setOption({
+          backgroundColor: "transparent",
+          tooltip: { trigger: "axis" },
+          legend: { textStyle: { color: theme.text }, top: 0,
+            data: [t("macro.series.pmi"), t("macro.series.ppi")] },
+          grid: { left: 52, right: 52, top: 32, bottom: 34 },
+          xAxis: {
+            type: "category", data: periods,
+            axisLabel: { color: theme.text, fontSize: 10,
+              interval: Math.max(1, Math.floor(periods.length / 8)) },
+            axisLine: { lineStyle: { color: theme.border } }
+          },
+          yAxis: [
+            { type: "value", scale: true, name: "PMI",
+              nameTextStyle: { color: theme.text, fontSize: 10 },
+              axisLabel: { color: theme.text, fontSize: 10 },
+              splitLine: { lineStyle: { color: theme.border, opacity: 0.4 } } },
+            { type: "value", scale: true, name: "PPI%",
+              nameTextStyle: { color: theme.text, fontSize: 10 },
+              axisLabel: { color: theme.text, fontSize: 10 },
+              splitLine: { show: false } }
+          ],
+          series: [
+            { name: t("macro.series.pmi"), type: "line", smooth: true, showSymbol: false,
+              data: pmiSeries.map(function (item) { return item.value; }),
+              color: "#b47da0", lineStyle: { width: 1.8 } },
+            { name: t("macro.series.ppi"), type: "line", smooth: true, showSymbol: false, yAxisIndex: 1,
+              data: periods.map(function (period) { return ppiMap[period]; }),
+              color: "#4a9eff", lineStyle: { width: 1.8 } }
+          ]
+        });
+      }
+      chartBody.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), function () { loadMacro(true); });
+      setError(quadBody, error.message || t("state.errorHint"), function () { loadMacro(true); });
+      setError(chartBody, error.message || t("state.errorHint"), function () { loadMacro(true); });
+    });
+  }
+
+  // =============================================================
+  // 第七轮 M2：估值分位（#/valuation）
+  // =============================================================
+  /** 估值分位页外壳（指数表 + 全 A + 行业横截面），进入即取数。 */
+  function renderValuation() {
+    var page = document.getElementById(VIEW_IDS.valuation);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var toolbar = el("div", "page-toolbar");
+    var refresh = el("button", "pg-btn", t("valuation.refresh"));
+    refresh.type = "button";
+    refresh.id = "valuation-refresh";
+    refresh.addEventListener("click", function () { loadValuation(true); });
+    toolbar.appendChild(refresh);
+    toolbar.appendChild(el("span", "pg-spacer"));
+    toolbar.appendChild(el("span", "pg-card-sub", t("valuation.toolbarHint")));
+    page.appendChild(toolbar);
+
+    var grid = el("div", "pg-grid");
+    var idx = buildCard("VL-01", t("valuation.card.index"), "g-12", t("valuation.card.indexSub"));
+    idx.body.id = "vl01-body";
+    grid.appendChild(idx.card);
+    var market = buildCard("VL-02", t("valuation.card.market"), "g-5", t("valuation.card.marketSub"));
+    market.body.id = "vl02-body";
+    grid.appendChild(market.card);
+    var industry = buildCard("VL-03", t("valuation.card.industry"), "g-7", t("valuation.card.industrySub"));
+    industry.body.id = "vl03-body";
+    grid.appendChild(industry.card);
+    page.appendChild(grid);
+    loadValuation(false);
+  }
+
+  /** 拉取并渲染估值分位。
+   * @param {boolean} force 是否绕过缓存强制重取
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadValuation(force) {
+    var body1 = document.getElementById("vl01-body");
+    var body2 = document.getElementById("vl02-body");
+    var body3 = document.getElementById("vl03-body");
+    if (!body1 || !body2 || !body3) {
+      return;
+    }
+    setLoading(body1);
+    setLoading(body2);
+    setLoading(body3);
+    api("/api/valuation/percentile", { force: force ? 1 : "" }).then(function (data) {
+      var card = document.getElementById("VL-01");
+      setBadges(card, data.source, data.caliber);
+
+      /** 分位色阶：低=跌色（绿，估值低）、高=涨色（红，估值高），沿用全站涨跌两色。
+       * @param {number} pct 分位值
+       * @returns {string} CSS 类名
+       */
+      function pctClassOf(pct) {
+        if (pct === null || pct === undefined) {
+          return "flat";
+        }
+        if (pct <= 20) {
+          return "down";
+        }
+        if (pct >= 80) {
+          return "up";
+        }
+        return "flat";
+      }
+
+      /** 格式化分位。
+       * @param {number} value 分位值
+       * @returns {string} 文案
+       */
+      function fmtPctile(value) {
+        return value === null || value === undefined ? t("value.none") : fmt(value, 1) + "%";
+      }
+
+      // ---- 指数表 ----
+      body1.innerHTML = "";
+      var rows = (data.indices || []).filter(function (item) { return item.available; });
+      if (!rows.length) {
+        body1.appendChild(el("div", "pg-state", t("valuation.indexEmpty")));
+        body1.setAttribute("data-state", "empty");
+      } else {
+        var tableHost = el("div", "");
+        body1.appendChild(tableHost);
+        renderTable(tableHost, [
+          { title: t("valuation.col.name"), cls: "l", render: function (row) { return row.name; } },
+          { title: t("valuation.col.pe"), num: true, render: function (row) { return fmt(row.pe, 2); } },
+          { title: t("valuation.col.pct3y"), num: true, render: function (row) {
+            return el("span", pctClassOf(row.pct3y), fmtPctile(row.pct3y)); } },
+          { title: t("valuation.col.pct5y"), num: true, render: function (row) {
+            return el("span", pctClassOf(row.pct5y), fmtPctile(row.pct5y)); } },
+          { title: t("valuation.col.pct10y"), num: true, render: function (row) {
+            return el("span", pctClassOf(row.pct10y), fmtPctile(row.pct10y)); } },
+          { title: t("valuation.col.erp"), num: true, render: function (row) {
+            return row.erp === null || row.erp === undefined
+              ? t("value.none") : el("span", row.erp > 0 ? "up" : "down", fmt(row.erp, 2) + "%"); } },
+          { title: t("valuation.col.period"), cls: "l", render: function (row) { return row.period || ""; } }
+        ], rows);
+        body1.setAttribute("data-state", "default");
+      }
+      var missing = (data.indices || []).filter(function (item) { return !item.available; });
+      if (missing.length) {
+        body1.appendChild(el("div", "pg-card-sub",
+          t("valuation.indexMissing", { names: missing.map(function (item) { return item.name + "（" + (item.reason || "") + "）"; }).join("；") })));
+      }
+      body1.appendChild(el("div", "pg-card-sub", data.disclaimer || ""));
+
+      // ---- 全 A ----
+      body2.innerHTML = "";
+      var market = data.market || {};
+      if (!market.available) {
+        body2.appendChild(el("div", "pg-state", market.reason || t("state.empty")));
+        body2.setAttribute("data-state", "empty");
+      } else {
+        var grid = el("div", "pg-kpis");
+        [
+          [t("valuation.col.pe"), fmt(market.pe, 2), "flat", market.period || ""],
+          [t("valuation.col.pct3y"), fmtPctile(market.pct3y), pctClassOf(market.pct3y), ""],
+          [t("valuation.col.pct5y"), fmtPctile(market.pct5y), pctClassOf(market.pct5y), ""],
+          [t("valuation.col.pct10y"), fmtPctile(market.pct10y), pctClassOf(market.pct10y), ""]
+        ].forEach(function (row) {
+          var box = el("div", "pg-kpi");
+          box.appendChild(el("div", "pg-kpi-k", row[0]));
+          box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+          if (row[3]) {
+            box.appendChild(el("div", "pg-kpi-x", row[3]));
+          }
+          grid.appendChild(box);
+        });
+        body2.appendChild(grid);
+        body2.appendChild(el("div", "pg-card-sub", t("valuation.marketNote")));
+        body2.setAttribute("data-state", "default");
+      }
+
+      // ---- 行业横截面 ----
+      body3.innerHTML = "";
+      // 取横截面分位的两端各 8 个（最便宜 + 最贵），而不是 PE 最高的 16 个：
+      // 只取高 PE 会让色阶全红、失去信息量；两端取样能一眼看出「贵 vs 便宜」的结构。
+      var allIndustries = (data.industries || []).slice().sort(function (a, b) {
+        return (a.cross_pct || 0) - (b.cross_pct || 0);
+      });
+      var industries = allIndustries.length <= 16
+        ? allIndustries
+        : allIndustries.slice(0, 8).concat(allIndustries.slice(-8));
+      if (!industries.length) {
+        body3.appendChild(el("div", "pg-state", data.industry_note || t("valuation.industryEmpty")));
+        body3.setAttribute("data-state", "empty");
+      } else {
+        var heat = el("div", "macro-heat");
+        industries.forEach(function (item) {
+          var tone = item.cross_pct >= 80 ? "#ff4b4b" : (item.cross_pct <= 20 ? "#00b061" : "#5a6a8a");
+          var cell = el("div", "heat-cell");
+          cell.style.background = tone;
+          cell.appendChild(el("b", "", item.name));
+          cell.appendChild(el("span", "", "PE " + fmt(item.pe, 1) + " · " + fmt(item.cross_pct, 0) + "%"));
+          heat.appendChild(cell);
+        });
+        body3.appendChild(heat);
+        var snapshot = (data.industries[0] || {}).snapshot_date || "";
+        body3.appendChild(el("div", "pg-card-sub",
+          t("valuation.industryNote", { date: snapshot, n: (data.industries || []).length })));
+        body3.setAttribute("data-state", "default");
+      }
+    }).catch(function (error) {
+      setError(body1, error.message || t("state.errorHint"), function () { loadValuation(true); });
+      setError(body2, error.message || t("state.errorHint"), function () { loadValuation(true); });
+      setError(body3, error.message || t("state.errorHint"), function () { loadValuation(true); });
+    });
+  }
+
   function renderSettings() {
     var container = document.getElementById(VIEW_IDS.settings);
     if (!container.querySelector("#set-ai-body")) {

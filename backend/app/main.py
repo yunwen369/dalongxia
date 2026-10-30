@@ -49,6 +49,7 @@ from backend.app.routers import (  # noqa: E402
     connectors,
     dashboards,
     fund,
+    macro,
     market,
     moneyflow,
     news,
@@ -57,6 +58,7 @@ from backend.app.routers import (  # noqa: E402
     sentiment,
     stock,
     system,
+    valuation,
     watchlist,
     widgets,
     yjb,
@@ -263,6 +265,9 @@ def create_app() -> FastAPI:
     application.include_router(moneyflow.router)
     # R3-02：仪表板整表读写（分组/增删改/复制/排序，落盘 data/dashboards.json）
     application.include_router(dashboards.router)
+    # 第七轮：宏观指标与周期象限（M1）+ 估值分位与 ERP（M2）
+    application.include_router(macro.router)
+    application.include_router(valuation.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

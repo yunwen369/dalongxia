@@ -26,7 +26,10 @@
     portfolio: t("page.portfolio"),
     yjb: t("page.yjb"),
     connectors: t("page.connectors"),
-    settings: t("page.settings")
+    settings: t("page.settings"),
+    // 第七轮（M1/M2）
+    macro: t("page.macro"),
+    valuation: t("page.valuation")
   };
 
   let toastTimer = null;
@@ -256,6 +259,9 @@
     stock: "market",
     charting: "market",
     "sector-val": "market",
+    // 第七轮：宏观与估值分位同属「市场」组
+    macro: "market",
+    valuation: "market",
     lhb: "money",
     portfolio: "portfolio",
     fund: "portfolio",
@@ -278,6 +284,8 @@
     stock: [["nav.market", "sectors"], ["nav.stock", null]],
     charting: [["nav.market", "sectors"], ["nav.charting", null]],
     "sector-val": [["nav.market", "sectors"], ["nav.sectorVal", null]],
+    macro: [["nav.market", "sectors"], ["nav.macro", null]],
+    valuation: [["nav.market", "sectors"], ["nav.valuation", null]],
     lhb: [["nav.money", "lhb"], ["nav.lhb", null]],
     portfolio: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]],
     fund: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]],

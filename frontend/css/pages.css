@@ -1129,3 +1129,168 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* =============================================================
+ * 第七轮 M1/M2：宏观指标卡、周期象限、行业估值热力
+ * ============================================================= */
+.macro-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.macro-kpi {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.macro-kpi.is-missing {
+  border-style: dashed;
+  background: transparent;
+}
+
+.macro-kpi-name {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.macro-kpi-value {
+  font-size: 18px;
+  font-weight: 500;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.macro-kpi-delta {
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+
+.macro-kpi-period {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.macro-kpi-reason {
+  font-size: 10px;
+  color: var(--warn);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.macro-stage {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.macro-stage-name {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--accent-strong);
+}
+
+.macro-stage-axis {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.macro-quad {
+  position: relative;
+  height: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.macro-quad .mq-axis-v,
+.macro-quad .mq-axis-h {
+  position: absolute;
+  background: var(--border-strong);
+}
+
+.macro-quad .mq-axis-v {
+  left: 50%;
+  top: 6px;
+  width: 1px;
+  height: calc(100% - 12px);
+}
+
+.macro-quad .mq-axis-h {
+  top: 50%;
+  left: 6px;
+  height: 1px;
+  width: calc(100% - 12px);
+}
+
+.mq-zone {
+  position: absolute;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.mq-lt { left: 10px; top: 8px; }
+.mq-rt { right: 10px; top: 8px; }
+.mq-lb { left: 10px; bottom: 8px; }
+.mq-rb { right: 10px; bottom: 8px; }
+
+.mq-dot {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-strong) 22%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.macro-conclusion {
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-dim);
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-panel);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.macro-heat {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+
+.heat-cell {
+  border-radius: 3px;
+  padding: 6px 7px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.heat-cell b {
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d1017;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heat-cell span {
+  font-size: 10px;
+  color: rgba(13, 16, 23, 0.75);
+  font-variant-numeric: tabular-nums;
+}
