@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -330,4 +331,193 @@ def analyze() -> Dict[str, Any]:
         "fx_missing": missing_fx,
         "updated_at": store.get("updated_at"),
         "caliber": "市值=份额×最新价（基金用单位净值）；折合人民币用新浪实时汇率；缺汇率时不给折算值",
+    }
+
+
+# =============================================================
+# 第七轮 M4：归因与风险（组合台账的「为什么赚/亏」）
+# =============================================================
+
+# 行业查询缓存：symbol → 行业名，避免每次归因都打东财 F10
+_INDUSTRY_CACHE: Dict[str, str] = {}
+_INDUSTRY_TTL = 12 * 3600
+_INDUSTRY_TS = 0.0
+
+
+def _industry_of(symbol: str, market: str) -> Optional[str]:
+    """取标的所属行业（仅 A 股有；基金/港股/美股返回 None）。
+
+    东财 F10 的 `industry` 字段即所属行业（EM2016 行业分类）。逐只查询成本较高，
+    因此进程内缓存 12 小时：归因是「看组合结构」而非「看单票」，行业短期不会变。
+
+    Args:
+        symbol: 代码。
+        market: 市场（a/hk/us/fund）。
+
+    Returns:
+        Optional[str]: 行业名；取不到返回 None（由调用方归入「未分类」，不猜测）。
+    """
+    global _INDUSTRY_TS
+    if market != "a":
+        return None
+    now = time.time()
+    if now - _INDUSTRY_TS > _INDUSTRY_TTL:
+        _INDUSTRY_CACHE.clear()
+        _INDUSTRY_TS = now
+    cached = _INDUSTRY_CACHE.get(symbol)
+    if cached is not None:
+        return cached or None
+    try:
+        from backend.app.datasource import stock as stock_provider
+
+        profile = stock_provider.get_profile(symbol)
+        industry = str(profile.get("industry") or "").strip()
+        _INDUSTRY_CACHE[symbol] = industry
+        return industry or None
+    except Exception as exc:  # noqa: BLE001 - 行业取不到不影响归因主体
+        logger.info("行业查询失败 %s：%s", symbol, type(exc).__name__)
+        _INDUSTRY_CACHE[symbol] = ""
+        return None
+
+
+def attribution() -> Dict[str, Any]:
+    """组合归因：收益贡献 / 行业暴露 / 集中度 / 情景（M4）。
+
+    与 `analyze()` 的分工：`analyze()` 回答「现在值多少」，本函数回答「赚亏从哪来、风险堆在哪」。
+    两者共用同一份台账与同一套取价逻辑，不另存数据。
+
+    Returns:
+        dict: {items, totals, by_industry, concentration, scenarios, caliber, as_of, ...}
+    """
+    store = load()
+    fx = get_fx()
+    rows: List[Dict[str, Any]] = []
+    total_value = 0.0
+    total_cost = 0.0
+    missing: List[str] = []
+
+    for raw in store["items"]:
+        price, _price_time, price_source = _price_of(raw)
+        market = raw.get("market", "a")
+        symbol = str(raw.get("symbol") or "")
+        shares = float(raw.get("shares") or 0)
+        cost = float(raw.get("cost") or 0)
+        currency = CURRENCY_BY_MARKET.get(market, "CNY")
+        rate = 1.0 if currency == "CNY" else (fx.get(currency) or 0.0)
+        if currency != "CNY" and not rate:
+            missing.append(f"{symbol}（缺 {currency} 汇率）")
+            continue
+        if price is None:
+            missing.append(f"{symbol}（无最新价）")
+            continue
+        value = shares * price * rate
+        cost_value = shares * cost * rate
+        total_value += value
+        total_cost += cost_value
+        rows.append({
+            "symbol": symbol,
+            "name": raw.get("name") or symbol,
+            "market": market,
+            "market_label": MARKET_LABEL.get(market, market),
+            "industry": _industry_of(symbol, market),
+            "shares": round(shares, 4),
+            "cost": round(cost, 4),
+            "price": round(price, 4),
+            "value": round(value, 2),
+            "cost_value": round(cost_value, 2),
+            "pnl": round(value - cost_value, 2),
+            "pnl_pct": round((value - cost_value) / cost_value * 100, 2) if cost_value else None,
+            "price_source": price_source,
+        })
+
+    if not rows:
+        return {
+            "items": [],
+            "totals": {"value": 0.0, "cost": 0.0, "pnl": 0.0, "pnl_pct": None, "count": 0},
+            "by_industry": [],
+            "concentration": {"hhi": None, "top5": [], "level": None},
+            "scenarios": [],
+            "missing": missing,
+            "caliber": "台账为空或无可用报价，无法归因",
+            "as_of": utils.now_text(utils.bj_now()),
+            "is_realtime": True,
+            "updated_at": store.get("updated_at"),
+        }
+
+    # 权重与贡献（贡献 = 权重 × 收益率，单位：百分点）
+    for row in rows:
+        row["weight"] = round(row["value"] / total_value * 100, 2) if total_value else 0.0
+        row["contribution"] = round(
+            row["weight"] * (row["pnl_pct"] or 0.0) / 100, 2
+        )
+    rows.sort(key=lambda item: item["value"], reverse=True)
+
+    # 行业暴露（基金不拆重仓，按「基金」整体计；A 股按 F10 行业；港美股单列）
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if row["market"] == "fund":
+            key = "场外基金"
+        elif row["market"] in ("hk", "us"):
+            key = f"{row['market_label']}个股"
+        else:
+            key = row["industry"] or "未分类"
+        bucket = buckets.setdefault(key, {"name": key, "value": 0.0, "count": 0})
+        bucket["value"] += row["value"]
+        bucket["count"] += 1
+    by_industry = [
+        {
+            "name": item["name"],
+            "value": round(item["value"], 2),
+            "weight": round(item["value"] / total_value * 100, 2) if total_value else 0.0,
+            "count": item["count"],
+        }
+        for item in buckets.values()
+    ]
+    by_industry.sort(key=lambda item: item["value"], reverse=True)
+
+    # 集中度：HHI = Σ(权重小数²)，0–1；0.25 以上偏集中
+    hhi = sum((row["value"] / total_value) ** 2 for row in rows) if total_value else 0.0
+    hhi = round(hhi, 4)
+    top5 = [
+        {"symbol": row["symbol"], "name": row["name"], "weight": row["weight"]}
+        for row in rows[:5]
+    ]
+
+    # 情景：按市场分组线性近似（明确声明不是压力测试）
+    market_value: Dict[str, float] = {}
+    for row in rows:
+        market_value[row["market_label"]] = market_value.get(row["market_label"], 0.0) + row["value"]
+    scenarios = [
+        {
+            "label": f"{label} −10%",
+            "impact": round(-value * 0.10, 2),
+            "impact_pct": round(-value * 0.10 / total_value * 100, 2) if total_value else None,
+        }
+        for label, value in market_value.items()
+    ]
+    scenarios.sort(key=lambda item: item["impact"])
+
+    total_pnl = total_value - total_cost
+    return {
+        "items": rows,
+        "totals": {
+            "value": round(total_value, 2),
+            "cost": round(total_cost, 2),
+            "pnl": round(total_pnl, 2),
+            "pnl_pct": round(total_pnl / total_cost * 100, 2) if total_cost else None,
+            "count": len(rows),
+        },
+        "by_industry": by_industry,
+        "concentration": {"hhi": hhi, "top5": top5, "level": "集中" if hhi >= 0.25 else "中性"},
+        "scenarios": scenarios,
+        "missing": missing,
+        "caliber": (
+            "权重=市值/合计市值；贡献=权重×盈亏率（百分点）；HHI=Σ权重²（0–1，≥0.25 偏集中）；"
+            "行业按东财 F10 EM2016（基金不拆重仓、港美股单列）；"
+            "情景为线性近似，不含相关性变化，不是压力测试"
+        ),
+        "as_of": utils.now_text(utils.bj_now()),
+        "is_realtime": True,
+        "fx": fx,
+        "updated_at": store.get("updated_at"),
     }

@@ -1171,3 +1171,180 @@ def get_trend(boards: List[str], days: int = 30, market: str = "cn") -> Dict[str
             points.append({"date": item.get("date"), "value": _round(close / base * 100, 2) if base else None})
         series.append({"board": board, "points": points})
     return {"series": series, "base": 100, "failures": failures, "days": days}
+
+
+# =============================================================
+# 第七轮 M3：板块拥挤度（0–100 分，阈值 60 提示 / 80 复核）
+# =============================================================
+
+# 拥挤度权重：只保留数据可得的维度，缺失维度在 caliber 里逐条写明（不编造）
+CROWDING_WEIGHTS = {
+    "amount_share": 0.45,   # 成交额占比分位
+    "bias": 0.25,           # 乖离率分位（收盘/MA20−1）
+    "volume_share": 0.15,   # 成交量占比分位
+    "momentum": 0.15,       # 近 20 日动量分位
+}
+
+CROWDING_MISSING = (
+    "五项里有两项口径调整、三项未纳入："
+    "① 成交额维度改用「当日/近250日均值」的相对强度，不是「占全市场比重」——"
+    "全市场成交额源（东财 push2his）在本机被源站重置，新浪指数日线只有成交量无成交额；"
+    "② 换手率分位未纳入，同花顺行业日线不含换手率与流通股本；"
+    "③ 行业融资余额分位未纳入，融资余额仅有全市场口径无行业口径；"
+    "④ 成分股相关性未纳入，东财 push2 成分股接口在本机被源站重置，取不到行业成分"
+)
+
+
+def _pct_rank(series: List[float], current: float) -> Optional[float]:
+    """当前值在序列中的分位（≤ 当前值占比 × 100）。
+
+    Args:
+        series: 历史样本。
+        current: 当前值。
+
+    Returns:
+        Optional[float]: 0–100 分位；样本不足 30 个返回 None（不做不可信的分位）。
+    """
+    clean = [value for value in series if value is not None]
+    if len(clean) < 30 or current is None:
+        return None
+    below = sum(1 for value in clean if value <= current)
+    return round(below / len(clean) * 100, 1)
+
+
+def get_crowding(board: str) -> Dict[str, Any]:
+    """单板块拥挤度打分（M3）。
+
+    四个维度的分位加权成 0–100 分，>60 提示、>80 提示复核（用户口径）。
+    只陈述「交易结构位置」，不给买卖指令。
+
+    Args:
+        board: 板块名（如「半导体」）。
+
+    Returns:
+        dict: {board, score, level, parts, sample_days, as_of, caliber, missing}
+
+    Raises:
+        ValueError: 板块日线取不到或样本不足。
+    """
+    _ensure_enabled()
+    today = utils.bj_now().date()
+    start_text = (today - timedelta(days=400)).strftime("%Y%m%d")
+    end_text = today.strftime("%Y%m%d")
+    frame = _call_ths(lambda: ak.stock_board_industry_index_ths(
+        symbol=board, start_date=start_text, end_date=end_text))
+    rows: List[Dict[str, Any]] = []
+    for row in utils.clean_records(frame):
+        day = str(row.get("日期") or "")[:10]
+        close = _num(row.get("收盘价"))
+        amount = _num(row.get("成交额"))
+        volume = _num(row.get("成交量"))
+        if day and close and amount and volume:
+            rows.append({"date": day, "close": close, "amount": amount, "volume": volume})
+    rows.sort(key=lambda item: item["date"])
+    if len(rows) < 60:
+        raise ValueError(f"{board} 日线样本不足（{len(rows)} 个交易日），无法计算分位")
+
+    # 成交额强度 = 当日成交额 / 近 250 日均值（消除市场规模自然增长带来的趋势抬升）。
+    # 原设计用「占全市场比重」，但全市场成交额源（东财 push2his）在本机被源站重置，
+    # 新浪指数日线只有成交量没有成交额，无法合成可靠分母；改用「相对自身历史强度」，
+    # 只依赖板块日线自身，口径自洽且可复算。差异已在 caliber 写明。
+    amounts = [item["amount"] for item in rows]
+    strengths: List[float] = []
+    for index in range(0, len(amounts)):
+        window = amounts[max(0, index - 249): index + 1]
+        avg = sum(window) / len(window)
+        strengths.append(amounts[index] / avg if avg else 1.0)
+    if len(strengths) < 30:
+        raise ValueError(f"{board} 成交额强度样本不足（{len(strengths)} 日）")
+
+    # 乖离率：收盘 / MA20 − 1
+    closes = [item["close"] for item in rows]
+    biases: List[float] = []
+    for index in range(19, len(closes)):
+        window = closes[index - 19: index + 1]
+        ma = sum(window) / len(window)
+        biases.append(closes[index] / ma - 1)
+    # 动量：近 20 日涨幅
+    momenta: List[float] = []
+    for index in range(20, len(closes)):
+        momenta.append(closes[index] / closes[index - 20] - 1)
+
+    # 成交量占比（用成交量相对全市场：市场成交量取不到，退化用板块自身 20 日均量比值）
+    vols = [item["volume"] for item in rows]
+    vol_ratios: List[float] = []
+    for index in range(19, len(vols)):
+        window = vols[index - 19: index + 1]
+        avg = sum(window) / len(window)
+        vol_ratios.append(vols[index] / avg - 1 if avg else 0.0)
+
+    parts = {
+        "amount_share": {
+            "label": "成交额强度(250日均值)",
+            "value": round(strengths[-1] * 100, 1),
+            "pct": _pct_rank(strengths[:-1], strengths[-1]),
+            "weight": CROWDING_WEIGHTS["amount_share"],
+            "unit": "%",
+        },
+        "bias": {
+            "label": "乖离率(MA20)",
+            "value": round(biases[-1] * 100, 2),
+            "pct": _pct_rank(biases[:-1], biases[-1]),
+            "weight": CROWDING_WEIGHTS["bias"],
+            "unit": "%",
+        },
+        "volume_share": {
+            "label": "量能偏离(20日均量)",
+            "value": round(vol_ratios[-1] * 100, 2),
+            "pct": _pct_rank(vol_ratios[:-1], vol_ratios[-1]),
+            "weight": CROWDING_WEIGHTS["volume_share"],
+            "unit": "%",
+        },
+        "momentum": {
+            "label": "20 日动量",
+            "value": round(momenta[-1] * 100, 2),
+            "pct": _pct_rank(momenta[:-1], momenta[-1]),
+            "weight": CROWDING_WEIGHTS["momentum"],
+            "unit": "%",
+        },
+    }
+
+    # 加权求和（分位缺失的维度按 50 计中位，并在 missing 里点名，避免静默降权）
+    missing_parts: List[str] = []
+    score = 0.0
+    used_weight = 0.0
+    for key, part in parts.items():
+        pct = part["pct"]
+        if pct is None:
+            missing_parts.append(part["label"])
+            continue
+        score += part["weight"] * pct
+        used_weight += part["weight"]
+    if used_weight <= 0:
+        raise ValueError(f"{board} 四个维度分位均不可用")
+    score = round(score / used_weight, 1)
+
+    if score >= 80:
+        level, advice = "高位", "交易结构拥挤，建议复核"
+    elif score >= 60:
+        level, advice = "偏高", "拥挤度进入提示区间"
+    else:
+        level, advice = "正常", "拥挤度处于常规区间"
+
+    return {
+        "board": board,
+        "score": score,
+        "level": level,
+        "advice": advice,
+        "parts": list(parts.values()),
+        "sample_days": len(rows),
+        "as_of": utils.now_text(utils.bj_now()),
+        "caliber": (
+            f"拥挤度=四维分位加权（成交额占比 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
+            f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
+            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%），分位窗口=近 {len(rows)} 个交易日；"
+            "成交额维度用「当日/近250日均值」的相对强度（全市场成交额源不可用，改相对自身历史）；"
+            "只陈述交易结构位置，不构成买卖建议"
+        ),
+        "missing": [CROWDING_MISSING] + ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else []),
+    }

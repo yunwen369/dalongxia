@@ -146,3 +146,30 @@ def portfolio_analysis() -> Dict[str, Any]:
         data.get("caliber") or "市值=份额×最新价；人民币折算用新浪实时汇率",
         data.get("updated_at"),
     )
+
+
+@router.get("/attribution")
+def portfolio_attribution() -> Dict[str, Any]:
+    """组合归因（第七轮 M4）：收益贡献 / 行业暴露 / 集中度 / 情景。
+
+    与 `/analysis` 的分工：`/analysis` 回答「现在值多少」，本端点回答「赚亏从哪来、风险堆在哪」。
+    共用同一份台账（data/portfolio.json），不另存数据，因此不会出现双源。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 caliber/as_of/is_realtime。
+    """
+
+    def loader() -> Dict[str, Any]:
+        """计算归因（行情 60 秒缓存，避免频繁打上游）。
+
+        Returns:
+            dict: 归因结果。
+        """
+        return store.attribution()
+
+    data = cache.get_or_load("portfolio:attribution", 60, loader)
+    return _pack(
+        data,
+        data.get("caliber") or "权重=市值/合计；贡献=权重×盈亏率；HHI=Σ权重²",
+        data.get("as_of"),
+    )

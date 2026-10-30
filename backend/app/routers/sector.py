@@ -664,3 +664,44 @@ def sector_trend(
         status,
         is_realtime,
     )
+
+
+@router.get("/crowding")
+def sector_crowding(
+    board: str = Query(..., description="板块名，如「半导体」"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """板块拥挤度（第七轮 M3）：四维分位加权 0–100 分，>60 提示 / >80 复核。
+
+    只陈述交易结构位置，不给买卖指令；缺失维度在 `missing` 里逐条写明（不编造）。
+
+    Args:
+        board: 板块名。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {...}, "error": null}
+    """
+    name = str(board or "").strip()
+    if not name:
+        return api_error(ErrorCode.INVALID_PARAM, "请提供板块名（board），如「半导体」")
+
+    def loader() -> Dict[str, Any]:
+        """取数并打分（1 小时缓存：日频数据，无需更短）。
+
+        Returns:
+            Dict[str, Any]: 拥挤度结果。
+        """
+        return sector_provider.get_crowding(name)
+
+    try:
+        if force:
+            data = loader()
+        else:
+            data = cache.get_or_load(f"sector:crowding:{name}", 3600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001 - 上游异常转可读错误
+        logger.warning("拥挤度计算失败 %s：%s", name, type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"拥挤度计算失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)

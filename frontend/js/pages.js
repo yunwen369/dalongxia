@@ -639,6 +639,11 @@
     var flow = buildCard("S-07", t("sectors.flowTitle"), "g-12", t("sectors.flowSub"));
     flow.body.id = "s07-body";
     grid.appendChild(flow.card);
+
+    // S-08 板块拥挤度（第七轮 M3）：单板块四维打分，>60 提示 / >80 复核
+    var crowd = buildCard("S-08", t("sectors.crowd.title"), "g-12", t("sectors.crowd.sub"));
+    crowd.body.id = "s08-body";
+    grid.appendChild(crowd.card);
     container.appendChild(grid);
 
     marketTabs.addEventListener("click", function (event) {
@@ -705,6 +710,7 @@
     }
     syncSectorTabs();
     loadSectors();
+    loadSectorCrowding();
   }
 
   /** 拉取并渲染板块页全部区块。
@@ -1268,6 +1274,95 @@
   }
 
   var stockCache = { key: "", panel: null };
+
+  /** 渲染板块拥挤度（第七轮 M3）：输入板块名 → 四维分位加权打分。
+   *
+   * 阈值按用户口径：>60 提示、>80 建议复核。只陈述交易结构位置，不给买卖指令。
+   * 缺失维度在接口 missing 里逐条说明，界面原样呈现（不隐藏降级事实）。
+   *
+   * @returns {void} 无返回值
+   */
+  function loadSectorCrowding() {
+    var body = document.getElementById("s08-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    var bar = el("div", "page-toolbar");
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "wl-addbar-input";
+    input.id = "crowd-board";
+    input.placeholder = t("sectors.crowd.placeholder");
+    input.value = state.sectors.crowdBoard || "";
+    bar.appendChild(input);
+    var btn = el("button", "pg-btn primary", t("sectors.crowd.query"));
+    btn.type = "button";
+    bar.appendChild(btn);
+    bar.appendChild(el("span", "pg-card-sub", t("sectors.crowd.hint")));
+    body.appendChild(bar);
+
+    var result = el("div", "");
+    body.appendChild(result);
+    body.setAttribute("data-state", "default");
+
+    /** 查询指定板块。
+     * @returns {void} 无返回值
+     */
+    function run() {
+      var board = (input.value || "").trim();
+      if (!board) {
+        toast(t("sectors.crowd.needBoard"));
+        return;
+      }
+      state.sectors.crowdBoard = board;
+      result.innerHTML = "";
+      result.appendChild(el("div", "pg-state", t("state.loading")));
+      api("/api/sector/crowding", { board: board }).then(function (data) {
+        var card = document.getElementById("S-08");
+        setBadges(card, "同花顺行业日线", data.caliber);
+        result.innerHTML = "";
+        var head = el("div", "pg-kpis");
+        var main = el("div", "pg-kpi");
+        main.appendChild(el("div", "pg-kpi-k", t("sectors.crowd.score")));
+        main.appendChild(el("div", "pg-kpi-v " + (data.score >= 80 ? "up" : data.score >= 60 ? "flat" : "down"),
+          fmt(data.score, 1)));
+        main.appendChild(el("div", "pg-kpi-x", data.level + " · " + data.advice));
+        head.appendChild(main);
+        result.appendChild(head);
+
+        var list = el("div", "crowd-parts");
+        (data.parts || []).forEach(function (part) {
+          var line = el("div", "crowd-part");
+          line.appendChild(el("span", "crowd-part-name", part.label));
+          var track = el("div", "crowd-part-bar");
+          var fill = el("i", "");
+          fill.style.width = (part.pct === null || part.pct === undefined ? 0 : part.pct) + "%";
+          track.appendChild(fill);
+          line.appendChild(track);
+          line.appendChild(el("span", "crowd-part-val",
+            t("sectors.crowd.rankLabel") + fmt(part.pct, 1) + "%"));
+          line.appendChild(el("span", "crowd-part-raw", fmt(part.value, 2) + part.unit));
+          list.appendChild(line);
+        });
+        result.appendChild(list);
+
+        (data.missing || []).forEach(function (note) {
+          result.appendChild(el("div", "pg-card-sub", note));
+        });
+      }).catch(function (error) {
+        result.innerHTML = "";
+        result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+      });
+    }
+
+    btn.addEventListener("click", run);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        run();
+      }
+    });
+  }
 
   /** 渲染个股页。
    * @param {Object} params 查询参数对象
@@ -4061,6 +4156,10 @@
     var summary = buildCard("P-01", t("portfolio.summaryTitle"), "g-12", t("portfolio.summarySub"));
     summary.body.id = "p01-body";
     grid.appendChild(summary.card);
+    // 第七轮 M4：归因（赚亏从哪来 / 风险堆在哪），与 P-01 同用一份台账
+    var attr = buildCard("P-05", t("portfolio.attr.title"), "g-12", t("portfolio.attr.sub"));
+    attr.body.id = "p05-body";
+    grid.appendChild(attr.card);
     var dist = buildCard("P-04", t("portfolio.distTitle"), "g-5", t("portfolio.distSub"));
     dist.body.id = "p04-body";
     grid.appendChild(dist.card);
@@ -4101,6 +4200,125 @@
     });
   }
 
+  /** 渲染组合归因（第七轮 M4）：权重/贡献、行业暴露、集中度、情景。
+   *
+   * 与 P-01 的分工：P-01 回答「值多少」，本卡回答「赚亏从哪来、风险堆在哪」。
+   * 共用同一份台账（/api/portfolio），不另存数据。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadPortfolioAttribution() {
+    var body = document.getElementById("p05-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/portfolio/attribution").then(function (data) {
+      var totals = data.totals || {};
+      var card = document.getElementById("P-05");
+      setBadges(card, "本机台账 data/portfolio.json", data.caliber);
+      body.innerHTML = "";
+      if (!totals.count) {
+        setEmpty(body, t("portfolio.attr.empty"), loadPortfolioAttribution);
+        return;
+      }
+
+      // —— 头部 KPI ——
+      var kpis = el("div", "pg-kpis");
+      var conc = data.concentration || {};
+      [
+        [t("portfolio.attr.value"), fmt(totals.value, 2), "flat", t("yjb.kpi.yuan")],
+        [t("portfolio.attr.pnl"), (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl, 2),
+          pctClass(totals.pnl), fmtPct(totals.pnl_pct)],
+        [t("portfolio.attr.hhi"), fmt(conc.hhi, 4), "flat", conc.level || ""],
+        [t("portfolio.attr.count"), String(totals.count), "flat", t("portfolio.attr.countTag")]
+      ].forEach(function (row) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", row[0]));
+        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+        if (row[3]) {
+          box.appendChild(el("div", "pg-kpi-x", row[3]));
+        }
+        kpis.appendChild(box);
+      });
+      body.appendChild(kpis);
+
+      // —— 权重与贡献表 ——
+      var tableHost = el("div", "");
+      body.appendChild(tableHost);
+      renderTable(tableHost, [
+        { title: t("portfolio.col.name"), cls: "l",
+          /** 标的：代码 + 名称 + 行业。
+           * @param {Object} row 归因行
+           * @returns {HTMLElement} 单元格节点
+           */
+          render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.symbol));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            if (row.industry) {
+              // 东财 F10 的 industry 是「食品饮料-饮料-白酒」这类全路径，
+              // 卡片列宽有限，展示末级行业名，完整路径放 title 供悬浮查看
+              var shortIndustry = String(row.industry).split(/[-—/]/).pop();
+              var tag = el("span", "pg-card-sub", " · " + shortIndustry);
+              tag.title = row.industry;
+              box.appendChild(tag);
+            }
+            return box;
+          } },
+        { title: t("portfolio.attr.weight"), num: true,
+          render: function (row) { return fmtPct(row.weight); } },
+        { title: t("portfolio.attr.pnlPct"), num: true,
+          render: function (row) { return el("span", pctClass(row.pnl_pct), fmtPct(row.pnl_pct)); } },
+        { title: t("portfolio.attr.contribution"), num: true,
+          render: function (row) {
+            return el("span", pctClass(row.contribution),
+              (row.contribution > 0 ? "+" : "") + fmt(row.contribution, 2) + "pt");
+          } },
+        { title: t("portfolio.attr.market"), cls: "l",
+          render: function (row) { return row.market_label || row.market; } }
+      ], data.items || [], null);
+
+      // —— 行业暴露 + 情景 ——
+      var bottom = el("div", "pg-grid");
+      var ind = el("div", "card g-7");
+      ind.appendChild(el("div", "card-title", t("portfolio.attr.byIndustry")));
+      (data.by_industry || []).slice(0, 8).forEach(function (item) {
+        var line = el("div", "portfolio-expo");
+        line.appendChild(el("span", "portfolio-expo-name", item.name));
+        var bar = el("div", "portfolio-expo-bar");
+        var fill = el("i", "");
+        fill.style.width = Math.min(100, item.weight || 0) + "%";
+        bar.appendChild(fill);
+        line.appendChild(bar);
+        line.appendChild(el("span", "portfolio-expo-val", fmtPct(item.weight)));
+        ind.appendChild(line);
+      });
+      bottom.appendChild(ind);
+
+      var scen = el("div", "card g-5");
+      scen.appendChild(el("div", "card-title", t("portfolio.attr.scenario")));
+      (data.scenarios || []).forEach(function (item) {
+        var line = el("div", "portfolio-scen");
+        line.appendChild(el("span", "", item.label));
+        line.appendChild(el("b", "down", fmt(item.impact, 0) + " 元"));
+        line.appendChild(el("span", "pg-card-sub", "（" + fmtPct(item.impact_pct) + "）"));
+        scen.appendChild(line);
+      });
+      scen.appendChild(el("div", "pg-card-sub", t("portfolio.attr.scenarioNote")));
+      bottom.appendChild(scen);
+      body.appendChild(bottom);
+
+      if ((data.missing || []).length) {
+        body.appendChild(el("div", "pg-card-sub", t("portfolio.attr.missing", { list: data.missing.join("；") })));
+      }
+      body.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), loadPortfolioAttribution);
+    });
+  }
+
   /** 渲染持仓页。 */
   function renderPortfolio() {
     var container = document.getElementById(VIEW_IDS.portfolio);
@@ -4108,13 +4326,14 @@
       buildPortfolioShell(container);
     }
     loadPortfolio();
+    loadPortfolioAttribution();
   }
 
   /** 拉取持仓与分析。
    * @returns {*} 处理结果
    */
   function loadPortfolio() {
-    var bodies = ["p01-body", "p03-body", "p04-body"].map(function (id) {
+    var bodies = ["p01-body", "p03-body", "p04-body", "p05-body"].map(function (id) {
       return document.getElementById(id);
     });
     bodies.forEach(function (body) {

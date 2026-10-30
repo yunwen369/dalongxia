@@ -1294,3 +1294,104 @@
   color: rgba(13, 16, 23, 0.75);
   font-variant-numeric: tabular-nums;
 }
+
+/* =============================================================
+ * 第七轮 M4：组合归因（行业暴露条 / 情景行）
+ * ============================================================= */
+.portfolio-expo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  margin-bottom: 6px;
+}
+
+.portfolio-expo-name {
+  width: 118px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-expo-bar {
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.portfolio-expo-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.portfolio-expo-val {
+  width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.portfolio-scen {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.portfolio-scen b {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 第七轮 M3：拥挤度分项条 */
+.crowd-parts {
+  margin-top: 10px;
+}
+
+.crowd-part {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  margin-bottom: 7px;
+}
+
+.crowd-part-name {
+  width: 148px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crowd-part-bar {
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.crowd-part-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.crowd-part-val {
+  width: 62px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.crowd-part-raw {
+  width: 76px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
