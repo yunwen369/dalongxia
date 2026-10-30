@@ -24,6 +24,8 @@ from backend.app import config
 from backend.app.core import cache
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
+from backend.app.datasource import fcf_health
+from backend.app.datasource import peers as peers_provider
 from backend.app.datasource import stock as stock_provider
 from backend.app.datasource import utils
 
@@ -509,3 +511,97 @@ def stock_financial_report(
     periods = data.get("periods") or []
     return _pack(data, result.get("source") or "", result.get("caliber") or "",
                  f"{periods[0]} 报告期" if periods else None, "定期报告", False)
+
+
+# =============================================================
+# 第七轮 M7 / M8：FCF 背离检查 + 同业对比（波次 4）
+# =============================================================
+
+
+@router.get("/fcf-health")
+def stock_fcf_health(
+    symbol: str = Query(..., description="6 位 A股代码"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """FCF 与利润背离检查（M7）：六项检查 + 结论。
+
+    对应八条原则第 8 条「高资本开支期 FCF 先行转负是利润恶化的领先信号」。
+    金融业（无存货/应收/资本开支科目）返回 `applicable=false` 并说明原因，不硬算。
+
+    Args:
+        symbol: 6 位 A股代码。
+        force: 是否绕过缓存。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`。
+    """
+    normalized = _normalize(symbol, "a")
+    if normalized is None:
+        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+    code = normalized[0]
+
+    def loader() -> Dict[str, Any]:
+        """三表取数并计算（季报数据，缓存 6 小时）。
+
+        Returns:
+            dict: FCF 检查结果。
+        """
+        return fcf_health.get_fcf_health(code)
+
+    try:
+        data = loader() if force else cache.get_or_load(
+            f"stock:fcf-health:{code}", config.TTL["financial"], loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("FCF 检查失败 %s：%s", code, type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"FCF 检查失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)
+
+
+@router.get("/peer-compare")
+def stock_peer_compare(
+    symbols: str = Query(..., description="逗号分隔的 2–5 个 A股代码"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """同业对比（M8）：最多 5 家 × 估值/成长/质量/杠杆/现金流 五类指标。
+
+    只给客观指标与"同组最优"，不做排名打分、不给买卖建议。
+    跨行业对比会给出警告（不同行业估值不可直接比）。
+
+    Args:
+        symbols: 逗号分隔的代码。
+        force: 是否绕过缓存。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`。
+    """
+    codes = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
+    if len(codes) < 2:
+        return _bad_request("请至少提供 2 个代码（symbols 用逗号分隔）")
+    if len(codes) > 5:
+        return _bad_request("最多对比 5 家公司")
+    normalized = []
+    for code in codes:
+        item = _normalize(code, "a")
+        if item is None:
+            return _bad_request(f"证券代码格式不正确：{code}")
+        normalized.append(item[0])
+
+    def loader() -> Dict[str, Any]:
+        """逐家取指标（财报 + 行情，缓存 6 小时）。
+
+        Returns:
+            dict: 对比结果。
+        """
+        return peers_provider.compare(normalized)
+
+    try:
+        data = loader() if force else cache.get_or_load(
+            f"stock:peer:{'-'.join(sorted(normalized))}", config.TTL["financial"], loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("同业对比失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"同业对比失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)

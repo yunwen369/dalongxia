@@ -1149,6 +1149,11 @@
     finCard.body.id = "st09-body";
     grid.appendChild(finCard.card);
 
+    // 第七轮 M7：FCF 与利润背离检查（对应八条原则第 8 条）
+    var fcfCard = buildCard("ST-11", t("stock.fcfCard"), "g-12", t("stock.fcfCardSub"));
+    fcfCard.body.id = "st11-body";
+    grid.appendChild(fcfCard.card);
+
     var holderCard = buildCard("ST-10", t("stock.holderCard"), "g-12", "");
     holderCard.body.id = "st10-body";
     grid.appendChild(holderCard.card);
@@ -1675,12 +1680,83 @@
     }
     syncStockTabs();
     loadStock();
+    loadStockFcf();
   }
 
   /** 拉取并渲染个股页（面板 + 概况 + 股东 + 财务摘要/趋势）。
    * @param {boolean} force 是否强制刷新（true 时跳过本地缓存）
    * @returns {*} 处理结果
    */
+  /** 渲染 FCF 与利润背离检查（第七轮 M7）。
+   *
+   * 六项检查带状态色（ok/warn/bad/unknown），金融业返回「不适用」并说明原因，
+   * 不把银行的存款波动当成经营现金流硬算。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadStockFcf() {
+    var body = document.getElementById("st11-body");
+    if (!body) {
+      return;
+    }
+    var symbol = state.stock.symbol;
+    if (!symbol) {
+      setEmpty(body, t("stock.fcfNeedSymbol"));
+      return;
+    }
+    setLoading(body);
+    api("/api/stock/fcf-health", { symbol: symbol }).then(function (data) {
+      body.innerHTML = "";
+      var card = document.getElementById("ST-11");
+      setBadges(card, "新浪三表", data.caliber);
+      if (data.applicable === false) {
+        body.appendChild(el("div", "note warn", data.reason || t("stock.fcfNotApplicable")));
+        body.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+        body.setAttribute("data-state", "empty");
+        return;
+      }
+      var counters = data.counters || {};
+      var head = el("div", "pg-kpis");
+      [
+        [t("stock.fcfPeriod"), data.period || "—", "flat", "vs " + (data.compare_period || "—")],
+        [t("stock.fcfBad"), String(counters.bad || 0), counters.bad ? "up" : "flat", ""],
+        [t("stock.fcfWarn"), String(counters.warn || 0), counters.warn ? "flat" : "flat", ""],
+        [t("stock.fcfVerdict"), data.verdict || "—", "flat", ""]
+      ].forEach(function (row) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", row[0]));
+        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+        if (row[3]) {
+          box.appendChild(el("div", "pg-kpi-x", row[3]));
+        }
+        head.appendChild(box);
+      });
+      body.appendChild(head);
+
+      var list = el("div", "fcf-checks");
+      (data.checks || []).forEach(function (item) {
+        var row = el("div", "fcf-row is-" + item.status);
+        row.appendChild(el("span", "fcf-label", item.label));
+        // 小数位按量级自适应：五粮液 OCF/净利 = 0.005，两位会显示成 0.00 像缺值
+        var digits = item.value === null || item.value === undefined
+          ? 2 : (Math.abs(item.value) < 0.1 ? 3 : 2);
+        row.appendChild(el("span", "fcf-value",
+          item.value === null || item.value === undefined
+            ? "—" : fmt(item.value, digits) + item.unit));
+        row.appendChild(el("span", "fcf-note", item.note || ""));
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+
+      (data.missing || []).forEach(function (note) {
+        body.appendChild(el("div", "pg-card-sub", note));
+      });
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), loadStockFcf);
+    });
+  }
+
   function loadStock(force) {
     var symbol = state.stock.symbol;
     var market = state.stock.market;

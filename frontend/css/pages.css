@@ -1410,3 +1410,45 @@
   background: color-mix(in srgb, var(--warn) 8%, transparent);
   color: var(--text-dim);
 }
+
+/* =============================================================
+ * 第七轮 M7：FCF 六项检查列表
+ * ============================================================= */
+.fcf-checks {
+  margin-top: 10px;
+}
+
+.fcf-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+
+.fcf-label {
+  width: 168px;
+  color: var(--text-dim);
+  flex: 0 0 168px;
+}
+
+.fcf-value {
+  width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 92px;
+}
+
+.fcf-note {
+  flex: 1;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.fcf-row.is-bad .fcf-value { color: var(--danger); }
+.fcf-row.is-bad .fcf-label { color: var(--text); }
+.fcf-row.is-warn .fcf-value { color: var(--warn); }
+.fcf-row.is-unknown .fcf-value,
+.fcf-row.is-unknown .fcf-note { color: var(--text-muted); opacity: 0.85; }
+.fcf-row.is-ok .fcf-value { color: var(--down); }
