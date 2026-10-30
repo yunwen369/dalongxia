@@ -26,6 +26,7 @@ from backend.app.datasource import utils
 from backend.app.core import cache, user_prefs
 from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
 from backend.app.datasource import fund as fund_provider
+from backend.app.datasource import fund_combo
 
 logger = logging.getLogger(__name__)
 
@@ -370,3 +371,95 @@ def fund_position(code: str = Query(..., description="6 位基金代码")) -> Di
         data={"code": symbol, "items": [], "disabled": True,
               "reason": "蛋卷 /djapi/fund/position 需登录（实测 rc=300001）"},
     )
+
+
+# =============================================================
+# 第七轮 M5：基金组合（筛选与诊断，不荐基）
+# =============================================================
+
+
+@router.get("/combo/evaluate")
+def fund_combo_evaluate(
+    codes: str = Query(..., description="逗号分隔的基金代码，最多 30 只"),
+    risk: str = Query("balanced", description="conservative / balanced / aggressive"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """批量评估基金：六维打分 + 相关性 + 约束配权。
+
+    **合规边界**：只做筛选与结构诊断，不输出预期收益、不给买入评级。
+
+    Args:
+        codes: 逗号分隔的基金代码。
+        risk: 风险档位。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {...}, "error": null}
+    """
+    code_list = [item.strip() for item in str(codes or "").replace("　", " ").split(",") if item.strip()]
+    if not code_list:
+        return api_error(ErrorCode.INVALID_PARAM, "请提供至少 1 只基金代码（codes 用逗号分隔）")
+    profile = str(risk or "balanced").strip()
+    if profile not in ("conservative", "balanced", "aggressive"):
+        return api_error(ErrorCode.INVALID_PARAM, "risk 仅支持 conservative / balanced / aggressive")
+    cache_key = f"fund:combo:evaluate:{profile}:{','.join(sorted(code_list))}"
+
+    def loader() -> Dict[str, Any]:
+        """计算打分与配权（单只基金要拉净值 + 排名，30 只约 30–60 秒，故缓存 6 小时）。
+
+        Returns:
+            Dict[str, Any]: 评估结果。
+        """
+        return fund_combo.evaluate(code_list, profile)
+
+    try:
+        data = loader() if force else cache.get_or_load(cache_key, 21600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001 - 上游异常转可读错误
+        logger.warning("基金组合评估失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"评估失败（{type(exc).__name__}），请稍后重试")
+    return ok({
+        **data,
+        "as_of": utils.now_text(utils.bj_now()),
+        "is_realtime": False,
+    })
+
+
+@router.get("/combo/diagnose")
+def fund_combo_diagnose(
+    risk: str = Query("balanced", description="conservative / balanced / aggressive"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """诊断台账里的基金持仓：目标权重 vs 实际权重、相关性、偏离与再平衡提示。
+
+    实际权重读 `data/portfolio.json`（唯一台账），不另存数据。
+
+    Args:
+        risk: 风险档位。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {...}, "error": null}
+    """
+    profile = str(risk or "balanced").strip()
+    if profile not in ("conservative", "balanced", "aggressive"):
+        return api_error(ErrorCode.INVALID_PARAM, "risk 仅支持 conservative / balanced / aggressive")
+    cache_key = f"fund:combo:diagnose:{profile}"
+
+    def loader() -> Dict[str, Any]:
+        """诊断（依赖持仓变动，缓存 10 分钟）。
+
+        Returns:
+            Dict[str, Any]: 诊断结果。
+        """
+        return fund_combo.diagnose(profile)
+
+    try:
+        data = loader() if force else cache.get_or_load(cache_key, 600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("基金组合诊断失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"诊断失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)

@@ -29,7 +29,9 @@
     settings: t("page.settings"),
     // 第七轮（M1/M2）
     macro: t("page.macro"),
-    valuation: t("page.valuation")
+    valuation: t("page.valuation"),
+    crowding: t("page.crowding"),
+    "fund-combo": t("page.fundCombo")
   };
 
   let toastTimer = null;
@@ -262,6 +264,8 @@
     // 第七轮：宏观与估值分位同属「市场」组
     macro: "market",
     valuation: "market",
+    crowding: "market",
+    "fund-combo": "portfolio",
     lhb: "money",
     portfolio: "portfolio",
     fund: "portfolio",
@@ -284,6 +288,8 @@
     stock: [["nav.market", "sectors"], ["nav.stock", null]],
     charting: [["nav.market", "sectors"], ["nav.charting", null]],
     "sector-val": [["nav.market", "sectors"], ["nav.sectorVal", null]],
+    crowding: [["nav.market", "sectors"], ["nav.crowding", null]],
+    "fund-combo": [["nav.portfolioGroup", "portfolio"], ["nav.fundCombo", null]],
     macro: [["nav.market", "sectors"], ["nav.macro", null]],
     valuation: [["nav.market", "sectors"], ["nav.valuation", null]],
     lhb: [["nav.money", "lhb"], ["nav.lhb", null]],

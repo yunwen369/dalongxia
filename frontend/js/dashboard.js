@@ -2919,9 +2919,14 @@
       }
       return 0;
     });
+    // 只有一个分组且该分组为空时，不显示分组标题：
+    // 单个仪表板场景下「未分组」标题纯属噪音（第七轮目录重排时发现）
+    var flatMode = groups.length === 1 && !groups[0];
     groups.forEach(function (group) {
-      var heading = el("li", "sidebar-heading", group || t("sidebar.noGroup"));
-      host.appendChild(heading);
+      if (!flatMode) {
+        var heading = el("li", "sidebar-heading", group || t("sidebar.noGroup"));
+        host.appendChild(heading);
+      }
       state.dashboards.forEach(function (dash) {
         if ((dash.group || "") !== group) {
           return;

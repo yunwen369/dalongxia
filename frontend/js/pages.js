@@ -63,7 +63,9 @@
     settings: "page-settings",
     // 第七轮（M1/M2）：宏观与周期、估值分位（均挂在「市场」下的二级页）
     macro: "page-macro",
-    valuation: "page-valuation"
+    valuation: "page-valuation",
+    crowding: "page-crowding",
+    "fund-combo": "page-fund-combo"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -77,7 +79,9 @@
     // 图表分析页状态：标的选择 + 周期/复权/指标开关 + K线/分时 Tab + 画线开关
     charting: { symbol: "688012", market: "a", period: "日k", adjust: "qfq", tab: "kline", draw: false },
     // 设置页状态：AI 配置表单（api_key 留空表示保留原值，与后端契约一致）
-    settings: { saving: false }
+    settings: { saving: false },
+    // 第七轮 M5：基金组合页状态（Tab / 上次输入的代码 / 风险档位）
+    fundCombo: { tab: "diagnose", codes: "", risk: "balanced" }
   };
 
   // =============================================================
@@ -525,6 +529,10 @@
       renderSettings();
     } else if (name === "macro") {
       renderMacro();
+    } else if (name === "fund-combo") {
+      renderFundCombo();
+    } else if (name === "crowding") {
+      renderCrowding();
     } else if (name === "valuation") {
       renderValuation();
     }
@@ -640,10 +648,6 @@
     flow.body.id = "s07-body";
     grid.appendChild(flow.card);
 
-    // S-08 板块拥挤度（第七轮 M3）：单板块四维打分，>60 提示 / >80 复核
-    var crowd = buildCard("S-08", t("sectors.crowd.title"), "g-12", t("sectors.crowd.sub"));
-    crowd.body.id = "s08-body";
-    grid.appendChild(crowd.card);
     container.appendChild(grid);
 
     marketTabs.addEventListener("click", function (event) {
@@ -710,7 +714,6 @@
     }
     syncSectorTabs();
     loadSectors();
-    loadSectorCrowding();
   }
 
   /** 拉取并渲染板块页全部区块。
@@ -1275,15 +1278,295 @@
 
   var stockCache = { key: "", panel: null };
 
-  /** 渲染板块拥挤度（第七轮 M3）：输入板块名 → 四维分位加权打分。
+  /** 渲染基金组合页（第七轮 M5）：诊断（读台账）与评估（输入代码）两个 Tab。
+   *
+   * **合规边界**：只做筛选与结构诊断，不输出预期收益、不给买入评级；
+   * 页面固定展示「非投资建议」徽章，禁用「推荐/最优」措辞。
+   *
+   * @returns {void} 无返回值
+   */
+  function renderFundCombo() {
+    var page = document.getElementById(VIEW_IDS["fund-combo"]);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var tab = state.fundCombo && state.fundCombo.tab ? state.fundCombo.tab : "diagnose";
+    var bar = el("div", "page-toolbar");
+    [["diagnose", t("fundCombo.tab.diagnose")], ["evaluate", t("fundCombo.tab.evaluate")]].forEach(function (pair) {
+      var btn = el("button", "pg-tab" + (tab === pair[0] ? " active" : ""), pair[1]);
+      btn.type = "button";
+      btn.addEventListener("click", function () {
+        state.fundCombo = state.fundCombo || {};
+        state.fundCombo.tab = pair[0];
+        renderFundCombo();
+      });
+      bar.appendChild(btn);
+    });
+    bar.appendChild(el("span", "pg-spacer"));
+    bar.appendChild(el("span", "badge legal", t("fundCombo.disclaimerBadge")));
+    page.appendChild(bar);
+
+    var host = el("div", "");
+    page.appendChild(host);
+    if (tab === "evaluate") {
+      paintFundComboEvaluate(host);
+    } else {
+      paintFundComboDiagnose(host);
+    }
+    page.setAttribute("data-state", "default");
+  }
+
+  /** 诊断 Tab：读台账里的基金持仓，给实际 vs 目标权重、相关性、偏离。
+   *
+   * @param {HTMLElement} host 容器
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintFundComboDiagnose(host) {
+    host.innerHTML = "";
+    host.appendChild(el("div", "pg-state", t("state.loading")));
+    api("/api/fund/combo/diagnose", {}).then(function (data) {
+      host.innerHTML = "";
+      var holdings = data.holdings || [];
+      if (!holdings.length) {
+        host.appendChild(el("div", "pg-state", (data.missing || []).join("；") || t("fundCombo.empty")));
+        host.setAttribute("data-state", "empty");
+        return;
+      }
+
+      // KPI：只放客观量，不放"预期收益"
+      var kpis = el("div", "pg-kpis");
+      var totalActual = holdings.reduce(function (sum, row) { return sum + (row.actual_weight || 0); }, 0);
+      var avgScore = holdings.reduce(function (sum, row) { return sum + (row.score || 0); }, 0) / holdings.length;
+      [
+        [t("fundCombo.kpi.count"), String(holdings.length), "flat", t("fundCombo.kpi.countTag")],
+        [t("fundCombo.kpi.actual"), fmt(totalActual, 2) + "%", "flat", t("fundCombo.kpi.actualTag")],
+        [t("fundCombo.kpi.avgScore"), fmt(avgScore, 1), "flat", t("fundCombo.kpi.scoreTag")],
+        [t("fundCombo.kpi.deviation"), String((data.deviation || []).length), "flat", t("fundCombo.kpi.devTag")]
+      ].forEach(function (row) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", row[0]));
+        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+        if (row[3]) {
+          box.appendChild(el("div", "pg-kpi-x", row[3]));
+        }
+        kpis.appendChild(box);
+      });
+      host.appendChild(kpis);
+
+      // 权重对比
+      var targetMap = {};
+      (data.target || []).forEach(function (row) { targetMap[row.code] = row.weight; });
+      var weightCard = el("div", "pg-card");
+      weightCard.appendChild(el("div", "pg-card-title", t("fundCombo.card.weight")));
+      holdings.forEach(function (row) {
+        var line = el("div", "wt");
+        line.appendChild(el("span", "n", row.code + (row.name ? " " + row.name : "")));
+        var barBox = el("span", "b");
+        var bar = el("div", "bar");
+        var fill = el("i", "");
+        var width = Math.min(100, row.actual_weight || 0);
+        fill.style.width = width + "%";
+        if ((row.actual_weight || 0) > (data.constraints.single_cap * 100)) {
+          fill.classList.add("over");
+        }
+        bar.appendChild(fill);
+        barBox.appendChild(bar);
+        line.appendChild(barBox);
+        var target = targetMap[row.code];
+        // 权重不是涨跌幅，不能用 fmtPct（会给正数加「+」号）
+        line.appendChild(el("span", "v",
+          fmt(row.actual_weight, 2) + "%" + (target !== undefined ? " / " + fmt(target, 2) + "%" : "")));
+        var gap = target !== undefined ? (row.actual_weight || 0) - target : null;
+        var gapNode = el("span", "d" + (gap === null ? "" : (gap > 0 ? " up" : gap < 0 ? " down" : "")),
+          gap === null ? "—" : (gap > 0 ? "+" : "") + fmt(gap, 1) + "pt");
+        line.appendChild(gapNode);
+        weightCard.appendChild(line);
+      });
+      weightCard.appendChild(el("div", "pg-card-sub",
+        t("fundCombo.weightNote", { single: fmt(data.constraints.single_cap * 100, 0), cash: fmt(data.constraints.cash_floor * 100, 0) })));
+      host.appendChild(weightCard);
+
+      // 相关性
+      var corr = (data.correlation || []).filter(function (row) { return row.value !== null; });
+      if (corr.length) {
+        var corrCard = el("div", "pg-card");
+        corrCard.appendChild(el("div", "pg-card-title", t("fundCombo.card.corr")));
+        corr.forEach(function (row) {
+          var line = el("div", "portfolio-scen");
+          line.appendChild(el("span", "", row.left + " ↔ " + row.right));
+          line.appendChild(el("b", row.value > 0.90 ? "down" : "", fmt(row.value, 3)
+            + (row.value > 0.90 ? t("fundCombo.corrHigh") : "")));
+          corrCard.appendChild(line);
+        });
+        host.appendChild(corrCard);
+      }
+
+      // 偏离提示
+      var dev = data.deviation || [];
+      if (dev.length) {
+        var devCard = el("div", "pg-card");
+        devCard.appendChild(el("div", "pg-card-title", t("fundCombo.card.dev")));
+        dev.forEach(function (row) {
+          var line = el("div", "alert-row");
+          line.appendChild(el("i", "dot-w"));
+          line.appendChild(el("span", "",
+            row.code + "：" + t("fundCombo.devLine", { actual: fmt(row.actual, 2), target: fmt(row.target, 2), gap: fmt(row.gap, 1) })));
+          devCard.appendChild(line);
+        });
+        host.appendChild(devCard);
+      }
+
+      if (data.cash_note) {
+        host.appendChild(el("div", "note warn", data.cash_note));
+      }
+      (data.missing || []).forEach(function (note) {
+        host.appendChild(el("div", "pg-card-sub", note));
+      });
+      host.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+      host.appendChild(el("div", "note legal", data.disclaimer || ""));
+      host.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      host.innerHTML = "";
+      host.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+      host.setAttribute("data-state", "error");
+    });
+  }
+
+  /** 评估 Tab：输入基金代码 → 六维打分 + 相关性 + 目标权重。
+   *
+   * @param {HTMLElement} host 容器
+   * @returns {void} 无返回值
+   */
+  function paintFundComboEvaluate(host) {
+    host.innerHTML = "";
+    var bar = el("div", "page-toolbar");
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "wl-addbar-input";
+    input.id = "fc-codes";
+    input.placeholder = t("fundCombo.evalPlaceholder");
+    input.value = (state.fundCombo && state.fundCombo.codes) || "";
+    bar.appendChild(input);
+    var select = document.createElement("select");
+    select.className = "fs-select";
+    select.id = "fc-risk";
+    [["balanced", t("fundCombo.risk.balanced")], ["conservative", t("fundCombo.risk.conservative")], ["aggressive", t("fundCombo.risk.aggressive")]].forEach(function (pair) {
+      var option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      select.appendChild(option);
+    });
+    select.value = (state.fundCombo && state.fundCombo.risk) || "balanced";
+    bar.appendChild(select);
+    var btn = el("button", "pg-btn primary", t("fundCombo.evalRun"));
+    btn.type = "button";
+    bar.appendChild(btn);
+    host.appendChild(bar);
+
+    var result = el("div", "");
+    host.appendChild(result);
+
+    /** 执行评估。
+     * @returns {void} 无返回值
+     */
+    function run() {
+      var codes = (input.value || "").trim();
+      if (!codes) {
+        toast(t("fundCombo.needCodes"));
+        return;
+      }
+      state.fundCombo = state.fundCombo || {};
+      state.fundCombo.codes = codes;
+      state.fundCombo.risk = select.value;
+      result.innerHTML = "";
+      result.appendChild(el("div", "pg-state", t("fundCombo.evaling")));
+      api("/api/fund/combo/evaluate", { codes: codes, risk: select.value }).then(function (data) {
+        result.innerHTML = "";
+        var weightMap = {};
+        (data.weights || []).forEach(function (row) { weightMap[row.code] = row; });
+        renderTable(result, [
+          { title: t("fundCombo.col.code"), cls: "l",
+            render: function (row) { return el("b", "", row.code); } },
+          { title: t("fundCombo.col.score"), num: true,
+            render: function (row) { return row.score === null ? "—" : fmt(row.score, 1); } },
+          { title: t("fundCombo.col.annual"), num: true,
+            render: function (row) {
+              var value = row.stats.annual_return;
+              return el("span", pctClass(value), fmtPct(value));
+            } },
+          { title: t("fundCombo.col.dd"), num: true,
+            render: function (row) { return el("span", "down", fmtPct(row.stats.max_drawdown)); } },
+          { title: t("fundCombo.col.sharpe"), num: true,
+            render: function (row) { return row.stats.sharpe === null ? "—" : fmt(row.stats.sharpe, 2); } },
+          { title: t("fundCombo.col.rank"), num: true,
+            render: function (row) { return row.rank_pct === null ? "—" : fmt(row.rank_pct, 1) + "%"; } },
+          { title: t("fundCombo.col.target"), num: true,
+            render: function (row) {
+              var hit = weightMap[row.code];
+              if (!hit) {
+                return "—";
+              }
+              var node = el("span", "", fmt(hit.weight, 2) + "%");
+              if (hit.capped_by) {
+                node.title = hit.capped_by;
+              }
+              return node;
+            } }
+        ], data.items || [], null);
+
+        (data.correlation || []).forEach(function (row) {
+          if (row.value !== null && row.value > 0.90) {
+            result.appendChild(el("div", "pg-card-sub",
+              t("fundCombo.highCorrLine", { left: row.left, right: row.right, value: fmt(row.value, 3) })));
+          }
+        });
+        result.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+        (data.missing || []).forEach(function (note) {
+          result.appendChild(el("div", "pg-card-sub", note));
+        });
+        result.appendChild(el("div", "note legal", data.disclaimer || ""));
+      }).catch(function (error) {
+        result.innerHTML = "";
+        result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+      });
+    }
+
+    btn.addEventListener("click", run);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        run();
+      }
+    });
+  }
+
+  /** 渲染板块拥挤度独立页（第七轮 M3 目录重排后从板块页提升）。
    *
    * 阈值按用户口径：>60 提示、>80 建议复核。只陈述交易结构位置，不给买卖指令。
    * 缺失维度在接口 missing 里逐条说明，界面原样呈现（不隐藏降级事实）。
    *
    * @returns {void} 无返回值
    */
-  function loadSectorCrowding() {
-    var body = document.getElementById("s08-body");
+  function renderCrowding() {
+    var page = document.getElementById(VIEW_IDS.crowding);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var grid = el("div", "pg-grid");
+    var card = buildCard("M3-01", t("sectors.crowd.title"), "g-12", t("sectors.crowd.sub"));
+    card.body.id = "m301-body";
+    grid.appendChild(card.card);
+    page.appendChild(grid);
+    paintCrowding();
+  }
+
+  /** 渲染拥挤度查询区（输入 + 结果 + 缺失说明）。
+   *
+   * @returns {void} 无返回值
+   */
+  function paintCrowding() {
+    var body = document.getElementById("m301-body");
     if (!body) {
       return;
     }
@@ -1319,7 +1602,7 @@
       result.innerHTML = "";
       result.appendChild(el("div", "pg-state", t("state.loading")));
       api("/api/sector/crowding", { board: board }).then(function (data) {
-        var card = document.getElementById("S-08");
+        var card = document.getElementById("M3-01");
         setBadges(card, "同花顺行业日线", data.caliber);
         result.innerHTML = "";
         var head = el("div", "pg-kpis");
@@ -1350,9 +1633,11 @@
         (data.missing || []).forEach(function (note) {
           result.appendChild(el("div", "pg-card-sub", note));
         });
+        body.setAttribute("data-state", "default");
       }).catch(function (error) {
         result.innerHTML = "";
         result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+        body.setAttribute("data-state", "error");
       });
     }
 

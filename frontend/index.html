@@ -82,6 +82,23 @@
           <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
         </ul>
         <div class="sidebar-divider"></div>
+        <!-- R6-13 / F6-13：侧栏按一级分组呈现二级入口，组名与顶栏一一对应 -->
+        <!-- 第七轮目录重排：按「工作流阶段」三级归置，一组一件事，组内不再混装 -->
+        <div class="sidebar-heading" data-i18n="nav.marketTrend">市场 · 大势</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectors">板块行情</li>
+          <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macro">宏观与周期</li>
+          <li class="sidebar-item" data-action="view" data-view="valuation" data-view-target="valuation" data-i18n="nav.valuation">估值分位</li>
+          <li class="sidebar-item" data-action="view" data-view="crowding" data-view-target="crowding" data-i18n="nav.crowding">板块拥挤度</li>
+        </ul>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-heading" data-i18n="nav.marketStock">市场 · 个股</div>
+        <ul class="sidebar-list">
+          <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股详情</li>
+          <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表分析</li>
+          <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">板块估值</li>
+        </ul>
+        <div class="sidebar-divider"></div>
         <div class="sidebar-heading" data-i18n="nav.watchlist">自选股</div>
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">我的自选</li>
@@ -89,25 +106,10 @@
         <!-- W-03：自选分组树（市场分组 + 数量徽章），由 pages.js 按 /api/watchlist 计数动态渲染 -->
         <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
         <div class="sidebar-divider"></div>
-        <!-- R6-13 / F6-13：侧栏按一级分组呈现二级入口，组名与顶栏一一对应 -->
         <div class="sidebar-heading" data-i18n="nav.newsGroup">资讯</div>
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">资讯流</li>
           <li class="sidebar-item" id="side-financial-search" data-action="fs" data-i18n="fs.entry.title">财报 / 公告搜索</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.market">市场</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectors">板块</li>
-          <!-- R6-13：三级目录以只读层级标签呈现（不做「点了没反应」的死链） -->
-          <span class="sidebar-sub-label" data-i18n="sidebar.sub.industryConcept">行业 / 概念</span>
-          <!-- 第七轮 M1/M2：宏观与估值分位（市场下的二级页，用户 2026-10-29 裁决） -->
-          <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macro">宏观与周期</li>
-          <li class="sidebar-item" data-action="view" data-view="valuation" data-view-target="valuation" data-i18n="nav.valuation">估值分位</li>
-          <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股</li>
-          <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表</li>
-          <span class="sidebar-sub-label" data-i18n="sidebar.sub.klineMinute">K 线 / 分时 / 划线</span>
-          <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">估值</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading" data-i18n="nav.money">资金</div>
@@ -119,11 +121,13 @@
         <ul class="sidebar-list">
           <li class="sidebar-item" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.portfolio">持仓</li>
           <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fund">场外基金</li>
+          <!-- 第七轮 M5：基金组合（诊断 + 评估），合规：只做结构诊断不荐基 -->
+          <li class="sidebar-item" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading" data-i18n="nav.yjb">养基宝</div>
         <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjb">账户与持仓</li>
+          <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">账户与持仓</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading" data-i18n="nav.system">系统</div>
@@ -276,6 +280,10 @@
         <!-- 第七轮 M1/M2：宏观与周期、估值分位 -->
         <section class="page-view" id="page-macro" hidden aria-label="宏观与周期"></section>
         <section class="page-view" id="page-valuation" hidden aria-label="估值分位"></section>
+        <!-- 第七轮：板块拥挤度（从板块页 S-08 卡提升为独立页） -->
+        <section class="page-view" id="page-crowding" hidden aria-label="板块拥挤度"></section>
+        <!-- 第七轮 M5：基金组合（诊断 / 候选池评估） -->
+        <section class="page-view" id="page-fund-combo" hidden aria-label="基金组合"></section>
         <!-- #/charting 图表分析（阶段 8：K线/周期/复权/指标/分时/画线） -->
         <section class="page-view" id="page-charting" hidden aria-label="图表分析"></section>
         <!-- #/settings 设置（阶段 8：AI 配置/主题/缓存引导/关于） -->

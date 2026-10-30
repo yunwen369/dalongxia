@@ -1395,3 +1395,18 @@
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* =============================================================
+ * 第七轮：合规徽章（基金组合等「不构成投资建议」场景）
+ * ============================================================= */
+.badge.legal {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.note.legal {
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--text-dim);
+}
