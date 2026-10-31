@@ -46,6 +46,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa
 from backend.app.core.errors import ErrorCode, api_error  # noqa: E402
 from backend.app.routers import (  # noqa: E402
     ai,
+    alerts,
     connectors,
     dashboards,
     fund,
@@ -54,6 +55,7 @@ from backend.app.routers import (  # noqa: E402
     moneyflow,
     news,
     portfolio,
+    screener,
     sector,
     sentiment,
     stock,
@@ -268,6 +270,9 @@ def create_app() -> FastAPI:
     # 第七轮：宏观指标与周期象限（M1）+ 估值分位与 ERP（M2）
     application.include_router(macro.router)
     application.include_router(valuation.router)
+    # 第七轮波次 5：多因子筛选器（M9，快照+手动刷新）+ 提醒与预警（M6，仅应用内）
+    application.include_router(screener.router)
+    application.include_router(alerts.router)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

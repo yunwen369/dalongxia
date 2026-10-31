@@ -37,6 +37,8 @@
     portfolio: t("nav.portfolio"),
     fund: t("nav.fund"),
     "fund-combo": t("nav.fundCombo"),
+    screener: t("nav.screener"),
+    alerts: t("nav.alerts"),
     yjb: t("nav.yjbHoldings"),
     connectors: t("nav.connectors"),
     settings: t("nav.settings")
@@ -273,11 +275,14 @@
     macro: "market",
     valuation: "market",
     crowding: "market",
+    // 第七轮 M9：筛选器同属「市场」组
+    screener: "market",
     "fund-combo": "portfolio",
     lhb: "money",
     portfolio: "portfolio",
     fund: "portfolio",
     yjb: "yjb",
+    alerts: "system",
     connectors: "system",
     settings: "system"
   };
@@ -300,6 +305,9 @@
     "fund-combo": [["nav.portfolioGroup", "portfolio"], ["nav.fundCombo", null]],
     macro: [["nav.market", "sectors"], ["nav.macro", null]],
     valuation: [["nav.market", "sectors"], ["nav.valuation", null]],
+    // 第七轮 M9/M6：筛选器挂市场组；提醒中心挂系统组（铃铛跳入）
+    screener: [["nav.market", "sectors"], ["nav.screener", null]],
+    alerts: [["nav.system", "settings"], ["nav.alerts", null]],
     lhb: [["nav.money", "lhb"], ["nav.lhb", null]],
     portfolio: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]],
     fund: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]],
@@ -558,6 +566,14 @@
     const refreshButton = document.getElementById("refresh-button");
     if (refreshButton) {
       refreshButton.addEventListener("click", refreshCurrentView);
+    }
+
+    // 第七轮 M6：顶栏铃铛 → 跳转提醒中心（事件列表在 #/alerts 页内渲染）
+    const bell = document.getElementById("alerts-bell");
+    if (bell) {
+      bell.addEventListener("click", function () {
+        window.location.hash = "#/alerts";
+      });
     }
 
     const search = document.getElementById("global-search");

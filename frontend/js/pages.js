@@ -65,7 +65,10 @@
     macro: "page-macro",
     valuation: "page-valuation",
     crowding: "page-crowding",
-    "fund-combo": "page-fund-combo"
+    "fund-combo": "page-fund-combo",
+    // 第七轮 M9/M6：筛选器与提醒中心
+    screener: "page-screener",
+    alerts: "page-alerts"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -81,7 +84,11 @@
     // 设置页状态：AI 配置表单（api_key 留空表示保留原值，与后端契约一致）
     settings: { saving: false },
     // 第七轮 M5：基金组合页状态（Tab / 上次输入的代码 / 风险档位）
-    fundCombo: { tab: "diagnose", codes: "", risk: "balanced" }
+    fundCombo: { tab: "diagnose", codes: "", risk: "balanced" },
+    // 第七轮 M9：筛选器页状态（条件行由 DOM 持有，这里存快照与结果缓存）
+    screener: { conditions: [], lastResult: null },
+    // 第七轮 M6：提醒中心页状态（规则表单草稿）
+    alerts: { draftType: "price", unreadOnly: false }
   };
 
   // =============================================================
@@ -523,6 +530,10 @@
       renderCrowding();
     } else if (name === "valuation") {
       renderValuation();
+    } else if (name === "screener") {
+      renderScreener();
+    } else if (name === "alerts") {
+      renderAlerts();
     }
   }
 
@@ -8242,6 +8253,743 @@
 
   // 供工具栏「刷新当前视图」调用：按当前 hash 重新走一遍路由（P2-03）
   window.Pages = { reload: route };
+
+  // =============================================================
+  // 七、#/screener 全市场筛选器（第七轮 M9）
+  // 契约：GET /api/screener/status（快照元信息+构建进度）
+  //       POST /api/screener/run（条件查询，本地快照 <1s）
+  //       POST /api/screener/refresh（异步构建，进度轮询 status）
+  // =============================================================
+  // 因子下拉数据（与后端 FACTOR_META 同源；label/unit 手工同步）
+  var SCREENER_FACTORS = [
+    ["pe", "PE-TTM", "倍", "quote"],
+    ["pb", "PB-MRQ", "倍", "quote"],
+    ["ps", "PS-TTM", "倍", "quote"],
+    ["pcf", "经营现金流市值比", "倍", "quote"],
+    ["chg", "涨跌幅", "%", "quote"],
+    ["mktcap", "总市值", "亿元", "quote"],
+    ["roe_min", "ROE（近3年年报均≥）", "%", "finance"],
+    ["gross", "销售毛利率", "%", "finance"],
+    ["rev_yoy", "营收同比", "%", "finance"],
+    ["np_yoy", "净利同比", "%", "finance"],
+    ["debt_ratio", "资产负债率", "%", "finance"],
+    ["ocf_yi", "经营现金流净额", "亿元", "finance"]
+  ];
+  // 结果表列（后端 items 字段 → 列定义；红涨绿跌走 pctClass）
+  var SCREENER_COLS = [
+    { key: "code", title: "代码", render: function (row) {
+        var box = el("span", "");
+        box.appendChild(el("b", "", row.code));
+        box.appendChild(document.createTextNode(" " + (row.name || "")));
+        return box;
+      } },
+    { key: "board", title: "板块" },
+    { key: "close", title: "现价", num: true, render: function (row) { return fmt(row.close, 2); } },
+    { key: "chg", title: "涨跌幅", num: true, render: function (row) { return el("span", pctClass(row.chg), fmtPct(row.chg)); } },
+    { key: "pe", title: "PE", num: true, render: function (row) { return fmt(row.pe, 2); } },
+    { key: "pb", title: "PB", num: true, render: function (row) { return fmt(row.pb, 2); } },
+    { key: "mktcap", title: "总市值(亿)", num: true, render: function (row) { return fmt(row.mktcap, 0); } },
+    { key: "roe3y_min", title: "ROE3年最弱", num: true, render: function (row) { return fmt(row.roe3y_min, 2); } },
+    { key: "gross", title: "毛利率", num: true, render: function (row) { return fmt(row.gross, 2); } },
+    { key: "rev_yoy", title: "营收同比", num: true, render: function (row) { return fmt(row.rev_yoy, 2); } },
+    { key: "np_yoy", title: "净利同比", num: true, render: function (row) { return fmt(row.np_yoy, 2); } },
+    { key: "debt_ratio", title: "资产负债率", num: true, render: function (row) { return fmt(row.debt_ratio, 2); } },
+    { key: "ocf_yi", title: "经营现金流(亿)", num: true, render: function (row) { return fmt(row.ocf_yi, 2); } },
+    { key: "exempt", title: "豁免", render: function (row) {
+        return (row.exempt && row.exempt.length) ? t("scr.exemptYes") : "";
+      } }
+  ];
+
+  /** 渲染筛选器页：快照状态卡 + 条件构建器 + 结果表。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function renderScreener() {
+    var page = document.getElementById(VIEW_IDS.screener);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var grid = el("div", "pg-grid");
+
+    // M9-01 快照状态卡
+    var snapCard = buildCard("M9-01", t("scr.snapTitle"), "g-5", t("scr.snapSub"));
+    snapCard.body.id = "m901-body";
+    grid.appendChild(snapCard.card);
+
+    // M9-02 条件构建器
+    var condCard = buildCard("M9-02", t("scr.condTitle"), "g-7", t("scr.condSub"));
+    condCard.body.id = "m902-body";
+    grid.appendChild(condCard.card);
+
+    page.appendChild(grid);
+
+    // M9-03 结果表（全宽卡，栅格外）
+    var resultCard = buildCard("M9-03", t("scr.resultTitle"), "", t("scr.resultSub"));
+    resultCard.card.classList.add("wide");
+    resultCard.body.id = "m903-body";
+    page.appendChild(resultCard.card);
+
+    paintScreenerStatus();
+    paintScreenerConditions();
+    paintScreenerResult(state.screener.lastResult); // 有缓存直接回填
+    page.setAttribute("data-state", "default");
+  }
+
+  /** 快照状态卡：ready/版本/覆盖数/构建进度/自动构建窗口。 */
+  function paintScreenerStatus() {
+    var body = document.getElementById("m901-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    body.appendChild(el("div", "pg-state", t("state.loading")));
+    api("/api/screener/status", {}).then(function (data) {
+      body.innerHTML = "";
+      var card = document.getElementById("M9-01");
+      if (card) {
+        setBadges(card, t("scr.snapSource"), data.caliber || "");
+      }
+      var kpis = el("div", "pg-kpis");
+      var main = el("div", "pg-kpi");
+      main.appendChild(el("div", "pg-kpi-k", t("scr.snapState")));
+      var readyText = data.ready ? t("scr.snapReady") : (data.building ? t("scr.snapBuilding") : t("scr.snapNotReady"));
+      main.appendChild(el("div", "pg-kpi-v " + (data.ready ? "down" : "flat"), readyText));
+      main.appendChild(el("div", "pg-kpi-x", (data.building ? t("scr.buildingHint") : t("scr.autoHint"))));
+      kpis.appendChild(main);
+      var rows = el("div", "pg-kpi");
+      rows.appendChild(el("div", "pg-kpi-k", t("scr.snapRows")));
+      rows.appendChild(el("div", "pg-kpi-v flat", data.ready ? fmt(data.row_count, 0) : "—"));
+      rows.appendChild(el("div", "pg-kpi-x", data.trade_date ? (t("scr.tradeDate") + data.trade_date) : ""));
+      kpis.appendChild(rows);
+      body.appendChild(kpis);
+      if (data.version) {
+        body.appendChild(el("div", "pg-card-sub", t("scr.versionLabel") + data.version
+          + (data.built_at ? " · " + data.built_at : "")));
+      }
+      if (data.last_error) {
+        body.appendChild(el("div", "pg-card-sub", t("scr.lastError") + data.last_error));
+      }
+
+      var btnRow = el("div", "page-toolbar");
+      var btn = el("button", "pg-btn primary", data.building ? t("scr.buildingBtn") : t("scr.refreshBtn"));
+      btn.type = "button";
+      btn.disabled = !!data.building;
+      btn.addEventListener("click", function () {
+        api("/api/screener/refresh", {}).then(function () {
+          toast(t("scr.startedToast"));
+          paintScreenerStatus(); // 回到 status 轮询进度
+        }).catch(function (error) {
+          toast(error.message || t("state.errorHint"));
+        });
+      });
+      btnRow.appendChild(btn);
+      btnRow.appendChild(el("span", "pg-card-sub", t("scr.refreshNote")));
+      body.appendChild(btnRow);
+
+      // 构建中：8s 轮询进度直到完成
+      if (data.building) {
+        window.setTimeout(function () {
+          if (document.getElementById("page-screener") && !document.getElementById("page-screener").hidden) {
+            paintScreenerStatus();
+          }
+        }, 8000);
+      }
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintScreenerStatus);
+      body.setAttribute("data-state", "error");
+    });
+  }
+
+  /** 条件构建器：最多 8 行 [因子 ▾][≥/≤ ▾][阈值][×]，AND 连接；「执行筛选」走 run。 */
+  function paintScreenerConditions() {
+    var body = document.getElementById("m902-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    var list = el("div", "scr-cond-list");
+    body.appendChild(list);
+    var saved = (state.screener.conditions || []).slice();
+
+    /** 生成一行条件编辑器。
+     * @param {Object} preset 预填条件 {factor, op, value}
+     * @returns {void} 无返回值
+     */
+    function addRow(preset) {
+      if (list.children.length >= 8) {
+        toast(t("scr.maxConds"));
+        return;
+      }
+      var row = el("div", "scr-cond");
+      var factor = document.createElement("select");
+      factor.className = "scr-cond-factor";
+      SCREENER_FACTORS.forEach(function (item) {
+        var option = document.createElement("option");
+        option.value = item[0];
+        option.textContent = item[1] + "（" + item[2] + "）";
+        factor.appendChild(option);
+      });
+      factor.value = (preset && preset.factor) || "pe";
+      var op = document.createElement("select");
+      op.className = "scr-cond-op";
+      [["gte", "≥"], ["lte", "≤"]].forEach(function (pair) {
+        var option = document.createElement("option");
+        option.value = pair[0];
+        option.textContent = pair[1];
+        op.appendChild(option);
+      });
+      op.value = (preset && preset.op) || "gte";
+      var value = document.createElement("input");
+      value.type = "number";
+      value.step = "any";
+      value.className = "scr-cond-value";
+      value.placeholder = t("scr.valuePlaceholder");
+      if (preset && preset.value !== undefined && preset.value !== null) {
+        value.value = String(preset.value);
+      }
+      var remove = el("button", "pg-btn", "×");
+      remove.type = "button";
+      remove.title = t("scr.removeCond");
+      remove.addEventListener("click", function () {
+        row.remove();
+        syncDraft();
+      });
+      [factor, op, value].forEach(function (node) {
+        node.addEventListener("change", syncDraft);
+        node.addEventListener("input", syncDraft);
+      });
+      row.appendChild(factor);
+      row.appendChild(op);
+      row.appendChild(value);
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+
+    /** 从 DOM 收集当前条件（丢弃缺值行）。 */
+    function collect() {
+      var conditions = [];
+      list.querySelectorAll(".scr-cond").forEach(function (row) {
+        var factor = row.querySelector(".scr-cond-factor").value;
+        var op = row.querySelector(".scr-cond-op").value;
+        var raw = row.querySelector(".scr-cond-value").value;
+        if (raw === "" || raw === null || isNaN(Number(raw))) {
+          return; // 未填阈值的行不参与
+        }
+        conditions.push({ factor: factor, op: op, value: Number(raw) });
+      });
+      return conditions;
+    }
+
+    /** 条件变化时同步草稿（Tab 切回保留）。 */
+    function syncDraft() {
+      state.screener.conditions = collect();
+    }
+
+    (saved.length ? saved : [{ factor: "pe", op: "lte", value: 30 }]).forEach(addRow);
+
+    var bar = el("div", "page-toolbar");
+    var addBtn = el("button", "pg-btn", t("scr.addCond"));
+    addBtn.type = "button";
+    addBtn.addEventListener("click", function () { addRow(); });
+    var runBtn = el("button", "pg-btn primary", t("scr.runBtn"));
+    runBtn.type = "button";
+    var result = document.getElementById("m903-body");
+
+    runBtn.addEventListener("click", function () {
+      var conditions = collect();
+      state.screener.conditions = conditions;
+      if (!conditions.length) {
+        toast(t("scr.needCond"));
+        return;
+      }
+      if (!result) {
+        return;
+      }
+      result.innerHTML = "";
+      result.appendChild(el("div", "pg-state", t("scr.running")));
+      result.setAttribute("data-state", "loading");
+      runScreenerPost(conditions).then(function (data) {
+        state.screener.lastResult = data;
+        paintScreenerResult(data);
+      }).catch(function (error) {
+        result.innerHTML = "";
+        result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+        result.setAttribute("data-state", "error");
+      });
+    });
+
+    bar.appendChild(addBtn);
+    bar.appendChild(runBtn);
+    bar.appendChild(el("span", "pg-card-sub", t("scr.andNote")));
+    body.appendChild(bar);
+    body.setAttribute("data-state", "default");
+  }
+
+  /** POST /api/screener/run（utils.api 只发 GET，这里封装 JSON POST）。 */
+  function runScreenerPost(conditions) {
+    return window.fetch("/api/screener/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conditions: conditions, limit: 200 })
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error("请求失败（HTTP " + response.status + "）");
+      }
+      return response.json();
+    }).then(function (body) {
+      if (body && body.error) {
+        var error = new Error(body.error);
+        error.code = body.error_code;
+        throw error;
+      }
+      return body.data || {};
+    });
+  }
+
+  /** 结果表渲染：命中数 + 截断说明 + 快照口径 + 豁免标注；空结果走空态。 */
+  function paintScreenerResult(data) {
+    var body = document.getElementById("m903-body");
+    if (!body) {
+      return;
+    }
+    if (!data) {
+      body.innerHTML = "";
+      body.appendChild(el("div", "pg-state", t("scr.resultIdle")));
+      body.setAttribute("data-state", "default");
+      return;
+    }
+    body.innerHTML = "";
+    var card = document.getElementById("M9-03");
+    if (card && data.snapshot) {
+      setBadges(card, t("scr.snapSource"),
+        t("scr.resultCaliber", { count: fmt(data.snapshot.row_count, 0), date: data.snapshot.trade_date || "" }));
+    }
+    var summary = el("div", "pg-kpis");
+    var kpi = el("div", "pg-kpi");
+    kpi.appendChild(el("div", "pg-kpi-k", t("scr.matched")));
+    kpi.appendChild(el("div", "pg-kpi-v " + (data.total_matched ? "up" : "flat"), fmt(data.total_matched, 0)));
+    kpi.appendChild(el("div", "pg-kpi-x",
+      (data.exempt_count ? t("scr.exemptCount", { count: data.exempt_count }) : "")));
+    summary.appendChild(kpi);
+    body.appendChild(summary);
+
+    var items = data.items || [];
+    if (!items.length) {
+      body.appendChild(el("div", "pg-state", t("scr.emptyResult")));
+      body.appendChild(el("div", "pg-card-sub", t("scr.emptyHint")));
+      body.setAttribute("data-state", "empty");
+      return;
+    }
+    var table = el("div", "table-scroll");
+    renderTable(table, SCREENER_COLS, items, {
+      onRowClick: function (row) {
+        window.location.hash = "#/stock?symbol=" + row.code + "&market=a";
+      }
+    });
+    body.appendChild(table);
+    if (data.truncated) {
+      body.appendChild(el("div", "pg-card-sub", t("scr.truncated")));
+    }
+    body.setAttribute("data-state", "default");
+  }
+
+  // =============================================================
+  // 八、#/alerts 提醒中心（第七轮 M6）
+  // 契约：GET/POST /api/alerts（规则列表/新增）
+  //       PATCH/DELETE /api/alerts/{id}
+  //       GET /api/alerts/events、POST /api/alerts/events/read
+  //       POST /api/alerts/evaluate?force=
+  // 规则六类：price/pct_change/valuation/crowding/announcement/report_date
+  // =============================================================
+  // 需要数值阈值的规则类型（announcement/report_date 只要 target）
+  var ALERT_VALUE_TYPES = { price: 1, pct_change: 1, valuation: 1, crowding: 1 };
+
+  /** 渲染提醒中心：事件列表 + 规则管理（新增表单/启停/删除）+ 手动评估。 */
+  function renderAlerts() {
+    var page = document.getElementById(VIEW_IDS.alerts);
+    if (!page) {
+      return;
+    }
+    page.innerHTML = "";
+    var grid = el("div", "pg-grid");
+
+    var eventCard = buildCard("M6-01", t("alr.eventTitle"), "g-7", t("alr.eventSub"));
+    eventCard.body.id = "m601-body";
+    grid.appendChild(eventCard.card);
+
+    var ruleCard = buildCard("M6-02", t("alr.ruleTitle"), "g-5", t("alr.ruleSub"));
+    ruleCard.body.id = "m602-body";
+    grid.appendChild(ruleCard.card);
+
+    page.appendChild(grid);
+    paintAlertsEvents();
+    paintAlertsRules();
+    page.setAttribute("data-state", "default");
+  }
+
+  /** 事件列表：未读徽标 + 全部已读 + 单条已读 + 只看未读开关。 */
+  function paintAlertsEvents() {
+    var body = document.getElementById("m601-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    body.appendChild(el("div", "pg-state", t("state.loading")));
+    api("/api/alerts/events", { unread_only: state.alerts.unreadOnly ? "true" : "" }).then(function (data) {
+      body.innerHTML = "";
+      updateBell(data.unread || 0);
+      var card = document.getElementById("M6-01");
+      if (card) {
+        setBadges(card, t("alr.eventSource"), t("alr.dedupNote"));
+      }
+      var bar = el("div", "page-toolbar");
+      var unreadBtn = el("button", "pg-btn" + (state.alerts.unreadOnly ? " primary" : ""),
+        t("alr.unreadOnlyBtn") + "（" + fmt(data.unread || 0, 0) + "）");
+      unreadBtn.type = "button";
+      unreadBtn.addEventListener("click", function () {
+        state.alerts.unreadOnly = !state.alerts.unreadOnly;
+        paintAlertsEvents();
+      });
+      var readAllBtn = el("button", "pg-btn", t("alr.readAllBtn"));
+      readAllBtn.type = "button";
+      readAllBtn.disabled = !(data.unread > 0);
+      readAllBtn.addEventListener("click", function () {
+        alertMarkRead("").then(function (result) {
+          toast(t("alr.markedToast", { count: result.marked || 0 }));
+          paintAlertsEvents();
+        }).catch(function (error) {
+          toast(error.message || t("state.errorHint"));
+        });
+      });
+      bar.appendChild(unreadBtn);
+      bar.appendChild(readAllBtn);
+      body.appendChild(bar);
+
+      var events = data.events || [];
+      if (!events.length) {
+        body.appendChild(el("div", "pg-state", t("alr.emptyEvents")));
+        body.setAttribute("data-state", "empty");
+        return;
+      }
+      var list = el("div", "alr-list");
+      events.forEach(function (item) {
+        var line = el("div", "alr-item" + (item.read ? "" : " unread"));
+        line.appendChild(el("i", item.read ? "dot" : "dot-w"));
+        var main = el("div", "alr-main");
+        main.appendChild(el("span", "alr-type", item.type_label || ""));
+        main.appendChild(el("span", "alr-target", item.target || ""));
+        main.appendChild(el("div", "alr-msg", item.message || ""));
+        line.appendChild(main);
+        line.appendChild(el("span", "alr-time", item.time || ""));
+        if (!item.read) {
+          var readBtn = el("button", "pg-btn", t("alr.readBtn"));
+          readBtn.type = "button";
+          readBtn.addEventListener("click", function (event) {
+            event.stopPropagation();
+            alertMarkRead(item.id).then(function () {
+              paintAlertsEvents();
+            }).catch(function (error) {
+              toast(error.message || t("state.errorHint"));
+            });
+          });
+          line.appendChild(readBtn);
+        }
+        list.appendChild(line);
+      });
+      body.appendChild(list);
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintAlertsEvents);
+      body.setAttribute("data-state", "error");
+    });
+  }
+
+  /** POST /api/alerts/events/read（event_id 空串=全部已读）。 */
+  function alertMarkRead(eventId) {
+    return window.fetch(
+      "/api/alerts/events/read" + (eventId ? "?event_id=" + encodeURIComponent(eventId) : ""),
+      { method: "POST" }
+    ).then(function (response) {
+      if (!response.ok) {
+        throw new Error("请求失败（HTTP " + response.status + "）");
+      }
+      return response.json();
+    }).then(function (body) {
+      if (body && body.error) {
+        throw new Error(body.error);
+      }
+      return body.data || {};
+    });
+  }
+
+  /** 规则管理：新增表单（六类规则）+ 规则表（启停/删除/立即评估）。 */
+  function paintAlertsRules() {
+    var body = document.getElementById("m602-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    api("/api/alerts", {}).then(function (data) {
+      body.innerHTML = "";
+      updateBell(data.unread || 0);
+      var labels = data.type_labels || {};
+
+      // —— 新增表单 ——
+      var form = el("div", "alr-form");
+      var type = document.createElement("select");
+      type.className = "alr-input";
+      Object.keys(labels).forEach(function (key) {
+        var option = document.createElement("option");
+        option.value = key;
+        option.textContent = labels[key];
+        type.appendChild(option);
+      });
+      type.value = state.alerts.draftType || "price";
+      var target = document.createElement("input");
+      target.type = "text";
+      target.className = "alr-input";
+      target.placeholder = t("alr.targetPlaceholder");
+      var op = document.createElement("select");
+      op.className = "alr-input";
+      [["gte", "≥"], ["lte", "≤"]].forEach(function (pair) {
+        var option = document.createElement("option");
+        option.value = pair[0];
+        option.textContent = pair[1];
+        op.appendChild(option);
+      });
+      var value = document.createElement("input");
+      value.type = "number";
+      value.step = "any";
+      value.className = "alr-input";
+      value.placeholder = t("scr.valuePlaceholder");
+      var note = document.createElement("input");
+      note.type = "text";
+      note.className = "alr-input";
+      note.placeholder = t("alr.notePlaceholder");
+      var addBtn = el("button", "pg-btn primary", t("alr.addBtn"));
+      addBtn.type = "button";
+
+      /** 比较类规则才显示 op/value（announcement/report_date 只要目标）。 */
+      function syncFormVisibility() {
+        var needValue = !!ALERT_VALUE_TYPES[type.value];
+        op.style.display = needValue ? "" : "none";
+        value.style.display = needValue ? "" : "none";
+      }
+      type.addEventListener("change", function () {
+        state.alerts.draftType = type.value;
+        syncFormVisibility();
+      });
+      addBtn.addEventListener("click", function () {
+        var payload = {
+          type: type.value,
+          target: (target.value || "").trim(),
+          note: note.value || ""
+        };
+        if (!payload.target) {
+          toast(t("alr.needTarget"));
+          return;
+        }
+        if (ALERT_VALUE_TYPES[type.value]) {
+          payload.op = op.value;
+          if (value.value === "" || isNaN(Number(value.value))) {
+            toast(t("alr.needValue"));
+            return;
+          }
+          payload.value = Number(value.value);
+        }
+        alertAddRule(payload).then(function () {
+          toast(t("alr.addedToast"));
+          target.value = "";
+          value.value = "";
+          note.value = "";
+          paintAlertsRules();
+        }).catch(function (error) {
+          toast(error.message || t("state.errorHint"));
+        });
+      });
+      [type, target, op, value, note].forEach(function (node) { form.appendChild(node); });
+      form.appendChild(addBtn);
+      body.appendChild(form);
+      syncFormVisibility();
+
+      // —— 规则列表 ——
+      var rules = data.rules || [];
+      if (!rules.length) {
+        body.appendChild(el("div", "pg-state", t("alr.emptyRules")));
+        body.setAttribute("data-state", "empty");
+        return;
+      }
+      var list = el("div", "alr-list");
+      rules.forEach(function (rule) {
+        var line = el("div", "alr-item rule" + (rule.enabled ? "" : " disabled"));
+        line.appendChild(el("i", rule.enabled ? "dot" : "dot"));
+        var main = el("div", "alr-main");
+        main.appendChild(el("span", "alr-type", rule.type_label || labels[rule.type] || rule.type));
+        main.appendChild(el("span", "alr-target", rule.target || ""));
+        var condText = (rule.op === "gte" ? "≥ " : rule.op === "lte" ? "≤ " : "")
+          + (rule.value !== undefined && rule.value !== null ? fmt(rule.value, 2) : "");
+        main.appendChild(el("div", "alr-msg", condText + (rule.note ? " · " + rule.note : "")));
+        line.appendChild(main);
+        var toggle = el("button", "pg-btn", rule.enabled ? t("alr.disableBtn") : t("alr.enableBtn"));
+        toggle.type = "button";
+        toggle.addEventListener("click", function () {
+          alertPatchRule(rule.id, { enabled: !rule.enabled }).then(function () {
+            paintAlertsRules();
+          }).catch(function (error) {
+            toast(error.message || t("state.errorHint"));
+          });
+        });
+        var remove = el("button", "pg-btn", t("alr.deleteBtn"));
+        remove.type = "button";
+        remove.addEventListener("click", function () {
+          alertDeleteRule(rule.id).then(function () {
+            toast(t("alr.deletedToast"));
+            paintAlertsRules();
+          }).catch(function (error) {
+            toast(error.message || t("state.errorHint"));
+          });
+        });
+        line.appendChild(toggle);
+        line.appendChild(remove);
+        list.appendChild(line);
+      });
+      body.appendChild(list);
+
+      // —— 评估说明 + 手动立即评估 ——
+      var footBar = el("div", "page-toolbar");
+      var evalBtn = el("button", "pg-btn", t("alr.evalNowBtn"));
+      evalBtn.type = "button";
+      evalBtn.addEventListener("click", function () {
+        evalBtn.disabled = true;
+        alertEvaluate(true).then(function (result) {
+          toast(t("alr.evalDoneToast", { count: result.new_events || 0 }));
+          if (result.new_events) {
+            paintAlertsEvents();
+          }
+        }).catch(function (error) {
+          toast(error.message || t("state.errorHint"));
+        }).finally(function () {
+          evalBtn.disabled = false;
+        });
+      });
+      footBar.appendChild(evalBtn);
+      footBar.appendChild(el("span", "pg-card-sub", t("alr.throttleNote")));
+      body.appendChild(footBar);
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintAlertsRules);
+      body.setAttribute("data-state", "error");
+    });
+  }
+
+  /** POST /api/alerts（新增规则）。 */
+  function alertAddRule(payload) {
+    return window.fetch("/api/alerts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error("请求失败（HTTP " + response.status + "）");
+      }
+      return response.json();
+    }).then(function (body) {
+      if (body && body.error) {
+        throw new Error(body.error);
+      }
+      return body.data || {};
+    });
+  }
+
+  /** PATCH /api/alerts/{id}。 */
+  function alertPatchRule(ruleId, fields) {
+    return window.fetch("/api/alerts/" + encodeURIComponent(ruleId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields)
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error("请求失败（HTTP " + response.status + "）");
+      }
+      return response.json();
+    }).then(function (body) {
+      if (body && body.error) {
+        throw new Error(body.error);
+      }
+      return body.data || {};
+    });
+  }
+
+  /** DELETE /api/alerts/{id}。 */
+  function alertDeleteRule(ruleId) {
+    return window.fetch("/api/alerts/" + encodeURIComponent(ruleId), { method: "DELETE" })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("请求失败（HTTP " + response.status + "）");
+        }
+        return response.json();
+      })
+      .then(function (body) {
+        if (body && body.error) {
+          throw new Error(body.error);
+        }
+        return body.data || {};
+      });
+  }
+
+  /** POST /api/alerts/evaluate?force=true（手动立即评估）。 */
+  function alertEvaluate(force) {
+    return window.fetch("/api/alerts/evaluate?force=" + (force ? "true" : "false"), { method: "POST" })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("请求失败（HTTP " + response.status + "）");
+        }
+        return response.json();
+      })
+      .then(function (body) {
+        if (body && body.error) {
+          throw new Error(body.error);
+        }
+        return body.data || {};
+      });
+  }
+
+  /** 顶栏铃铛未读徽标更新（其他页面轮询也复用）。 */
+  function updateBell(unread) {
+    var badge = document.getElementById("alerts-unread");
+    if (!badge) {
+      return;
+    }
+    var count = Number(unread) || 0;
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.hidden = count === 0;
+  }
+
+  /** 铃铛轮询：120s 拉未读数 + 触发一次后端评估（后端 60s/10min/6h 节流兜底）。
+   * 仅页面可见时轮询；异常静默（不打扰用户）。
+   */
+  function startBellPolling() {
+    var tick = function () {
+      if (document.hidden) {
+        return;
+      }
+      alertEvaluate(false).then(function (result) {
+        updateBell(result.unread || 0);
+        // 新事件：toast 提醒 + 徽标刷新（在提醒页时由页面自身刷新列表）
+        if (result.new_events && result.events && result.events.length) {
+          toast(t("alr.newEventToast", { first: result.events[0].message || "" }));
+        }
+      }).catch(function () {
+        /* 后台轮询失败静默 */
+      });
+    };
+    tick();
+    window.setInterval(tick, 120000);
+  }
+
+  startBellPolling();
 
   /** 入口：绑定路由与尺寸监听。 */
   function init() {

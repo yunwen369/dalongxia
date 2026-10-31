@@ -25,8 +25,10 @@ from backend.app import config
 from backend.app.core import audit as audit_module
 from backend.app.core import cache as cache_module
 from backend.app.core import resilient, source_prefs, user_prefs, v8_guard
+from backend.app.datasource import alerts as alerts_module
 from backend.app.datasource import dashboards as dashboards_module
 from backend.app.datasource import portfolio as portfolio_module
+from backend.app.datasource import screener as screener_module
 from backend.app.datasource import tencent
 from backend.app.datasource import watchlist as watchlist_module
 from backend.app.datasource import yangjibao as yangjibao_module
@@ -46,6 +48,8 @@ def _reset_process_state() -> None:
     # 第五轮 P1-01：V8 熔断/半开是进程级状态，跨用例会互相污染
     # （修复前未重置 → 「用例全绿但真实服务会被打挂」的假绿成因之一）
     v8_guard.reset_state()
+    # 第七轮波次 5：提醒评估节流状态复位
+    alerts_module.reset_eval_state()
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +88,11 @@ def isolate_process_state(monkeypatch, tmp_path):
     monkeypatch.setattr(yangjibao_module, "YJB_TOKEN_FILE", data_dir / "yjb_token.json")
     monkeypatch.setattr(yangjibao_module, "YJB_STATE_FILE", data_dir / "yjb_state.json")
     monkeypatch.setattr(yangjibao_module, "YJB_SECRET_FILE", data_dir / "yjb_secret.json")
+    # 第七轮波次 5：筛选器快照与提醒文件同样隔离（绝不写真实 data/）
+    monkeypatch.setattr(screener_module, "SNAPSHOT_FILE", data_dir / "screener_snapshot.json")
+    monkeypatch.setattr(alerts_module, "ALERTS_FILE", data_dir / "alerts.json")
+    # 提醒评估节流是进程级状态，跨用例会互相污染（60s 窗口内第二个用例被跳过）
+    alerts_module.reset_eval_state()
 
     _reset_process_state()
     try:

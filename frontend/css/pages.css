@@ -1452,3 +1452,43 @@
 .fcf-row.is-unknown .fcf-value,
 .fcf-row.is-unknown .fcf-note { color: var(--text-muted); opacity: 0.85; }
 .fcf-row.is-ok .fcf-value { color: var(--down); }
+
+/* =============================================================
+ * 第七轮 M9 筛选器 + M6 提醒中心（pages.css 追加）
+ * 颜色全部取 theme.css 变量：红涨绿跌 --up/--down，中性 --text-dim
+ * ============================================================= */
+
+/* ---- M9 筛选器：条件行 ---- */
+.scr-cond-list { display: flex; flex-direction: column; gap: 6px; }
+.scr-cond { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-widget); }
+.scr-cond-factor { flex: 1 1 160px; min-width: 120px; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.scr-cond-op { flex: 0 0 64px; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.scr-cond-value { flex: 0 0 110px; min-width: 90px; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.scr-cond .pg-btn { flex: 0 0 auto; padding: 4px 10px; color: var(--danger); border-color: var(--border); }
+.scr-cond .pg-btn:hover { background: rgba(255,90,90,0.12); }
+
+/* ---- M6 提醒：事件/规则条 ---- */
+.alr-list { display: flex; flex-direction: column; gap: 8px; }
+.alr-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-widget); position: relative; }
+.alr-item.unread { border-color: var(--accent); background: rgba(80,130,255,0.06); }
+.alr-item.rule { align-items: center; }
+.alr-item.disabled { opacity: 0.65; }
+.alr-item i { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; background: var(--text-dim); }
+.alr-item.unread i { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.alr-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.alr-type { font-size: 11px; color: var(--accent); font-weight: 600; }
+.alr-target { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.alr-msg { font-size: 12px; color: var(--text-dim); }
+.alr-time { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.alr-item .pg-btn { padding: 3px 10px; font-size: 11.5px; }
+
+/* ---- M6 提醒：新增规则表单 ---- */
+.alr-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--bg-widget); margin-bottom: 12px; }
+.alr-input { background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+.alr-form .alr-input[type="text"] { flex: 1 1 160px; min-width: 120px; }
+.alr-form .alr-input[type="number"] { flex: 0 0 110px; min-width: 90px; font-variant-numeric: tabular-nums; }
+
+/* ---- 顶栏铃铛徽标 ---- */
+.bell-badge { font-size: 10px; line-height: 1; padding: 1px 5px; border-radius: 10px; background: var(--danger); color: #fff; margin-left: 3px; vertical-align: middle; }
+
+/* ---- M9 进度条（构建中状态卡复用 pg-state，无需额外类） ---- */

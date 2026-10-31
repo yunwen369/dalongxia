@@ -64,6 +64,8 @@
         >
         <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）" data-i18n-title="action.themeToggleTitle">主题</button>
         <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉" data-i18n-title="copilot.open">AI 助手</button>
+        <!-- 第七轮 M6：提醒中心铃铛（未读徽标） -->
+        <button class="icon-button" id="alerts-bell" type="button" title="提醒中心" data-i18n-title="alerts.bellTitle">🔔<em class="bell-badge" id="alerts-unread" hidden>0</em></button>
       </div>
     </header>
 
@@ -97,6 +99,8 @@
           <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股详情</li>
           <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表分析</li>
           <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">板块估值</li>
+          <!-- 第七轮 M9：全市场筛选器（本地快照条件查询） -->
+          <li class="sidebar-item" data-action="view" data-view="screener" data-view-target="screener" data-i18n="nav.screener">筛选器</li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-heading" data-i18n="nav.watchlist">自选股</div>
@@ -290,6 +294,10 @@
         <section class="page-view" id="page-charting" hidden aria-label="图表分析"></section>
         <!-- #/settings 设置（阶段 8：AI 配置/主题/缓存引导/关于） -->
         <section class="page-view" id="page-settings" hidden aria-label="设置"></section>
+        <!-- 第七轮 M9：全市场筛选器（#/screener） -->
+        <section class="page-view" id="page-screener" hidden aria-label="筛选器"></section>
+        <!-- 第七轮 M6：提醒中心（#/alerts） -->
+        <section class="page-view" id="page-alerts" hidden aria-label="提醒中心"></section>
       </main>
     </div>
   </div>
