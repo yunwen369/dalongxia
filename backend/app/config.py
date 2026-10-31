@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "1.0.8"  # 语义化版本号：1.0.8 第五轮（V8 熔断误归因修复 + AI NameError + i18n 去重 + 版本三元统一）
-BUILD_TAG = "v1.0.8-20261027"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "1.2.0"  # 语义化版本号：1.2.0 第七轮收官（M1–M9 + 待排期 M10–M14 全部落地）
+BUILD_TAG = "v1.2.0-20261101"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
