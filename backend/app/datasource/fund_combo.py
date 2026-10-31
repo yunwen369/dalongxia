@@ -604,3 +604,229 @@ def diagnose(risk_profile: str = "balanced") -> Dict[str, Any]:
         "disclaimer": "本页仅做结构诊断，不构成任何投资建议；偏离是客观差值，调不调由你决定。",
         "as_of": utils.now_text(utils.bj_now()),
     }
+
+
+# =============================================================
+# 第七轮 M14：拥挤度降权（在基础权重上乘拥挤度折扣因子）
+# =============================================================
+CROWD_DISCOUNT_TIERS = (
+    (60.0, 1.00, "拥挤度 <60，不折扣"),
+    (80.0, 0.85, "拥挤度 60–79，轻度折扣 ×0.85"),
+    (100.1, 0.60, "拥挤度 80–100，重度折扣 ×0.60"),
+)
+
+_THS_BOARD_CACHE: Dict[str, Any] = {"boards": [], "ts": 0.0}
+_THS_BOARD_TTL = 3600.0
+
+
+def _ths_boards() -> List[str]:
+    """同花顺行业名清单（进程内缓存 1 小时，用于东财行业 → 同花顺板块匹配）。
+
+    Returns:
+        List[str]: 行业名列表；取不到返回空列表。
+    """
+    import time as _time
+
+    now = _time.time()
+    if _THS_BOARD_CACHE["boards"] and now - _THS_BOARD_CACHE["ts"] <= _THS_BOARD_TTL:
+        return _THS_BOARD_CACHE["boards"]
+    try:
+        from backend.app.datasource import sector as sector_provider
+
+        names = sector_provider.get_crowding_board_names()
+        _THS_BOARD_CACHE["boards"] = names
+        _THS_BOARD_CACHE["ts"] = now
+        return names
+    except Exception as exc:  # noqa: BLE001 - 清单取不到时退化为空（不折扣并标注）
+        logger.info("同花顺行业清单取数失败：%s", type(exc).__name__)
+        return []
+
+
+def _match_board(industry: Optional[str]) -> Optional[str]:
+    """把东财行业名匹配到同花顺板块名（去罗马数字后缀 → 精确 → 子串）。
+
+    Args:
+        industry: 东财行业名（如「银行Ⅱ」「白酒Ⅱ」）。
+
+    Returns:
+        Optional[str]: 同花顺板块名；匹配不到返回 None（不猜测）。
+    """
+    if not industry:
+        return None
+    boards = _ths_boards()
+    if not boards:
+        return None
+    text = str(industry).strip()
+    # 东财行业可能是三级路径（如「食品饮料-饮料-白酒」）：按 - 拆分，从最后一段往前逐段匹配
+    segments = [segment.strip() for segment in text.replace("/", "-").split("-") if segment.strip()]
+    candidates: List[str] = []
+    for segment in reversed(segments):
+        candidates.append(segment)
+        # 去罗马数字后缀（Ⅰ Ⅱ Ⅲ 等）
+        trimmed = segment.rstrip("ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ").strip()
+        if trimmed and trimmed != segment:
+            candidates.append(trimmed)
+    candidates.append(text)
+    for candidate in candidates:
+        if candidate in boards:
+            return candidate
+    # 最后尝试子串匹配（长的先试，避免「银行」误配「银行Ⅱ」之类）
+    for candidate in candidates:
+        if len(candidate) < 2:
+            continue
+        for board in sorted(boards, key=len, reverse=True):
+            if candidate in board or board in candidate:
+                return board
+    return None
+
+
+def _discount_of(score: Optional[float]) -> Tuple[Optional[float], str]:
+    """拥挤度 → 折扣因子。
+
+    Args:
+        score: 拥挤度 0–100；None 表示不可得。
+
+    Returns:
+        Tuple[Optional[float], str]: (折扣因子, 说明)；不可得时为 (None, 原因)。
+    """
+    if score is None:
+        return None, "拥挤度不可得，未折扣"
+    for upper, factor, label in CROWD_DISCOUNT_TIERS:
+        if score < upper:
+            return factor, label
+    return 0.60, "拥挤度 80–100，重度折扣 ×0.60"
+
+
+def weight_breakdown(
+    codes: List[str],
+    risk_profile: str = "balanced",
+    *,
+    crowd_discount: bool = True,
+) -> Dict[str, Any]:
+    """权重明细：基础权重 × 拥挤度折扣 → 最终权重（第七轮 M14）。
+
+    拥挤度代理口径：取该基金**第一大重仓股所属行业**的同花顺板块拥挤度（调 M3 同一函数）。
+    这是近似（基金 ≠ 单一行业），已在 `caliber` 与逐条 `note` 中写明。
+
+    折扣后处理：基金部分内部重新归一化到「基础权重合计」，再按单只上限裁剪，
+    裁剪余额留现金（不做满仓强制）。折扣不可得的基金按 ×1.00 处理并标注。
+
+    Args:
+        codes: 基金代码列表（2–30 只）。
+        risk_profile: 风险档位（balanced/conservative/aggressive）。
+        crowd_discount: False 时全部按 ×1.00（用于对照）。
+
+    Returns:
+        Dict[str, Any]: {items, totals, missing, caliber, disclaimer, as_of}
+    """
+    base = evaluate(codes, risk_profile)
+    weights = {row["code"]: row for row in base.get("weights") or []}
+    items = base.get("items") or []
+    if not items:
+        return {
+            "items": [],
+            "totals": {"base": 0.0, "final": 0.0, "cash": 100.0},
+            "missing": base.get("missing") or ["无可打分的基金"],
+            "caliber": "无有效基金，无法计算权重",
+            "disclaimer": base.get("disclaimer"),
+            "as_of": utils.now_text(utils.bj_now()),
+        }
+
+    profile = RISK_PROFILES.get(risk_profile) or RISK_PROFILES["balanced"]
+    single_cap = float(profile["single_cap"])
+    budget = min(1.0 - float(profile["cash_floor"]), float(profile["equity_cap"]))
+
+    from backend.app.datasource import fund as fund_provider
+    from backend.app.datasource import portfolio as portfolio_provider
+    from backend.app.datasource import sector as sector_provider
+
+    missing: List[str] = []
+    rows: List[Dict[str, Any]] = []
+    crowd_cache: Dict[str, Optional[float]] = {}
+
+    for item in items:
+        code = item.get("code") or ""
+        base_weight = float((weights.get(code) or {}).get("weight") or 0.0)
+        board: Optional[str] = None
+        score: Optional[float] = None
+        note = ""
+        if crowd_discount and base_weight > 0:
+            try:
+                holding = fund_provider.get_holding(code)
+                top = (holding.get("items") or [{}])[0]
+                top_code = str(top.get("code") or top.get("symbol") or "")
+                industry = portfolio_provider._industry_of(top_code, "a")
+                board = _match_board(industry)
+                if not board:
+                    note = f"重仓行业「{industry or '未知'}」未匹配到同花顺板块，未折扣"
+                elif board in crowd_cache:
+                    score = crowd_cache[board]
+                else:
+                    score = sector_provider.get_crowding(board).get("score")
+                    crowd_cache[board] = score
+            except Exception as exc:  # noqa: BLE001 - 单只失败不影响整体
+                note = f"拥挤度取数失败（{type(exc).__name__}），未折扣"
+        factor, factor_label = _discount_of(score) if crowd_discount else (1.00, "未启用拥挤度降权")
+        applied = float(factor or 1.0)
+        rows.append({
+            "code": code,
+            "name": item.get("name") or code,
+            "base_weight": round(base_weight, 2),
+            "board": board,
+            "crowding": round(score, 1) if score is not None else None,
+            "discount": applied,
+            "discount_label": factor_label,
+            "final_weight": round(base_weight * applied, 4),
+            "note": note,
+        })
+
+    # 基金部分重新归一化到「基础权重合计」，再按单只上限裁剪
+    base_total = sum(row["base_weight"] for row in rows)
+    target_total = base_total if base_total > 0 else budget * 100
+    discounted_total = sum(row["final_weight"] for row in rows)
+    if discounted_total > 1e-9:
+        scale = target_total / discounted_total
+        for row in rows:
+            row["final_weight"] = row["final_weight"] * scale
+
+    # 单只上限裁剪（超出部分留现金，不放大其他基金）
+    capped: List[str] = []
+    cap_pct = single_cap * 100
+    for row in rows:
+        if row["final_weight"] > cap_pct + 1e-9:
+            row["final_weight"] = cap_pct
+            capped.append(row["code"])
+
+    for row in rows:
+        row["final_weight"] = round(row["final_weight"], 2)
+        row["delta"] = round(row["final_weight"] - row["base_weight"], 2)
+        if row["code"] in capped:
+            row["note"] = (row["note"] + "；" if row["note"] else "") + f"折扣后触及单只上限 {int(cap_pct)}%"
+
+    final_total = sum(row["final_weight"] for row in rows)
+    undiscounted = [row["code"] for row in rows if row["discount"] >= 0.999 and row["base_weight"] > 0]
+    if undiscounted:
+        missing.append(f"未折扣（拥挤度不可得或未启用）：{'、'.join(undiscounted)}")
+    for row in rows:
+        if row["note"]:
+            missing.append(f"{row['code']}：{row['note']}")
+
+    return {
+        "items": rows,
+        "totals": {
+            "base": round(base_total, 2),
+            "final": round(final_total, 2),
+            "cash": round(100 - final_total, 2),
+            "capped": capped,
+        },
+        "missing": missing,
+        "caliber": (
+            "最终权重 = 基础权重（逆波动率 × 得分）× 拥挤度折扣因子；"
+            "折扣档：<60 ×1.00 / 60–79 ×0.85 / 80–100 ×0.60；"
+            "折后基金部分内部归一化到原基础权重合计，再按单只上限裁剪，余额留现金；"
+            "拥挤度代理=该基金第一大重仓股所属行业的同花顺板块分数（调 M3 同一函数，非基金自身拥挤度）；"
+            "折扣是风险控制手段，不是收益预期"
+        ),
+        "disclaimer": base.get("disclaimer"),
+        "as_of": utils.now_text(utils.bj_now()),
+    }

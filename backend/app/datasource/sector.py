@@ -1348,3 +1348,106 @@ def get_crowding(board: str) -> Dict[str, Any]:
         ),
         "missing": [CROWDING_MISSING] + ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else []),
     }
+
+
+def get_crowding_rankings(
+    *,
+    kind: str = "industry",
+    limit: int = 50,
+    max_workers: int = 6,
+) -> Dict[str, Any]:
+    """全板块拥挤度排行（第七轮 M12）。
+
+    复用 `get_crowding()` 同一套四维打分（同口径、同函数），逐板块并发计算后按得分降序。
+    只陈述交易结构位置，不给买卖指令。
+
+    Args:
+        kind: 板块类型，目前仅支持 industry（概念板块接口在本机不稳定，未纳入）。
+        limit: 返回前 N 名（1–120）。
+        max_workers: 并发线程数（同花顺签名在进程级锁内串行，HTTP 可部分并行）。
+
+    Returns:
+        Dict[str, Any]: {items, scanned, total, failed, level_counts, caliber, as_of}
+
+    Raises:
+        ValueError: 板块类型不支持或清单为空。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    _ensure_enabled()
+    if kind != "industry":
+        raise ValueError("kind 目前仅支持 industry（概念板块接口不稳定，未纳入排行）")
+    limit = max(1, min(int(limit or 50), 120))
+
+    names = get_crowding_board_names()
+    if not names:
+        raise ValueError("同花顺行业清单为空，无法计算排行")
+
+    items: List[Dict[str, Any]] = []
+    failed: List[str] = []
+
+    def _work(board: str) -> Dict[str, Any]:
+        """单板块打分（异常向上抛，由调用方归类到 failed）。
+
+        Args:
+            board: 板块名。
+
+        Returns:
+            Dict[str, Any]: {board, score, level, parts}。
+        """
+        data = get_crowding(board)
+        return {
+            "board": data["board"],
+            "score": data["score"],
+            "level": data["level"],
+            "parts": [
+                {"label": part["label"], "pct": part["pct"], "value": part["value"], "unit": part["unit"]}
+                for part in data.get("parts") or []
+            ],
+        }
+
+    with ThreadPoolExecutor(max_workers=max(1, min(int(max_workers or 6), 10))) as pool:
+        futures = {pool.submit(_work, name): name for name in names}
+        for future in as_completed(futures):
+            board = futures[future]
+            try:
+                items.append(future.result())
+            except Exception as exc:  # noqa: BLE001 - 单板块失败不阻断整体
+                failed.append(f"{board}（{type(exc).__name__}）")
+                logger.info("拥挤度排行单板块失败 %s：%s", board, type(exc).__name__)
+
+    items.sort(key=lambda item: item["score"], reverse=True)
+    level_counts = {"高位": 0, "偏高": 0, "正常": 0}
+    for item in items:
+        if item["level"] in level_counts:
+            level_counts[item["level"]] += 1
+
+    return {
+        "items": items[:limit],
+        "scanned": len(items),
+        "total": len(names),
+        "failed": failed,
+        "level_counts": level_counts,
+        "caliber": (
+            f"与单板块拥挤度同一函数（四维分位加权：成交额强度 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
+            f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
+            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%）；扫描 {len(items)}/{len(names)} 个行业；"
+            "只陈述交易结构位置，不构成买卖建议"
+        ),
+        "as_of": utils.now_text(utils.bj_now()),
+    }
+
+
+def get_crowding_board_names() -> List[str]:
+    """同花顺行业名清单（供 M12 排行与 M14 行业匹配共用）。
+
+    Returns:
+        List[str]: 行业名列表（约 90 个）；接口异常时向上抛，由调用方降级。
+    """
+    _ensure_enabled()
+    frame = _call_ths(lambda: ak.stock_board_industry_name_ths())
+    return [
+        str(row.get("name") or "").strip()
+        for row in utils.clean_records(frame)
+        if str(row.get("name") or "").strip()
+    ]

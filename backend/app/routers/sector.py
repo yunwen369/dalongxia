@@ -705,3 +705,47 @@ def sector_crowding(
         logger.warning("拥挤度计算失败 %s：%s", name, type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, f"拥挤度计算失败（{type(exc).__name__}），请稍后重试")
     return ok(data)
+
+
+@router.get("/crowding/rankings")
+def sector_crowding_rankings(
+    kind: str = Query("industry", description="板块类型，目前仅 industry"),
+    limit: int = Query(50, ge=1, le=120, description="返回前 N 名"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """全板块拥挤度排行（第七轮 M12）。
+
+    复用 `/crowding` 同一函数逐板块打分后降序（同口径，不另算一套）。
+    首次计算约 30–60 秒（90 个行业并发扫描），结果缓存 1 小时。
+
+    Args:
+        kind: 板块类型（仅 industry）。
+        limit: 返回前 N 名。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {items, scanned, total, failed, level_counts, caliber, as_of}}
+    """
+    key_kind = str(kind or "industry").strip().lower()
+    if key_kind != "industry":
+        return api_error(ErrorCode.INVALID_PARAM, "kind 目前仅支持 industry（概念板块接口不稳定，未纳入排行）")
+
+    def loader() -> Dict[str, Any]:
+        """全量扫描（1 小时缓存：日频数据）。
+
+        Returns:
+            Dict[str, Any]: 排行结果。
+        """
+        return sector_provider.get_crowding_rankings(kind=key_kind, limit=limit)
+
+    try:
+        if force:
+            data = loader()
+        else:
+            data = cache.get_or_load(f"sector:crowding:rankings:{limit}", 3600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("拥挤度排行失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"拥挤度排行计算失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)

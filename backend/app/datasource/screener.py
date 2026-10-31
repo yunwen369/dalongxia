@@ -785,3 +785,136 @@ def run_screener(
         ),
         "as_of": _now_text(),
     }
+
+
+# =============================================================
+# 第七轮 M13：全市场候选池（复用 M9 快照 + 基金友好模板）
+# =============================================================
+# 模板条件（全部 AND）：ROE 三年最弱 ≥10 / 资产负债率 ≤60 / PE ≤40 / 毛利率 ≥30 / ROE 逐年不降
+CANDIDATE_TEMPLATE = {
+    "key": "fund_friendly",
+    "label": "基金友好",
+    "rules": [
+        {"factor": "roe_min", "label": "ROE（近 3 年最弱）", "op": "gte", "value": 10, "note": "近 3 年年报最弱一年 ≥10%"},
+        {"factor": "debt_ratio", "label": "资产负债率", "op": "lte", "value": 60, "note": "金融业自动豁免并标注"},
+        {"factor": "pe", "label": "PE-TTM", "op": "lte", "value": 40, "note": "PE-TTM ≤40"},
+        {"factor": "gross", "label": "销售毛利率", "op": "gte", "value": 30, "note": "毛利率 ≥30%（质量代理）"},
+        {"factor": "roe_trend", "label": "ROE 趋势", "op": "gte", "value": 0, "note": "ROE 逐年不下滑（新 ≥ 旧）"},
+    ],
+}
+
+CANDIDATE_MISSING = (
+    "股息率因子未纳入：M9 快照不含股息率字段（需另接分红数据，逐只拉取成本高），"
+    "本次以「毛利率 ≥30%」作质量代理；如需股息率筛选，请在筛选器页自定义条件后人工复核"
+)
+
+
+def run_candidates(
+    *,
+    limit: int = 200,
+    market: str = "a",
+) -> Dict[str, Any]:
+    """全市场候选池（第七轮 M13，复用 M9 快照）。
+
+    只按模板条件筛选，**不排序打分、不给推荐语**（排序与打分交给 M5 评估器）。
+
+    Args:
+        limit: 返回上限（1–500）。
+        market: 市场（目前仅 a）。
+
+    Returns:
+        Dict[str, Any]: {ready, total_matched, items, template, missing, caliber, as_of}
+
+    Raises:
+        RuntimeError: 快照未建库。
+    """
+    if str(market or "a").lower() != "a":
+        raise ValueError("候选池目前仅支持 A 股（快照为 A 股全市场）")
+    limit = max(1, min(int(limit or 200), 500))
+
+    payload = _read_snapshot()
+    rows = payload.get("rows") or []
+    if not rows:
+        raise RuntimeError("快照未建库：请先到「筛选器」页点击「立即刷新快照」构建")
+
+    matched: List[Dict[str, Any]] = []
+    exempt_count = 0
+    for row in rows:
+        keep = True
+        exempted: List[str] = []
+        for rule in CANDIDATE_TEMPLATE["rules"]:
+            factor = rule["factor"]
+            value = float(rule["value"])
+            if factor == "roe_trend":
+                series = row.get("roe_years") or []
+                if not series or any(v is None for v in series):
+                    keep = False
+                    break
+                # 新→旧：逐年不降（最新年报 ≥ 前一年）
+                if not all(series[i] >= series[i + 1] for i in range(len(series) - 1)):
+                    keep = False
+                    break
+                continue
+            meta = FACTOR_META.get(factor, {})
+            if meta.get("exempt_fin") and any(
+                mark in str(row.get("board") or "") for mark in FINANCIAL_BOARD_MARKS
+            ):
+                exempted.append(factor)
+                continue
+            actual = _row_value(row, factor)
+            if actual is None:
+                keep = False
+                break
+            if rule["op"] == "gte" and not actual >= value:
+                keep = False
+                break
+            if rule["op"] == "lte" and not actual <= value:
+                keep = False
+                break
+        if not keep:
+            continue
+        if exempted:
+            exempt_count += 1
+        series = row.get("roe_years") or []
+        matched.append({
+            "code": row.get("code"),
+            "name": row.get("name"),
+            "board": row.get("board"),
+            "close": row.get("close"),
+            "chg": row.get("chg"),
+            "pe": row.get("pe"),
+            "pb": row.get("pb"),
+            "mktcap": (row.get("mktcap") / 1e8) if row.get("mktcap") is not None else None,
+            "roe3y_min": _row_value(row, "roe_min"),
+            "roe_years": series,
+            "gross": row.get("gross"),
+            "debt_ratio": row.get("debt_ratio"),
+            "exempt": exempted,
+        })
+        if len(matched) >= limit:
+            break
+
+    matched.sort(key=lambda item: item["code"])
+    meta = get_snapshot_meta()
+    return {
+        "ready": True,
+        "total_matched": len(matched),
+        "returned": len(matched),
+        "truncated": len(matched) >= limit,
+        "items": matched,
+        "template": CANDIDATE_TEMPLATE,
+        "exempt_count": exempt_count,
+        "missing": [CANDIDATE_MISSING],
+        "snapshot": {
+            "version": meta.get("version"),
+            "built_at": meta.get("built_at"),
+            "trade_date": meta.get("trade_date"),
+            "row_count": meta.get("row_count"),
+        },
+        "caliber": (
+            "候选池= M9 快照按「基金友好」模板筛选（ROE 三年最弱 ≥10 ∧ 资产负债率 ≤60 ∧ PE ≤40 ∧ "
+            "毛利率 ≥30 ∧ ROE 逐年不降）；金融业对资产负债率自动豁免并标注；"
+            "只筛选不排序、不打分、不给推荐语；排序与打分请在「基金组合 → 候选评估」里做"
+        ),
+        "as_of": utils.now_text(utils.bj_now()),
+    }

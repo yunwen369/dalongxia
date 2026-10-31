@@ -173,3 +173,82 @@ def portfolio_attribution() -> Dict[str, Any]:
         data.get("caliber") or "权重=市值/合计；贡献=权重×盈亏率；HHI=Σ权重²",
         data.get("as_of"),
     )
+
+
+@router.post("/import-xlsx")
+def portfolio_import_xlsx(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """组合台账 xlsx 一次性导入（第七轮 M11）。
+
+    请求体（**base64 方式**：本机未安装 python-multipart，不走 multipart 上传）：
+        {"filename": "持仓.xlsx", "content_base64": "...", "confirm": false}
+
+    - `confirm=false`（默认）：只解析 + 校验，返回预览（不入库）；
+    - `confirm=true`：重新解析同一文件，校验通过的行**覆盖写入** `data/portfolio.json`。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 含 rows/errors/warnings/summary。
+    """
+    from backend.app.datasource import xlsx_import
+
+    filename = str(payload.get("filename") or "").strip()
+    content = payload.get("content_base64") or ""
+    confirm = bool(payload.get("confirm"))
+    if not filename:
+        return api_error(ErrorCode.INVALID_PARAM, "缺少 filename：请提供原始文件名（决定解析引擎）")
+    if not content:
+        return api_error(ErrorCode.INVALID_PARAM, "缺少 content_base64：请以 base64 提交文件内容")
+    import base64
+
+    try:
+        raw = base64.b64decode(content, validate=True)
+    except Exception:  # noqa: BLE001 - 编码错误统一转中文
+        return api_error(ErrorCode.INVALID_PARAM, "content_base64 不是有效的 base64 编码")
+    if len(raw) > 10 * 1024 * 1024:
+        return api_error(ErrorCode.INVALID_PARAM, "文件超过 10 MB，请拆分后再导入")
+
+    try:
+        preview = xlsx_import.parse(raw, filename)
+        if not confirm:
+            cache.clear_cache()  # 预览不打缓存，但清一次避免旧分析残留（无副作用）
+            return _pack(
+                preview,
+                preview.get("caliber") or "只读导入：预览阶段不写库",
+                preview.get("as_of"),
+            )
+        result = xlsx_import.commit(preview["rows"], confirm=True)
+        cache.clear_cache()  # 台账变更后清缓存，保证下一次 analysis 读新数据
+        merged = dict(preview)
+        merged["result"] = result
+        return _pack(merged, preview.get("caliber") or "已覆盖写入系统台账", result.get("updated_at"))
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("xlsx 导入失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR, f"xlsx 导入失败（{type(exc).__name__}）")
+
+
+@router.get("/risk")
+def portfolio_risk(force: bool = False) -> Dict[str, Any]:
+    """组合风险指标（第七轮 M10）：波动 / 回撤 / 夏普 / α / β / 相关性矩阵。
+
+    口径：按当前持仓权重回溯（非真实逐日净值）；基准沪深300；场外基金不纳入；
+    样本 < 30 日 → `reliable=false`，仅给数值不给结论标签。
+
+    Args:
+        force: true 时绕过 6 小时缓存。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 含 metrics/correlation/weights/missing。
+    """
+    from backend.app.datasource import portfolio_risk as risk
+
+    try:
+        data = risk.risk_report(force=force)
+        return _pack(
+            data,
+            data.get("caliber") or "按当前持仓权重回溯，非真实逐日净值",
+            data.get("as_of"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("组合风险计算失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR, f"组合风险计算失败（{type(exc).__name__}）")

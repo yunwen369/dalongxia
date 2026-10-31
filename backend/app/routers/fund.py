@@ -463,3 +463,94 @@ def fund_combo_diagnose(
         logger.warning("基金组合诊断失败：%s", type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, f"诊断失败（{type(exc).__name__}），请稍后重试")
     return ok(data)
+
+
+@router.get("/combo/weight")
+def fund_combo_weight(
+    codes: str = Query(..., description="基金代码，逗号分隔（2–30 只）"),
+    risk: str = Query("balanced", description="conservative / balanced / aggressive"),
+    crowd: bool = Query(True, description="是否启用拥挤度降权（M14）"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """权重明细（第七轮 M14）：基础权重 × 拥挤度折扣 → 最终权重。
+
+    拥挤度代理=该基金第一大重仓股所属行业的同花顺板块分数（调 M3 同一函数）。
+    折扣档：<60 ×1.00 / 60–79 ×0.85 / 80–100 ×0.60；折后内部归一并对单只上限裁剪。
+
+    Args:
+        codes: 逗号分隔的基金代码。
+        risk: 风险档位。
+        crowd: False 时全部 ×1.00（对照用）。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {items, totals, missing, caliber, disclaimer}}
+    """
+    profile = str(risk or "balanced").strip()
+    if profile not in ("conservative", "balanced", "aggressive"):
+        return api_error(ErrorCode.INVALID_PARAM, "risk 仅支持 conservative / balanced / aggressive")
+    code_list = [item.strip() for item in str(codes or "").split(",") if item.strip()]
+    if not code_list:
+        return api_error(ErrorCode.INVALID_PARAM, "请提供基金代码（codes），逗号分隔")
+    if len(code_list) > 30:
+        return api_error(ErrorCode.INVALID_PARAM, "最多 30 只基金")
+    cache_key = f"fund:combo:weight:{profile}:{int(bool(crowd))}:{','.join(sorted(code_list))}"
+
+    def loader() -> Dict[str, Any]:
+        """计算权重明细（10 分钟缓存：依赖净值与拥挤度）。
+
+        Returns:
+            Dict[str, Any]: 权重明细。
+        """
+        return fund_combo.weight_breakdown(code_list, profile, crowd_discount=bool(crowd))
+
+    try:
+        data = loader() if force else cache.get_or_load(cache_key, 600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("权重明细计算失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"权重明细计算失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)
+
+
+@router.get("/candidates")
+def fund_candidates(
+    market: str = Query("a", description="市场，目前仅 a"),
+    limit: int = Query(200, ge=1, le=500, description="返回上限"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """全市场候选池（第七轮 M13）：复用 M9 快照 + 「基金友好」模板。
+
+    只按条件筛选，不排序打分、不给推荐语；排序与打分交给「候选评估」。
+
+    Args:
+        market: 市场（仅 a）。
+        limit: 返回上限。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {ready, total_matched, items, template, missing, snapshot}}
+    """
+    from backend.app.datasource import screener
+
+    cache_key = f"fund:candidates:{str(market or 'a').lower()}:{limit}"
+
+    def loader() -> Dict[str, Any]:
+        """读快照筛选（5 分钟缓存：快照每日一更）。
+
+        Returns:
+            Dict[str, Any]: 候选池结果。
+        """
+        return screener.run_candidates(limit=limit, market=market)
+
+    try:
+        data = loader() if force else cache.get_or_load(cache_key, 300, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.INVALID_PARAM, str(exc))
+    except RuntimeError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("候选池计算失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR, f"候选池计算失败（{type(exc).__name__}）")
+    return ok(data)

@@ -1297,7 +1297,7 @@
     page.innerHTML = "";
     var tab = state.fundCombo && state.fundCombo.tab ? state.fundCombo.tab : "diagnose";
     var bar = el("div", "page-toolbar");
-    [["diagnose", t("fundCombo.tab.diagnose")], ["evaluate", t("fundCombo.tab.evaluate")]].forEach(function (pair) {
+    [["diagnose", t("fundCombo.tab.diagnose")], ["evaluate", t("fundCombo.tab.evaluate")], ["candidates", t("combo.candidates.tab")]].forEach(function (pair) {
       var btn = el("button", "pg-tab" + (tab === pair[0] ? " active" : ""), pair[1]);
       btn.type = "button";
       btn.addEventListener("click", function () {
@@ -1315,6 +1315,8 @@
     page.appendChild(host);
     if (tab === "evaluate") {
       paintFundComboEvaluate(host);
+    } else if (tab === "candidates") {
+      paintFundComboCandidates(host);
     } else {
       paintFundComboDiagnose(host);
     }
@@ -1429,6 +1431,133 @@
       });
       host.appendChild(el("div", "pg-card-sub", data.caliber || ""));
       host.appendChild(el("div", "note legal", data.disclaimer || ""));
+      host.setAttribute("data-state", "default");
+      // 第七轮 M14：权重明细（基础权重 × 拥挤度折扣）
+      paintComboWeight(host, holdings.map(function (row) { return row.code; }));
+    }).catch(function (error) {
+      host.innerHTML = "";
+      host.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+      host.setAttribute("data-state", "error");
+    });
+  }
+
+  // =============================================================
+  // 第七轮 M14：权重明细（基础权重 × 拥挤度折扣因子）
+  // 拥挤度代理 = 该基金第一大重仓股所属行业的同花顺板块分数（调 M3 同一函数）
+  // =============================================================
+  /** 渲染权重明细表（附在诊断 Tab 下方）。
+   *
+   * @param {HTMLElement} host 容器
+   * @param {Array<string>} codes 基金代码列表
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintComboWeight(host, codes) {
+    if (!codes || codes.length < 2) {
+      return;
+    }
+    var wrap = el("div", "pg-card");
+    wrap.appendChild(el("div", "pg-card-title", t("combo.weight.title")));
+    wrap.appendChild(el("div", "pg-card-sub", t("combo.weight.loading")));
+    host.appendChild(wrap);
+    api("/api/fund/combo/weight", { codes: codes.join(","), risk: "balanced", crowd: "true" }).then(function (data) {
+      wrap.innerHTML = "";
+      wrap.appendChild(el("div", "pg-card-title", t("combo.weight.title")));
+      var totals = data.totals || {};
+      var scroll = el("div", "table-scroll");
+      renderTable(scroll, [
+        { key: "code", title: t("combo.weight.col.code"), render: function (row) { return el("b", "", row.code); } },
+        { key: "base_weight", title: t("combo.weight.col.base"), num: true, render: function (row) { return fmt(row.base_weight, 2) + "%"; } },
+        { key: "board", title: t("combo.weight.col.board"), render: function (row) { return row.board || t("value.none"); } },
+        { key: "crowding", title: t("combo.weight.col.crowd"), num: true, render: function (row) { return row.crowding === null ? t("value.none") : fmt(row.crowding, 1); } },
+        { key: "discount", title: t("combo.weight.col.discount"), num: true, render: function (row) {
+            return el("span", row.discount < 0.999 ? "down" : "flat", "×" + fmt(row.discount, 2));
+          } },
+        { key: "final_weight", title: t("combo.weight.col.final"), num: true, render: function (row) { return el("b", "", fmt(row.final_weight, 2) + "%"); } },
+        { key: "delta", title: t("combo.weight.col.delta"), num: true, render: function (row) {
+            return el("span", row.delta < 0 ? "down" : (row.delta > 0 ? "up" : "flat"),
+              (row.delta > 0 ? "+" : "") + fmt(row.delta, 2) + "pt");
+          } }
+      ], data.items || [], {});
+      wrap.appendChild(scroll);
+      wrap.appendChild(el("div", "pg-card-sub",
+        t("combo.weight.totals", {
+          base: fmt(totals.base, 2),
+          final: fmt(totals.final, 2),
+          cash: fmt(totals.cash, 2)
+        })));
+      if ((data.missing || []).length) {
+        wrap.appendChild(el("div", "pg-card-sub", data.missing.join("；")));
+      }
+      wrap.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+      wrap.appendChild(el("div", "note legal", data.disclaimer || ""));
+    }).catch(function (error) {
+      wrap.innerHTML = "";
+      wrap.appendChild(el("div", "pg-card-title", t("combo.weight.title")));
+      wrap.appendChild(el("div", "pg-card-sub", error.message || t("state.errorHint")));
+    });
+  }
+
+  // =============================================================
+  // 第七轮 M13：全市场候选池（复用 M9 快照 + 基金友好模板）
+  // =============================================================
+  /** 渲染候选池 Tab：模板条件 + 候选结果表（只筛选，不排序打分）。
+   *
+   * @param {HTMLElement} host 容器
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintFundComboCandidates(host) {
+    host.innerHTML = "";
+    host.appendChild(el("div", "pg-state", t("combo.candidates.loading")));
+    api("/api/fund/candidates", { limit: 200 }).then(function (data) {
+      host.innerHTML = "";
+      var tpl = data.template || {};
+      var condCard = el("div", "pg-card");
+      condCard.appendChild(el("div", "pg-card-title", t("combo.candidates.condTitle")));
+      var condScroll = el("div", "table-scroll");
+      renderTable(condScroll, [
+        { key: "factor", title: t("combo.candidates.col.factor"), render: function (row) { return row.label || row.factor; } },
+        { key: "op", title: t("combo.candidates.col.op"), render: function (row) { return row.op === "gte" ? "≥" : "≤"; } },
+        { key: "value", title: t("combo.candidates.col.value"), num: true, render: function (row) { return fmt(row.value, 0); } },
+        { key: "note", title: t("combo.candidates.col.note") }
+      ], tpl.rules || [], {});
+      condCard.appendChild(condScroll);
+      condCard.appendChild(el("div", "pg-card-sub", t("combo.candidates.tplNote")));
+      host.appendChild(condCard);
+
+      var items = data.items || [];
+      var resultCard = el("div", "pg-card");
+      resultCard.appendChild(el("div", "pg-card-title",
+        t("combo.candidates.resultTitle", { count: data.total_matched || 0 })));
+      if (!items.length) {
+        resultCard.appendChild(el("div", "pg-state", t("combo.candidates.empty")));
+        host.appendChild(resultCard);
+        host.setAttribute("data-state", "empty");
+        return;
+      }
+      var scroll = el("div", "table-scroll");
+      renderTable(scroll, [
+        { key: "code", title: t("scr.col.code"), render: function (row) {
+            var box = el("span", "");
+            box.appendChild(el("b", "", row.code));
+            box.appendChild(document.createTextNode(" " + (row.name || "")));
+            return box;
+          } },
+        { key: "board", title: t("scr.col.board") },
+        { key: "pe", title: "PE", num: true, render: function (row) { return fmt(row.pe, 2); } },
+        { key: "roe3y_min", title: "ROE3年最弱", num: true, render: function (row) { return fmt(row.roe3y_min, 2); } },
+        { key: "gross", title: t("scr.col.gross"), num: true, render: function (row) { return fmt(row.gross, 2); } },
+        { key: "debt_ratio", title: t("scr.col.debt"), num: true, render: function (row) { return fmt(row.debt_ratio, 2); } },
+        { key: "mktcap", title: t("scr.col.mktcap"), num: true, render: function (row) { return fmt(row.mktcap, 0); } },
+        { key: "exempt", title: t("scr.col.exempt"), render: function (row) {
+            return (row.exempt && row.exempt.length) ? t("scr.exemptYes") : "";
+          } }
+      ], items, {});
+      resultCard.appendChild(scroll);
+      (data.missing || []).forEach(function (note) {
+        resultCard.appendChild(el("div", "pg-card-sub", note));
+      });
+      resultCard.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+      host.appendChild(resultCard);
       host.setAttribute("data-state", "default");
     }).catch(function (error) {
       host.innerHTML = "";
@@ -1561,8 +1690,90 @@
     var card = buildCard("M3-01", t("sectors.crowd.title"), "g-12", t("sectors.crowd.sub"));
     card.body.id = "m301-body";
     grid.appendChild(card.card);
+    // 第七轮 M12：全板块排行（与 M3-01 同一打分函数，全市场同口径）
+    var rankCard = buildCard("M12-01", t("crowd.rank.title"), "g-12", t("crowd.rank.sub"));
+    rankCard.body.id = "m1201-body";
+    grid.appendChild(rankCard.card);
     page.appendChild(grid);
     paintCrowding();
+    paintCrowdingRankings();
+  }
+
+  // =============================================================
+  // 第七轮 M12：拥挤度全板块排行（复用 M3 同一函数，首次扫描约 1 分钟）
+  // =============================================================
+  /** 渲染全板块排行（排行榜 + 等级分布 + 热力条）。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintCrowdingRankings() {
+    var body = document.getElementById("m1201-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    body.appendChild(el("div", "pg-state", t("crowd.rank.loading")));
+    body.setAttribute("data-state", "loading");
+    api("/api/sector/crowding/rankings", { limit: 30 }).then(function (data) {
+      body.innerHTML = "";
+      var counts = data.level_counts || {};
+      var kpis = el("div", "pg-kpis");
+      [
+        [t("crowd.rank.scanned"), (data.scanned || 0) + " / " + (data.total || 0), "flat"],
+        [t("crowd.rank.high"), String(counts["高位"] || 0), (counts["高位"] ? "up" : "flat")],
+        [t("crowd.rank.warn"), String(counts["偏高"] || 0), "flat"],
+        [t("crowd.rank.normal"), String(counts["正常"] || 0), "down"]
+      ].forEach(function (row) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", row[0]));
+        box.appendChild(el("div", "pg-kpi-v " + row[2], row[1]));
+        kpis.appendChild(box);
+      });
+      body.appendChild(kpis);
+
+      var items = data.items || [];
+      if (!items.length) {
+        body.appendChild(el("div", "pg-state", t("crowd.rank.empty")));
+        body.setAttribute("data-state", "empty");
+        return;
+      }
+      var scroll = el("div", "table-scroll");
+      renderTable(scroll, [
+        { key: "rank", title: "#", num: true, render: function (row) { return String(items.indexOf(row) + 1); } },
+        { key: "board", title: t("crowd.rank.col.board"), render: function (row) { return el("b", "", row.board); } },
+        { key: "score", title: t("crowd.rank.col.score"), num: true, render: function (row) {
+            var cls = row.score >= 80 ? "up" : (row.score >= 60 ? "flat" : "down");
+            return el("span", cls, fmt(row.score, 1));
+          } },
+        { key: "level", title: t("crowd.rank.col.level"), render: function (row) { return row.level; } },
+        { key: "parts", title: t("crowd.rank.col.parts"), render: function (row) {
+            return (row.parts || []).map(function (part) {
+              return part.label + " " + fmt(part.pct, 0) + "%";
+            }).join(" · ");
+          } }
+      ], items, {});
+      body.appendChild(scroll);
+
+      // 热力条：颜色越深越拥挤（橙→红，非红涨绿跌语义）
+      var heat = el("div", "crowd-heat");
+      items.slice(0, 30).forEach(function (row) {
+        var cell = el("span", "crowd-heat-cell", row.board);
+        var ratio = Math.min(100, Math.max(0, row.score)) / 100;
+        cell.style.background = "rgba(224,90,62," + (0.12 + ratio * 0.75).toFixed(2) + ")";
+        cell.title = row.board + " " + fmt(row.score, 1) + "（" + row.level + "）";
+        heat.appendChild(cell);
+      });
+      body.appendChild(heat);
+
+      if ((data.failed || []).length) {
+        body.appendChild(el("div", "pg-card-sub", t("crowd.rank.failed", { list: data.failed.join("、") })));
+      }
+      body.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), paintCrowdingRankings);
+      body.setAttribute("data-state", "error");
+    });
   }
 
   /** 渲染拥挤度查询区（输入 + 结果 + 缺失说明）。
@@ -4526,6 +4737,14 @@
     var table = buildCard("P-03", t("portfolio.tableTitle"), "g-12", t("portfolio.tableSub"));
     table.body.id = "p03-body";
     grid.appendChild(table.card);
+    // 第七轮 M10：组合风险指标（波动/回撤/夏普/α/β/相关性），与归因同用一份台账
+    var riskCard = buildCard("P-06", t("risk.title"), "g-12", t("risk.sub"));
+    riskCard.body.id = "p06-body";
+    grid.appendChild(riskCard.card);
+    // 第七轮 M11：xlsx 一次性导入（只读导入，覆盖当前台账）
+    var xlsxCard = buildCard("P-07", t("xlsx.title"), "g-12", t("xlsx.sub"));
+    xlsxCard.body.id = "p07-body";
+    grid.appendChild(xlsxCard.card);
     container.appendChild(grid);
 
     add.addEventListener("click", function () {
@@ -4687,6 +4906,222 @@
     }
     loadPortfolio();
     loadPortfolioAttribution();
+    loadPortfolioRisk();
+    paintXlsxImport();
+  }
+
+  // =============================================================
+  // 第七轮 M10：组合风险指标（波动 / 回撤 / 夏普 / α / β / 相关性）
+  // 口径：按当前持仓权重回溯（非真实逐日净值）；场外基金不纳入；样本<30 日只给数不给结论
+  // =============================================================
+  /** 加载并渲染组合风险指标。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadPortfolioRisk() {
+    var body = document.getElementById("p06-body");
+    if (!body) {
+      return;
+    }
+    setLoading(body);
+    api("/api/portfolio/risk", {}).then(function (data) {
+      body.innerHTML = "";
+      if (!data.available) {
+        body.appendChild(el("div", "pg-state", data.caliber || t("risk.empty")));
+        (data.missing || []).forEach(function (note) {
+          body.appendChild(el("div", "pg-card-sub", note));
+        });
+        body.setAttribute("data-state", "empty");
+        return;
+      }
+      var m = data.metrics || {};
+      var table = el("table", "pg-table");
+      var head = el("thead");
+      var headRow = el("tr");
+      [t("risk.col.metric"), t("risk.col.value"), t("risk.col.note")].forEach(function (title, index) {
+        headRow.appendChild(el("th", index > 0 ? "num" : "", title));
+      });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var tbody = el("tbody");
+      [
+        [t("risk.annualVol"), fmt(m.annual_vol, 2) + "%", t("risk.annualVolNote", { bench: fmt(m.benchmark_annual, 2) })],
+        [t("risk.maxDrawdown"), (m.max_drawdown === null ? t("value.none") : fmt(m.max_drawdown, 2) + "%"),
+          m.max_drawdown_days ? t("risk.maxDrawdownNote", { days: m.max_drawdown_days }) : ""],
+        [t("risk.sharpe"), fmt(m.sharpe, 2), t("risk.sharpeNote")],
+        [t("risk.alpha"), (m.alpha === null ? t("value.none") : fmtPct(m.alpha)), "R²=" + fmt(m.r2, 2)],
+        [t("risk.beta"), fmt(m.beta, 2), t("risk.betaNote")],
+        [t("risk.annualReturn"), fmtPct(m.annual_return), t("risk.riskFree", { rate: fmt(m.risk_free, 2), source: m.risk_free_source || "" })]
+      ].forEach(function (row) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "", row[0]));
+        tr.appendChild(el("td", "num", row[1]));
+        tr.appendChild(el("td", "", row[2] || "—"));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      body.appendChild(table);
+      body.appendChild(el("div", "pg-card-sub", data.caliber || ""));
+
+      var pairs = (data.correlation || []).filter(function (item) { return item.value !== null; });
+      if (pairs.length) {
+        body.appendChild(el("div", "pg-card-sub", t("risk.corrTitle")));
+        var corrBox = el("div", "risk-corr");
+        pairs.forEach(function (item) {
+          var line = el("div", "risk-corr-row");
+          line.appendChild(el("span", "", item.left + " ↔ " + item.right));
+          line.appendChild(el("b", item.high ? "down" : "", fmt(item.value, 3)
+            + (item.high ? t("risk.corrHigh") : "")));
+          corrBox.appendChild(line);
+        });
+        body.appendChild(corrBox);
+      }
+      if (!data.reliable) {
+        body.appendChild(el("div", "pg-card-sub", t("risk.notReliable", { days: data.sample_days })));
+      }
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      setError(body, error.message || t("state.errorHint"), loadPortfolioRisk);
+      body.setAttribute("data-state", "error");
+    });
+  }
+
+  // =============================================================
+  // 第七轮 M11：xlsx 一次性导入（base64 提交；预览 → 二次确认覆盖）
+  // =============================================================
+  /** 渲染 xlsx 导入区（文件选择 + 预览 + 确认）。
+   *
+   * @returns {void} 无返回值
+   */
+  function paintXlsxImport() {
+    var body = document.getElementById("p07-body");
+    if (!body) {
+      return;
+    }
+    body.innerHTML = "";
+    var bar = el("div", "page-toolbar");
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".xlsx,.xls";
+    input.id = "p07-file";
+    var previewBtn = el("button", "pg-btn primary", t("xlsx.preview"));
+    previewBtn.type = "button";
+    bar.appendChild(el("span", "pg-card-sub", t("xlsx.hint")));
+    bar.appendChild(input);
+    bar.appendChild(previewBtn);
+    body.appendChild(bar);
+    var result = el("div", "");
+    body.appendChild(result);
+    body.setAttribute("data-state", "default");
+
+    var cached = null; // {filename, content_base64}
+
+    /** 读取文件为 base64 并请求预览。
+     *
+     * @returns {void} 无返回值
+     */
+    function doPreview() {
+      var file = input.files && input.files[0];
+      if (!file) {
+        toast(t("xlsx.needFile"));
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        var dataUrl = String(reader.result || "");
+        var base64 = dataUrl.indexOf(",") >= 0 ? dataUrl.split(",")[1] : dataUrl;
+        cached = { filename: file.name, content_base64: base64 };
+        result.innerHTML = "";
+        result.appendChild(el("div", "pg-state", t("xlsx.parsing")));
+        apiSend("POST", "/api/portfolio/import-xlsx", {
+          filename: cached.filename, content_base64: cached.content_base64, confirm: false
+        }).then(function (data) {
+          renderPreview(data);
+        }).catch(function (error) {
+          result.innerHTML = "";
+          result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
+          body.setAttribute("data-state", "error");
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    /** 渲染预览表（标红不可导入行 + 确认按钮）。
+     *
+     * @param {Object} data 预览结果
+     * @returns {void} 无返回值
+     */
+    function renderPreview(data) {
+      result.innerHTML = "";
+      var summary = data.summary || {};
+      var kpis = el("div", "pg-kpis");
+      [
+        [t("xlsx.kpi.total"), String(summary.total || 0)],
+        [t("xlsx.kpi.importable"), String(summary.importable || 0)],
+        [t("xlsx.kpi.rejected"), String(summary.rejected || 0)]
+      ].forEach(function (pair) {
+        var box = el("div", "pg-kpi");
+        box.appendChild(el("div", "pg-kpi-k", pair[0]));
+        box.appendChild(el("div", "pg-kpi-v flat", pair[1]));
+        kpis.appendChild(box);
+      });
+      result.appendChild(kpis);
+
+      var table = el("div", "table-scroll");
+      renderTable(table, [
+        { key: "line", title: "#", num: true },
+        { key: "symbol", title: t("xlsx.col.symbol"), render: function (row) {
+            return el("b", row.ok ? "" : "down", row.symbol);
+          } },
+        { key: "name", title: t("xlsx.col.name") },
+        { key: "market", title: t("xlsx.col.market") },
+        { key: "shares", title: t("xlsx.col.shares"), num: true, render: function (row) { return fmt(row.shares, 2); } },
+        { key: "cost", title: t("xlsx.col.cost"), num: true, render: function (row) { return fmt(row.cost, 2); } },
+        { key: "price", title: t("xlsx.col.price"), num: true, render: function (row) { return fmt(row.price, 2); } },
+        { key: "value", title: t("xlsx.col.value"), num: true, render: function (row) { return fmt(row.value, 0); } },
+        { key: "status", title: t("xlsx.col.status"), render: function (row) {
+            if (row.ok) {
+              return el("span", "down", t("xlsx.ok"));
+            }
+            return el("span", "up", (row.errors || []).join("；"));
+          } }
+      ], data.rows || [], {});
+      result.appendChild(table);
+      (data.warnings || []).forEach(function (note) {
+        result.appendChild(el("div", "pg-card-sub", note));
+      });
+
+      var bar2 = el("div", "page-toolbar");
+      var confirmBtn = el("button", "pg-btn primary", t("xlsx.confirm"));
+      confirmBtn.type = "button";
+      confirmBtn.disabled = !(summary.importable > 0);
+      confirmBtn.addEventListener("click", function () {
+        if (!cached) {
+          return;
+        }
+        confirmBtn.disabled = true;
+        apiSend("POST", "/api/portfolio/import-xlsx", {
+          filename: cached.filename, content_base64: cached.content_base64, confirm: true
+        }).then(function (payload) {
+          var done = payload.result || {};
+          toast(t("xlsx.importedToast", { count: done.imported || 0 }));
+          result.innerHTML = "";
+          result.appendChild(el("div", "pg-state",
+            t("xlsx.importedNote", { count: done.imported || 0, skipped: done.skipped || 0 })));
+          loadPortfolio();
+          loadPortfolioRisk();
+        }).catch(function (error) {
+          toast(error.message || t("state.errorHint"));
+          confirmBtn.disabled = false;
+        });
+      });
+      bar2.appendChild(confirmBtn);
+      bar2.appendChild(el("span", "pg-card-sub", t("xlsx.overwriteNote")));
+      result.appendChild(bar2);
+      body.setAttribute("data-state", "default");
+    }
+
+    previewBtn.addEventListener("click", doPreview);
   }
 
   /** 拉取持仓与分析。

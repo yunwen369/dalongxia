@@ -1492,3 +1492,14 @@
 .bell-badge { font-size: 10px; line-height: 1; padding: 1px 5px; border-radius: 10px; background: var(--danger); color: #fff; margin-left: 3px; vertical-align: middle; }
 
 /* ---- M9 进度条（构建中状态卡复用 pg-state，无需额外类） ---- */
+
+/* =============================================================
+ * 第七轮 M10 / M12：组合风险相关性 + 拥挤度热力条
+ * ============================================================= */
+.risk-corr { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 4px; }
+.risk-corr-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-widget); font-size: 12px; }
+.risk-corr-row span { color: var(--text-dim); }
+.risk-corr-row b { font-variant-numeric: tabular-nums; }
+
+.crowd-heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; margin: 8px 0 6px; }
+.crowd-heat-cell { padding: 8px 4px; border-radius: var(--radius-sm); text-align: center; font-size: 11px; color: var(--text); border: 1px solid var(--border); cursor: default; }
