@@ -218,14 +218,23 @@ def main() -> int:
     uninstaller = upgrade / "uninstall.exe"
     code3 = -1
     if uninstaller.exists():
+        # NSIS 卸载器会把自身复制到临时目录后**异步**执行：run() 返回的是启动器退出码，
+        # 立即判断会误报「卸载未清理」。此处轮询等待程序文件消失（最长 90s）。
         subprocess.run(f'"{uninstaller}" /S', shell=False, capture_output=True, timeout=180)
-        time.sleep(6)
         code3 = 0
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if not (upgrade / "OpenBB-CN.exe").exists() and not (upgrade / "_internal").is_dir():
+                time.sleep(2)  # 等注册表项与快捷方式删除落地
+                break
+            time.sleep(1.5)
     leftover_exe = (upgrade / "OpenBB-CN.exe").exists()
+    leftover_internal = (upgrade / "_internal").is_dir()
     # NSIS 保留 data/（用户数据），只要求程序文件清空
-    record("卸载", bool((not leftover_exe) and code3 == 0), {
+    record("卸载", bool((not leftover_exe) and (not leftover_internal) and code3 == 0), {
         "uninstaller_exit": code3,
         "exe_removed": not leftover_exe,
+        "internal_removed": not leftover_internal,
         "data_kept_by_design": (upgrade / "data").exists(),
     })
 
