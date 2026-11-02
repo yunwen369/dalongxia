@@ -776,6 +776,34 @@ def get_sector_kline(board: str, period: str = "daily", market: str = "cn") -> D
     raise ValueError("板块 K 线全部通道失败：" + "，".join(errors))
 
 
+def is_known_board(board: str) -> bool:
+    """判断板块名是否存在于任一板块名录（同花顺行业 / 腾讯概念 / 申万映射）。
+
+    用途：把「板块名写错」与「通道故障」区分开 —— 前者是空态（给可选列表指引），
+    后者是错误态（提示稍后重试），符合原型 §7.1「空/错严格分离」。
+
+    Args:
+        board: 板块名。
+
+    Returns:
+        bool: 名录中存在返回 True。
+    """
+    name = str(board or "").strip()
+    if not name:
+        return False
+    try:
+        if name in ths_http.get_industry_codes():
+            return True
+    except Exception:  # noqa: BLE001 - 名录不可用时不阻断判断
+        pass
+    try:
+        if _tencent_board_code(name, "concept"):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return name in SW_INDEX_CODE
+
+
 def _kline_sw(board: str, period: str) -> List[Dict[str, Any]]:
     """申万行业指数日线（纯 HTTP 备源，冻结环境可用）。
 
@@ -1265,13 +1293,28 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     for row in rows:
         name = row.get("name")
         tier = _flow_tier(name, row.get("code")) or {}
+        if tier.get("super_big") is not None:
+            # 口径一致性（2026-11-02 交叉验证发现）：同花顺「净流入」与新浪四档聚合
+            # 属两套统计口径（前者主力单口径，后者全单四档），直接并列会让「四档之和
+            # 大于净额」。故**同一行只用一套口径**：已聚合板块的净额/流入/流出
+            # 一律取新浪聚合值，四档与净额同源自洽；未聚合板块仍用同花顺。
+            net_inflow = tier.get("net_inflow")
+            inflow = tier.get("inflow")
+            outflow = tier.get("outflow")
+            flow_source = "新浪（成分股四档聚合）"
+        else:
+            net_inflow = _round(_num(row.get("net_inflow")), 2)
+            inflow = _round(_num(row.get("inflow")), 2)
+            outflow = _round(_num(row.get("outflow")), 2)
+            flow_source = "同花顺"
         items.append(
             {
                 "name": name,
                 "pct": _round(_num(row.get("pct"))),
-                "net_inflow": _round(_num(row.get("net_inflow")), 2),
-                "inflow": _round(_num(row.get("inflow")), 2),
-                "outflow": _round(_num(row.get("outflow")), 2),
+                "net_inflow": _round(_num(net_inflow), 2),
+                "inflow": _round(_num(inflow), 2),
+                "outflow": _round(_num(outflow), 2),
+                "flow_source": flow_source,
                 # 四档：由成分股四档聚合（真实值）；未预热到的板块为 None
                 "super_big": tier.get("super_big"),
                 "big": tier.get("big"),
@@ -1865,6 +1908,7 @@ def start_rankings_bg(key_kind: str, limit: int, cache_key: str) -> None:
         _RANKINGS_IN_FLIGHT[cache_key] = True
 
     def _runner() -> None:
+        """后台线程体：扫描排行并写缓存（失败仅记日志，不抛出）。"""
         try:
             result = _scan_rankings(key_kind, limit)
             from backend.app.core import cache as _cache2
@@ -2016,6 +2060,15 @@ def _constituent_correlation(
         rets[code] = rets[code][-min_len:]
 
     def _corr(a: List[float], b: List[float]) -> Optional[float]:
+        """两条收益率序列的皮尔逊相关系数。
+
+        Args:
+            a: 序列 A。
+            b: 序列 B。
+
+        Returns:
+            Optional[float]: 相关系数；样本不足 5 或方差为 0 返回 None。
+        """
         if len(a) != len(b) or len(a) < 5:
             return None
         ma = sum(a) / len(a)

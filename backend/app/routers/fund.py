@@ -9,7 +9,7 @@
 - GET /performance  阶段业绩/排名/分年度/定投（蛋卷 derived）
 - GET /drawdown     最大回撤（净值自算）
 - GET /dividend     分红记录（东财 fhsp HTML）
-- GET /position     持仓分布（蛋卷需登录，依规范禁用并如实标注）
+- GET /position     持仓分布（东财 F10 行业配置，季报口径）
 
 统一返回 {data,error,error_code}；`source/caliber` 如实标注「T+1 公布净值」，不得伪装盘中实时。
 """
@@ -214,6 +214,10 @@ def fund_nav(
     result = _run(f"fund:nav:{symbol}:{page}:{size}", config.TTL["fund_nav"],
                   lambda: fund_provider.get_nav(symbol, page, size))
     if result["error"]:
+        # 代码不存在 → NOT_FOUND（快速失败）；通道异常 → UPSTREAM_ERROR（可重试）
+        if result.get("error_type") == "NotFoundError":
+            return api_error(ErrorCode.NOT_FOUND, f"未找到基金代码 {symbol}，请核对后重试。",
+                             data={"items": [], "code": symbol})
         return api_error(ErrorCode.UPSTREAM_ERROR, "净值历史暂不可用，请稍后点击刷新重试。",
                          data={"items": [], "code": symbol})
     data = result["data"]

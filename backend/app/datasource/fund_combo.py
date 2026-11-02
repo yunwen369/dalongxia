@@ -781,6 +781,16 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
         dd_hist.append(_max_drawdown(navs[i - 59: i + 1]))
 
     def _rank(hist, current, higher_is_worse=True):
+        """把当前值换算成 0–100 分位。
+
+        Args:
+            hist: 历史样本序列。
+            current: 当前值。
+            higher_is_worse: 值越大是否越“拥挤”。
+
+        Returns:
+            Optional[float]: 分位；样本不足 30 个返回 None。
+        """
         if current is None or len(hist) < 30:
             return None
         if higher_is_worse:

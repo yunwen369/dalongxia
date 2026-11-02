@@ -420,16 +420,19 @@ def sector_kline(
 
     result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
-        # 板块指数 K 线属派生能力：同花顺禁用后由申万指数承接（§13.6-2），
-        # 申万名录未收录该板块名时按「空态 + 中文说明」处理，不伪装成通道故障。
-        return _pack(
-            {"items": [], "board": board, "period": period, "market": public_market, "available": False},
-            "本地口径",
-            "暂未收录该板块的指数序列（同花顺通道在安装版不可用，申万行业名录未覆盖该名称）。"
-            "可查看板块行情或用同源行业（如「半导体设备」）对比。",
-            None,
-            "不可用",
-            False,
+        # 空/错分离（原型 §7.1）：板块名写错属空态（给下一步动作），
+        # 通道故障属错误态（可重试）。第八轮起同花顺已走纯 HTTP，不再有
+        # 「安装版不可用」这一说，此前的降级文案一并下线。
+        if not sector_provider.is_known_board(board):
+            return api_error(
+                ErrorCode.EMPTY_DATA,
+                f"板块名录中未收录「{board}」，请从板块行情列表选择，或核对名称后重试。",
+                data={"items": [], "board": board, "period": period, "market": public_market},
+            )
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            f"「{board}」的指数序列本次取数失败，请稍后点击刷新重试。",
+            data={"items": [], "board": board, "period": period, "market": public_market},
         )
     data = result["data"] or {}
     items = data.get("items") or []
@@ -556,7 +559,9 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
-            [("同花顺", "同花顺/行业资金流（净额·流入·流出）+ 成分股四档聚合（超大单/大单/中单/小单）",
+            [("同花顺", "同花顺/行业资金流 + 成分股新浪四档聚合（超大单/大单/中单/小单）；"
+                        "已聚合板块整行取新浪口径、未聚合板块取同花顺口径，"
+                        "每行 flow_source 标明，两套口径不可跨行相加",
               sector_provider.get_fundflow)],
             empty_value=[],
         )

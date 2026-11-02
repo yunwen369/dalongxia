@@ -304,6 +304,11 @@ def get_nav(code: str, page: int = 1, size: int = 30) -> Dict[str, Any]:
         for row in rows
     ]
     if not items:
+        # 东财明确返回「0 条」= 该基金代码不存在（不是通道故障）→ 快速失败为 NOT_FOUND，
+        # 与「通道异常」区分开（空/错分离，规范 §6.3 + 原型 §7.1）。
+        total_count = utils.to_int(payload.get("TotalCount"))
+        if total_count == 0 or payload.get("ErrCode") in (0, None):
+            raise NotFoundError(f"未找到基金代码 {code} 的净值记录")
         raise ValueError(f"净值通道均无数据：{code}")
     total = utils.to_int(payload.get("TotalCount"))
     return {

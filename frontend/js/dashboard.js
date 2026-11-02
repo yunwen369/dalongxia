@@ -433,6 +433,9 @@
               pick: "items", x: "date", y: "nav", labels: false },
     "F-05": { kind: "table", path: "/api/fund/dividend", params: { code: "017811" }, pick: "items",
               cols: ["date", "dividend", "type"] },
+    // F-06 持仓分布（第八轮：东财 F10 行业配置，季报口径；原「需登录禁用」已解除）
+    "F-06": { kind: "table", path: "/api/fund/position", params: { code: "017811" },
+              pick: "items", cols: ["industry", "pct"] },
     // 组合 / 自选
     "P-04": { kind: "table", path: "/api/portfolio/analysis", params: {}, pick: "distribution",
               cols: ["label", "count", "value_cny", "ratio"] },
@@ -472,8 +475,7 @@
     "Y-01": { control: true, reason: "合规告知书为一次性确认控件，请在养基宝页阅读" },
     "Y-02": { control: true, reason: "绑定状态为连接器状态控件，请在养基宝页查看" },
     "Y-03": { control: true, reason: "扫码绑定需交互，无法作为自动刷新组件" },
-    "N-04": { control: false, reason: "AI 复核需手动触发（POST 接口），不作为自动刷新组件" },
-    "F-06": { control: false, reason: "基金持仓分布需登录蛋卷账号，依规范已禁用该通道；可改用「F-04 重仓股」" }
+    "N-04": { control: false, reason: "AI 复核需手动触发（POST 接口），不作为自动刷新组件" }
   };
 
   /** 表头本地化映射（字段名 → i18n key）。 */
@@ -481,6 +483,7 @@
     name: "th.name", code: "th.code", symbol: "th.code", pct: "th.pct", amount: "th.amount",
     lead_stock: "th.leadStock", lead_pct: "th.leadPct", net_inflow: "th.netInflow",
     inflow: "th.inflow", outflow: "th.outflow", super_big: "th.superBig", big: "th.big",
+    industry: "th.industry",
     period: "th.period", growth: "th.growth", rank: "th.rank", ratio: "th.weight",
     value: "th.value", price: "th.price", market_value: "th.value", pnl: "th.pnl",
     pnl_pct: "th.pnlPct", market_label: "th.market", time: "th.time", title: t("th.title")

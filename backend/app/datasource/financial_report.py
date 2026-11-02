@@ -879,6 +879,11 @@ def search_filings(
     key = f"finsearch:{market}:{q.strip()}:{type_value}:{since}:{page}:{page_size}"
 
     def _load() -> Dict[str, Any]:
+        """逐页拉取公告检索结果（供缓存未命中时调用）。
+
+        Returns:
+            Dict[str, Any]: {items, total, sources, calibers} 结构的分页结果。
+        """
         rows: List[Dict[str, str]] = []
         total = 0
         sources: List[str] = []

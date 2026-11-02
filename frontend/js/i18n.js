@@ -522,6 +522,7 @@
     "th.outflow": "流出(亿元)",
     "th.superBig": "超大单(亿元)",
     "th.big": "大单(亿元)",
+    "th.industry": "行业",
     "th.capability": "能力",
 
     // ---------- 仪表板 ----------

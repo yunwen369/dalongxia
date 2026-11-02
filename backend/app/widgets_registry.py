@@ -209,7 +209,7 @@ WIDGETS: List[Dict[str, Any]] = [
     _widget("F-05", "#/fund", "档案与分红", ".g-5", ["/api/fund/info", "/api/fund/dividend"],
             desc="蛋卷档案 + 东财分红（每10份派现）"),
     _widget("F-06", "#/fund", "持仓分布", ".g-5", ["/api/fund/position"],
-            desc="蛋卷持仓分布需登录（rc=300001），依规范禁用并说明"),
+            desc="行业配置（天天基金 F10，季报口径），占比=行业市值/基金净值"),
 
     # ---------- #/portfolio（4 个，批次 5.3） ----------
     _widget("P-01", "#/portfolio", "持仓汇总", ".g-12", ["/api/portfolio/analysis"],

@@ -311,6 +311,14 @@ def _annual_reports(today: Any, count: int = 3) -> List[str]:
     from datetime import date as _date
 
     def disclosed(year: int) -> bool:
+        """判断某年度报告是否已到披露截止日。
+
+        Args:
+            year: 报告年度（如 2025 表示 2025 年报）。
+
+        Returns:
+            bool: 已过 Y+1 年 4/30 则视为已披露完毕。
+        """
         # Y 年报在 Y+1 年 4/30 前披露完毕，5/1 起视为可用
         return today >= _date(year + 1, 5, 1)
 
@@ -978,6 +986,14 @@ def _dividend_yield_batch(
         return result
 
     def _work(item: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+        """单只候选的股息率计算（并发任务体，异常在调用方兜底）。
+
+        Args:
+            item: 候选行（含 code / close）。
+
+        Returns:
+            Tuple[str, Optional[float]]: (代码, 股息率%)。
+        """
         code = str(item.get("code") or "")
         value = _dividend_yield(code, utils.to_float(item.get("close")))
         _DIVIDEND_CACHE[code] = (now + 1800, value)  # 30 分钟进程内缓存
