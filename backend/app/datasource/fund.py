@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -78,7 +79,7 @@ def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
     Returns:
         float | None: 数值；无法解析时返回 None（不补 0）。
     """
-    return None if value is None else round(value, digits)
+    return utils.round_or_none(value, digits)
 
 
 def _danjuan(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -953,6 +954,85 @@ def get_drawdown(code: str, start: str = "", end: str = "") -> Dict[str, Any]:
         "sample_size": len(items),
         "sample_from": items[0]["date"],
     }
+
+
+def get_position(code: str) -> Dict[str, Any]:
+    """基金持仓分布（行业配置，东财 F10 ``/f10/HYPZ/`` 接口，纯 HTTP）。
+
+    2026-11-02 第八轮：原实现依赖蛋卷 ``/djapi/fund/position``，该端点需登录
+    （rc=300001）被禁用（降级点 G-9）。改用天天基金 F10「行业配置」接口：
+    按报告期返回各行业市值与**占净值比例**，可完整替代「持仓分布」视图。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        Dict[str, Any]: {code, name, report_date, items: [{industry, market_value, pct}],
+        source, caliber}
+
+    Raises:
+        ValueError: 接口无数据或结构异常。
+    """
+    payload = _em_f10("HYPZ", code, {"year": ""})
+    data = payload.get("Data") or {}
+    quarters = data.get("QuarterInfos") or []
+    if not quarters:
+        raise ValueError(f"东财行业配置无数据：{code}")
+    latest = quarters[0]
+    rows = latest.get("HYPZInfo") or []
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        pct = utils.to_float(row.get("ZJZBL"))
+        if pct is None:
+            continue
+        items.append(
+            {
+                "industry": row.get("HYMC"),
+                "code": row.get("HYDM"),
+                "market_value": utils.to_float(row.get("SZ")),
+                "pct": round(pct, 2),
+            }
+        )
+    items.sort(key=lambda item: item["pct"], reverse=True)
+    if not items:
+        raise ValueError(f"东财行业配置为空：{code}")
+    return {
+        "code": code,
+        "name": data.get("ShortName"),
+        "report_date": str(latest.get("JZRQ") or "")[:10],
+        "items": items,
+        "source": "东财 F10",
+        "caliber": (
+            f"天天基金 F10 行业配置（报告期 {str(latest.get('JZRQ') or '')[:10]}），"
+            "行业按证监会行业分类，占比=该行业市值/基金净值；季报口径，非实时"
+        ),
+    }
+
+
+def _em_f10(path: str, code: str, extra: Dict[str, Any]) -> Dict[str, Any]:
+    """请求天天基金 F10 JSON 接口（需 Referer，纯 HTTP）。
+
+    Args:
+        path: 接口名（HYPZ=行业配置 / ZCPZ=资产配置 …）。
+        code: 6 位基金代码。
+        extra: 额外查询参数。
+
+    Returns:
+        Dict[str, Any]: 解析后的 JSON；失败返回空字典。
+
+    Raises:
+        ValueError: 响应不是合法 JSON。
+    """
+    params = {"fundCode": code}
+    params.update(extra)
+    text = utils.http_get_text(
+        f"https://api.fund.eastmoney.com/f10/{path}/",
+        params=params,
+        referer="https://fundf10.eastmoney.com/",
+        encoding="utf-8",
+        timeout=config.DATASOURCE_TIMEOUT,
+    )
+    return json.loads(text)
 
 
 def get_dividend(code: str) -> Dict[str, Any]:

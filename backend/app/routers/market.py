@@ -23,7 +23,7 @@ from fastapi import APIRouter, Query
 from backend.app import config
 from backend.app.datasource import utils
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error
 from backend.app.core.resilient import circuit_open, trip_circuit, with_fallback
 from backend.app.datasource import ashare, overseas, tencent
 
@@ -117,17 +117,7 @@ def _pack(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update(
-        {
-            "source": source,
-            "caliber": caliber,
-            "as_of": as_of,
-            "market_status": market_status,
-            "is_realtime": bool(is_realtime),
-        }
-    )
-    return ok(payload)
+    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _kline_status(items: List[Dict[str, Any]]) -> tuple[Optional[str], str, bool]:
@@ -478,10 +468,18 @@ def market_minute(
                 ("新浪", f"新浪/{period_value}分钟", lambda: ashare.get_minute_sina(code, period_value)),
                 ("腾讯", "腾讯/1分钟", lambda: tencent.get_minute(code, normalized_market, period_value)),
             ]
-        else:
-            # 港美股分时：东财无稳定免费通道，实际走腾讯 1 分钟
+        elif normalized_market == "us":
+            # 第八轮：美股分时补入新浪通道（1/5/15/30 分钟，纯 HTTP）；
+            # 腾讯仅返回最新一笔，降为末级兜底。
             candidates = [
-                ("腾讯", "腾讯/1分钟（港美股唯一可用免费通道）",
+                ("新浪", f"新浪美股/{period_value}分钟",
+                 lambda: overseas.get_minute_sina_us(code, period_value)),
+                ("腾讯", "腾讯/最新一笔",
+                 lambda: overseas.get_minute(code, normalized_market)),
+            ]
+        else:
+            candidates = [
+                ("腾讯", "腾讯/1分钟（港股，纯 HTTP）",
                  lambda: overseas.get_minute(code, normalized_market))
             ]
         # key：分时冷启动同样走备源优先级记忆（P1-04）
@@ -491,15 +489,15 @@ def market_minute(
     if result.get("error"):
         return _failure(result, {"items": [], "symbol": code, "market": normalized_market})
     items = result["data"]
-    # 美股分时：腾讯免费接口仅返回最新一笔，东财通道本机被重置 → 如实标注不可用，
-    # 不用单点数据画假分时图（§7 空态与错误态严格区分）。
+    # 美股分时：主源已是新浪（1/5/15/30 分钟，约千点）。若只剩腾讯单点，说明新浪通道
+    # 当次失败，属瞬时异常 → 返回空 + 说明，让前端走「重试」而不是把单点画成分时图。
     if normalized_market == "us" and len(items) < 5:
         return _pack(
             {"items": [], "symbol": code, "market": "us", "available": False},
-            "腾讯",
-            "美股分时免费接口不可用：腾讯仅返回最新一笔，东财通道本机被重置（D3 缺口）",
+            result["source"] or "腾讯",
+            "美股分时本次仅取到单点数据（新浪分时通道本次异常，腾讯仅返回最新一笔），请稍后重试",
             items[0].get("time") if items else None,
-            "不可用",
+            "通道异常",
             False,
         )
     last = items[-1] if items else {}

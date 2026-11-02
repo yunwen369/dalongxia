@@ -54,6 +54,14 @@ def _ensure_netfix() -> None:
     _NETFIX_DONE = True
 
 
+# 模块级一次性导入 akshare（单线程、netfix 之后）。
+# 禁止在函数/线程内并发 import akshare：首次导入会初始化 py_mini_racer(V8)，
+# 多线程并发首次创建 MiniRacer 上下文 → PartitionAlloc 双初始化 → 进程级 FATAL 崩溃
+# （2026-11-02 实测：_dividend_yield_batch 的 6 线程并发 import 触发）。
+_ensure_netfix()
+import akshare as ak  # noqa: E402
+
+
 def _now_text() -> str:
     """北京时间文本（禁裸 date.today，时区收口）。"""
     return utils.now_text(utils.bj_now())
@@ -83,6 +91,16 @@ def _write_snapshot(payload: Dict[str, Any]) -> None:
         payload: 快照载荷。
     """
     atomic.atomic_write_json(SNAPSHOT_FILE, payload, ensure_ascii=False)
+
+
+def snapshot_ready() -> bool:
+    """判断本地全市场快照是否已建库（供服务启动预热判断是否自动构建）。
+
+    Returns:
+        bool: 快照文件存在且有行数据时为 True。
+    """
+    payload = _read_snapshot()
+    return bool(payload.get("rows"))
 
 
 def get_snapshot_meta() -> Dict[str, Any]:
@@ -317,7 +335,7 @@ def _load_yjbb(reports: List[str]) -> Dict[str, Dict[str, Dict[str, Optional[flo
             {code: {report: {roe, gross, rev_yoy, np_yoy}}}。
     """
     _ensure_netfix()
-    import akshare as ak
+    # akshare 已在模块顶层导入，此处直接使用模块级 `ak`
 
     result: Dict[str, Dict[str, Dict[str, Optional[float]]]] = {}
     for report in reports:
@@ -351,7 +369,7 @@ def _load_zcfz(reports: List[str]) -> Dict[str, Dict[str, Dict[str, Optional[flo
             {code: {report: {debt_ratio}}}。
     """
     _ensure_netfix()
-    import akshare as ak
+    # akshare 已在模块顶层导入，此处直接使用模块级 `ak`
 
     result: Dict[str, Dict[str, Dict[str, Optional[float]]]] = {}
     for report in reports:
@@ -380,7 +398,7 @@ def _load_xjll(reports: List[str]) -> Dict[str, Dict[str, Dict[str, Optional[flo
             {code: {report: {ocf, ncf}}}。
     """
     _ensure_netfix()
-    import akshare as ak
+    # akshare 已在模块顶层导入，此处直接使用模块级 `ak`
 
     result: Dict[str, Dict[str, Dict[str, Optional[float]]]] = {}
     for report in reports:
@@ -652,6 +670,9 @@ FACTOR_META: Dict[str, Dict[str, str]] = {
     "np_yoy": {"label": "净利同比", "unit": "%", "kind": "finance"},
     "debt_ratio": {"label": "资产负债率", "unit": "%", "kind": "finance", "exempt_fin": True},
     "ocf": {"label": "经营现金流净额", "unit": "元", "kind": "finance"},
+    # 第七轮 M13 补齐：股息率（派息比例/收盘价）。快照不含此字段，故不进 SNAPSHOT_ROW_FIELDS，
+    # 由 run_candidates 对**已通过其余规则的候选**逐只按需拉取（并发 + 缓存），不扫全市场 5577 只。
+    "dividend_yield": {"label": "股息率（近一年派息/收盘）", "unit": "%", "kind": "dividend"},
 }
 # 允许的因子键（防注入白名单）
 FACTOR_KEYS = set(FACTOR_META) | {"roe_years_any"}
@@ -798,14 +819,184 @@ CANDIDATE_TEMPLATE = {
         {"factor": "roe_min", "label": "ROE（近 3 年最弱）", "op": "gte", "value": 10, "note": "近 3 年年报最弱一年 ≥10%"},
         {"factor": "debt_ratio", "label": "资产负债率", "op": "lte", "value": 60, "note": "金融业自动豁免并标注"},
         {"factor": "pe", "label": "PE-TTM", "op": "lte", "value": 40, "note": "PE-TTM ≤40"},
-        {"factor": "gross", "label": "销售毛利率", "op": "gte", "value": 30, "note": "毛利率 ≥30%（质量代理）"},
+        {"factor": "gross", "label": "销售毛利率", "op": "gte", "value": 30, "note": "毛利率 ≥30%"},
         {"factor": "roe_trend", "label": "ROE 趋势", "op": "gte", "value": 0, "note": "ROE 逐年不下滑（新 ≥ 旧）"},
+        # 第七轮 M13 补齐：股息率作为模板规则之一（对已通过前四条的候选逐只按需拉取，
+        # 不扫全市场；分红数据缺失的标的如实标 None 并排除，不冒充）
+        {"factor": "dividend_yield", "label": "股息率", "op": "gte", "value": 1.0,
+         "note": "近一年派息/收盘 ≥1.0%（分红数据无 SLA，缺失则不满足）"},
     ],
 }
 
+
+# 股息率逐只拉取的内存缓存（TTL 由调用方控制；进程内去重避免重复请求）
+_DIVIDEND_CACHE: Dict[str, Tuple[float, Optional[float]]] = {}
+
+
+# 全市场分红映射缓存：(时间戳, {code: 每10股派息元})
+_DIVIDEND_MAP: Dict[str, Tuple[float, Dict[str, float]]] = {}
+_DIVIDEND_MAP_TTL = 86400  # 分红方案按年披露，缓存 24 小时
+
+
+def _load_dividend_map() -> Dict[str, float]:
+    """一次性拉取全市场最近一个年度分红方案（东财 datacenter，纯 HTTP）。
+
+    2026-11-02 第八轮：原实现逐只调用 ``stock_dividend_cninfo``（巨潮，经 V8 签名），
+    冻结形态不可用且 5577 只逐个拉取不可行。改用东财 datacenter 的
+    ``RPT_SHAREBONUS_DET``（分红送配，免鉴权、纯 HTTP），按最近两个年度报告期
+    一次性分页取回，得到 {代码: 每 10 股派息(元)}；同一代码取最新报告期。
+
+    Returns:
+        Dict[str, float]: 代码 → 每 10 股派息（元）；通道不可用时返回空字典（不抛）。
+    """
+    cached = _DIVIDEND_MAP.get("data")
+    if cached and time.time() - cached[0] < _DIVIDEND_MAP_TTL:
+        return cached[1]
+    mapping: Dict[str, float] = {}
+    current_year = utils.bj_now().year
+    for report_year in (current_year - 1, current_year - 2):
+        page = 1
+        while page <= 12:
+            payload = _datacenter_page(
+                "RPT_SHAREBONUS_DET",
+                {
+                    "sortColumns": "REPORT_DATE",
+                    "sortTypes": "-1",
+                    "pageSize": 500,
+                    "pageNumber": page,
+                    "filter": f"(REPORT_DATE='{report_year}-12-31')",
+                },
+            )
+            rows = ((payload.get("result") or {}).get("data") or [])
+            if not rows:
+                break
+            for row in rows:
+                code = str(row.get("SECURITY_CODE") or "").strip()
+                per_10 = utils.to_float(row.get("PRETAX_BONUS_RMB"))
+                if not code or per_10 is None or per_10 <= 0:
+                    continue
+                # 最新报告期优先：先写入的年份更新，后面的年份不覆盖
+                mapping.setdefault(code, per_10)
+            if len(rows) < 500:
+                break
+            page += 1
+    if mapping:
+        _DIVIDEND_MAP["data"] = (time.time(), mapping)
+        logger.info("全市场分红映射已更新：%d 只", len(mapping))
+    return mapping
+
+
+def _datacenter_page(report_name: str, extra: Dict[str, Any]) -> Dict[str, Any]:
+    """请求东财 datacenter 报表一页（复用统一会话与异常转译）。
+
+    Args:
+        report_name: 报表名（如 ``RPT_SHAREBONUS_DET``）。
+        extra: 额外查询参数（分页/排序/过滤）。
+
+    Returns:
+        Dict[str, Any]: 解析后的 JSON；失败返回空字典。
+    """
+    import json
+
+    from backend.app.core import netfix
+
+    params = {"reportName": report_name, "columns": "ALL", "source": "WEB", "client": "WEB"}
+    params.update(extra)
+    session = netfix.make_session()
+    try:
+        response = session.get(
+            config.EASTMONEY_DATACENTER_URL,
+            params=params,
+            headers={
+                "User-Agent": config.BROWSER_USER_AGENT,
+                "Referer": config.EASTMONEY_REFERER,
+            },
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
+        response.raise_for_status()
+        return json.loads(response.text) or {}
+    except Exception as exc:  # noqa: BLE001 - 分红数据缺失不影响筛选主流程
+        logger.info("东财分红报表请求失败：%s", type(exc).__name__)
+        return {}
+    finally:
+        session.close()
+
+
+def _dividend_yield(code: str, close: Optional[float]) -> Optional[float]:
+    """取某只 A 股的近一年股息率（每 10 股派息 / 10 / 收盘价 × 100）。
+
+    数据源：东财 datacenter ``RPT_SHAREBONUS_DET``（分红送配，纯 HTTP 免鉴权），
+    全市场映射一次性加载后按代码查表（缓存 24 小时）。缺值返回 None，不冒充。
+
+    Args:
+        code: 6 位 A 股代码。
+        close: 快照收盘价（元）。
+
+    Returns:
+        Optional[float]: 股息率（%）；不可得时 None。
+    """
+    if not close or close <= 0:
+        return None
+    mapping = _load_dividend_map()
+    per_10 = mapping.get(str(code))
+    if per_10 is None:
+        return None
+    return round((per_10 / 10) / close * 100, 2)
+
+
+def _dividend_yield_batch(
+    items: List[Dict[str, Any]],
+    *,
+    max_workers: int = 6,
+) -> Dict[str, Optional[float]]:
+    """对一批候选逐只并发拉股息率，返回 {code: yield}。
+
+    已经内存缓存的代码直接复用，避免重复请求。
+
+    Args:
+        items: 候选行（含 code / close）。
+        max_workers: 并发数。
+
+    Returns:
+        Dict[str, Optional[float]]: code → 股息率（%）。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    now = time.time()
+    result: Dict[str, Optional[float]] = {}
+    todo: List[Dict[str, Any]] = []
+    for item in items:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        cached = _DIVIDEND_CACHE.get(code)
+        if cached and cached[0] > now:
+            result[code] = cached[1]
+        else:
+            todo.append(item)
+    if not todo:
+        return result
+
+    def _work(item: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+        code = str(item.get("code") or "")
+        value = _dividend_yield(code, utils.to_float(item.get("close")))
+        _DIVIDEND_CACHE[code] = (now + 1800, value)  # 30 分钟进程内缓存
+        return code, value
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 6))) as pool:
+        futures = {pool.submit(_work, item): item for item in todo}
+        for future in as_completed(futures):
+            try:
+                code, value = future.result()
+                result[code] = value
+            except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
+                logger.info("股息率并发拉取异常：%s", type(exc).__name__)
+    return result
+
 CANDIDATE_MISSING = (
-    "股息率因子未纳入：M9 快照不含股息率字段（需另接分红数据，逐只拉取成本高），"
-    "本次以「毛利率 ≥30%」作质量代理；如需股息率筛选，请在筛选器页自定义条件后人工复核"
+    "股息率（M13 补齐）：快照不含此字段，对已通过其余四条规则的候选逐只按需拉取"
+    "「分红记录 cninfo」取近一年派息比例/收盘价计算，不扫全市场 5577 只；"
+    "分红数据无 SLA，缺失时如实标 None 不冒充"
 )
 
 
@@ -839,10 +1030,14 @@ def run_candidates(
 
     matched: List[Dict[str, Any]] = []
     exempt_count = 0
+    # M13：股息率快照不含，需逐只按需拉取 → 先按快照可得的规则筛出候选，再对候选补拉股息率
+    on_demand_rules = [r for r in CANDIDATE_TEMPLATE["rules"] if r["factor"] == "dividend_yield"]
+    snapshot_rules = [r for r in CANDIDATE_TEMPLATE["rules"] if r["factor"] != "dividend_yield"]
+
     for row in rows:
         keep = True
         exempted: List[str] = []
-        for rule in CANDIDATE_TEMPLATE["rules"]:
+        for rule in snapshot_rules:
             factor = rule["factor"]
             value = float(rule["value"])
             if factor == "roe_trend":
@@ -890,11 +1085,29 @@ def run_candidates(
             "gross": row.get("gross"),
             "debt_ratio": row.get("debt_ratio"),
             "exempt": exempted,
+            "dividend_yield": None,  # 第二轮补齐（M13）
         })
-        if len(matched) >= limit:
+        if len(matched) >= limit * 2:  # 多取一些，防止股息率筛选后不够
             break
 
+    # ── 第二轮：对候选逐只按需拉股息率（并发），并应用股息率规则 ──
+    if on_demand_rules:
+        yields = _dividend_yield_batch(matched)
+        final: List[Dict[str, Any]] = []
+        for item in matched:
+            code = str(item.get("code") or "")
+            value = yields.get(code)
+            item["dividend_yield"] = value
+            rule = on_demand_rules[0]
+            if value is None:
+                continue  # 分红数据缺失，如实排除（不冒充满足）
+            if rule["op"] == "gte" and not value >= float(rule["value"]):
+                continue
+            final.append(item)
+        matched = final
+
     matched.sort(key=lambda item: item["code"])
+    matched = matched[:limit]
     meta = get_snapshot_meta()
     return {
         "ready": True,

@@ -17,9 +17,8 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Body, Path
 
-from backend.app.datasource import utils
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error
 from backend.app.datasource import portfolio as store
 
 logger = logging.getLogger(__name__)
@@ -38,15 +37,7 @@ def _pack(data: Dict[str, Any], caliber: str, as_of: str = None) -> Dict[str, An
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update({
-        "source": "本地持仓",
-        "caliber": caliber,
-        "as_of": as_of or utils.now_text(),
-        "market_status": "本地快照",
-        "is_realtime": False,
-    })
-    return ok(payload)
+    return pack_success(data, "本地持仓", caliber, as_of, "本地快照", False)
 
 
 @router.get("")

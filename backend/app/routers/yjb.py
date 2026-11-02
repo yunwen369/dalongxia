@@ -23,9 +23,8 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Body, Query
 
-from backend.app.datasource import utils
 from backend.app.core import audit, cache
-from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error
 from backend.app.datasource import fund as fund_provider
 from backend.app.datasource import yangjibao
 
@@ -57,15 +56,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update({
-        "source": source,
-        "caliber": caliber,
-        "as_of": utils.now_text(),
-        "market_status": "连接器状态",
-        "is_realtime": False,
-    })
-    return ok(payload)
+    return pack_success(data, source, caliber, None, "连接器状态", False)
 
 
 def _cached_load(key: str, loader, source: str, caliber: str) -> Dict[str, Any]:

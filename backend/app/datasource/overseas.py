@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.datasource import tencent, utils
@@ -189,8 +190,70 @@ def _to_kline_rows(frame) -> List[Dict[str, Any]]:
     return items
 
 
+def get_minute_sina_us(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
+    """美股分时（新浪 ``US_MinKService.getMinK``，纯 HTTP，1/5/15/30 分钟）。
+
+    2026-11-02 第八轮：原先美股分时被判「无免费通道」（降级点 G-12），
+    实测新浪美股分时接口可用（1 分钟返回近 3 个交易日约 1000 点），
+    故补入主链路，港股仍走腾讯。
+
+    Args:
+        symbol: 美股代码（如 AAPL）。
+        period: 1/5/15/30 分钟。
+
+    Returns:
+        List[Dict[str, Any]]: [{time, price, volume, amount}]（按时间升序）。
+
+    Raises:
+        ValueError: 返回空数据或结构异常。
+    """
+    code = str(symbol or "").strip().upper()
+    period_text = str(period or "1").lower().replace("min", "").replace("m", "")
+    if period_text not in ("1", "5", "15", "30"):
+        period_text = "1"
+    payload = utils.http_get_json(
+        config.SINA_US_MINUTE_URL,
+        params={"symbol": code, "type": period_text},
+        referer="https://stock.finance.sina.com.cn/",
+    )
+    rows = payload if isinstance(payload, list) else []
+    items: List[Dict[str, Any]] = []
+    previous_price: Optional[float] = None
+    for row in rows:
+        stamp = str(row.get("d") or "").strip()
+        price = utils.to_float(row.get("c"))
+        if not stamp or price is None:
+            continue
+        day, _, clock = stamp.partition(" ")
+        change = None
+        pct = None
+        if previous_price is not None:
+            change = round(price - previous_price, 4)
+            if previous_price:
+                pct = round((price - previous_price) / previous_price * 100, 4)
+        items.append(
+            {
+                "time": clock[:5] if clock else stamp,
+                "date": day,
+                "price": price,
+                "open": utils.to_float(row.get("o")),
+                "high": utils.to_float(row.get("h")),
+                "low": utils.to_float(row.get("l")),
+                "volume": utils.to_float(row.get("v")),
+                "amount": utils.to_float(row.get("a")),
+                "change": change,
+                "pct": pct,
+            }
+        )
+        previous_price = price
+    if not items:
+        raise ValueError(f"新浪美股分时返回空数据：{code}")
+    items.sort(key=lambda item: f"{item['date']} {item['time']}")
+    return items
+
+
 def get_minute(symbol: str, market: str) -> List[Dict[str, Any]]:
-    """分时：腾讯 1 分钟（东财港美分时无稳定免费通道，实测不可用）。
+    """分时：港股腾讯 1 分钟；美股新浪 1 分钟（两者均为纯 HTTP）。
 
     Args:
         symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
@@ -199,6 +262,8 @@ def get_minute(symbol: str, market: str) -> List[Dict[str, Any]]:
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
+    if market == "us":
+        return get_minute_sina_us(symbol, "1")
     return tencent.get_minute(symbol, market, "1min")
 
 
@@ -212,8 +277,8 @@ def capability_matrix() -> Dict[str, Any]:
         "us": {
             "quote": {"available": True, "source": "腾讯", "note": "收盘后为最后成交快照"},
             "kline": {"available": True, "source": "腾讯（东财 push2his 本机不可用）"},
-            "minute": {"available": False, "source": None,
-                       "note": "D3：腾讯免费接口仅返回最新一笔，东财通道本机被重置"},
+            "minute": {"available": True, "source": "新浪美股分时（1/5/15/30 分钟）",
+                       "note": "第八轮补齐：新浪 US_MinKService 纯 HTTP，约 1000 点/3 个交易日"},
             "index": {"available": True, "source": "腾讯（道指/纳指/标普）"},
             "stock_news": {"available": False, "source": None,
                            "note": "D3：akshare 无 stock_us_news，无免费免鉴权稳定通道"},

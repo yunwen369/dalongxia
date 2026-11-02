@@ -409,6 +409,52 @@ def _run_frozen_serve_only() -> None:
         logger.info("仅服务模式已退出")
 
 
+def _bg_prewarm() -> None:
+    """后台预热（守护线程，失败不影响启动）。
+
+    覆盖两项冷启动较慢的数据，使首次点击即命中缓存：
+    1. **拥挤度排行**（第二轮检测 P1-1：冷启动 44.4s 超 15s 预期）——
+       第八轮已改纯 HTTP，90 个行业约 20 秒；
+    2. **板块四档资金流**（降级点 G-1）——需逐板块构建成分映射（同花顺 1.1s 限流），
+       首次约数分钟；映射落盘后 7 天内不再重复翻页，之后每 10 分钟只刷新四档数值。
+
+    预热顺序：先排行（快、用户最先看到），再四档（慢、有磁盘缓存）。
+    """
+    import time
+
+    from backend.app.core import cache as cache_module
+    from backend.app.datasource import sector as sector_provider
+
+    time.sleep(6)  # 等服务就绪，避免与启动探测抢网络
+    try:
+        result = sector_provider.get_crowding_rankings(kind="industry", limit=50)
+        cache_module.set("sector:crowding:rankings:industry:50", result, 3600)
+        logger.info("拥挤度排行（industry）后台预热完成：扫描 %d/%d，缓存已写",
+                    result.get("scanned"), result.get("total"))
+    except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+        logger.info("拥挤度排行后台预热失败（不影响启动）：%s", type(exc).__name__)
+    # 3. 全市场快照（M13 候选池依赖）：缺失时自动建库，用户无需先去筛选器页点按钮
+    #    （第二轮检测 P3-1：首次使用需手动建快照）
+    try:
+        from backend.app.datasource import screener as screener_provider
+
+        if not screener_provider.snapshot_ready():
+            logger.info("全市场快照缺失，后台自动构建（M13 候选池首次可用）")
+            screener_provider.start_build_async(reason="startup")
+    except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+        logger.info("全市场快照自动构建失败（不影响启动）：%s", type(exc).__name__)
+    # 4. 四档资金流：需 90 个板块的成分映射（同花顺 1.1s 限流），首次约 5–8 分钟；
+    #    之后每 10 分钟只需刷新四档数值（新浪批量，约 3 秒）。循环补建，
+    #    保证「首次未补完的板块」下一轮自动补齐（不依赖用户点击）。
+    for round_index in range(12):
+        try:
+            done = sector_provider.warm_fundflow_tiers()
+            logger.info("板块四档资金流预热第 %d 轮完成：%d 个板块", round_index + 1, done)
+        except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+            logger.info("板块四档资金流预热失败（不影响启动）：%s", type(exc).__name__)
+        time.sleep(600)
+
+
 def main() -> None:
     """启动入口：冻结形态走内嵌窗口；源码模式走端口预检 + uvicorn + 浏览器。
 
@@ -446,6 +492,12 @@ def main() -> None:
     # 开发模式自动打开浏览器；自动化测试可用 OPENBB_NO_BROWSER=1 关闭
     if os.environ.get("OPENBB_NO_BROWSER") != "1":
         threading.Timer(2.5, lambda: webbrowser.open(f"{config.BASE_URL}/")).start()
+
+    # ── 后台预热拥挤度排行缓存（缓解 P1-1：首次 44s+ 冷启动）─────────
+    # 排行首次计算需扫描 90 个行业（同花顺 V8 串行），超过规范 15s 单接口预期。
+    # 故在服务就绪后由后台守护线程预热，用户首次请求直接命中缓存（<0.5s）。
+    # 仅预热默认 industry 口径（最常用）；concept 首次请求时仍需一次完整扫描并缓存。
+    threading.Thread(target=_bg_prewarm, daemon=True, name="prewarm").start()
 
     # 传入 app 对象而非导入字符串，避免 uvicorn 二次导入本模块
     uvicorn.run(

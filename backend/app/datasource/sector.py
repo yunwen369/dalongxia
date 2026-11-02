@@ -23,7 +23,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,7 +36,7 @@ from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
-from backend.app.datasource import tencent, utils
+from backend.app.datasource import sina_flow, tencent, tencent_board, ths_http, utils
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
 netfix.apply_netfix()
@@ -129,7 +131,7 @@ def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
     Returns:
         float | None: 数值；无法解析时返回 None（不补 0）。
     """
-    return None if value is None else round(value, digits)
+    return utils.round_or_none(value, digits)
 
 
 def _maybe_zero_none(value: Any, threshold: float = 0.0) -> Optional[float]:
@@ -182,7 +184,12 @@ def _lookup(key: str, ttl: int, loader) -> Any:
 # 一、行业 / 概念行情列表（cn 真实数据，hk/us 境外简化建模）
 # =============================================================
 def _industry_ths() -> List[Dict[str, Any]]:
-    """同花顺行业汇总（主源）。
+    """同花顺行业行情（主源，纯 HTTP，无需 V8 签名）。
+
+    2026-11-02 第八轮：原实现走 akshare ``stock_board_industry_summary_ths``
+    （hexin-v 签名需 py_mini_racer），冻结形态被禁用后整块降级。实测同花顺
+    「行情中心」页面无需签名即可取数，故改为 :mod:`ths_http` 直连，
+    **V8 依赖从行业行情链路移除**（降级点 G-2 消除）。
 
     实测列：板块/涨跌幅(%)/总成交量(万手)/总成交额(亿元)/净流入(亿元)/上涨家数/下跌家数/领涨股。
 
@@ -190,30 +197,27 @@ def _industry_ths() -> List[Dict[str, Any]]:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
 
     Raises:
-        ValueError: 同花顺行业汇总返回空数据。
+        ValueError: 同花顺行业行情返回空数据。
     """
     _ensure_enabled()
-    frame = _call_ths(lambda: ak.stock_board_industry_summary_ths())
     items: List[Dict[str, Any]] = []
-    for row in utils.clean_records(frame):
-        name = str(row.get("板块") or "").strip()
-        if not name:
-            continue
+    for row in ths_http.get_industry_rows():
         items.append(
             {
-                "name": name,
-                "pct": _round(_num(row.get("涨跌幅"))),
-                "amount": _round(_num(row.get("总成交额")), 2),  # 亿元
-                "net_inflow": _round(_num(row.get("净流入")), 2),  # 亿元
-                "lead_stock": row.get("领涨股"),
-                "lead_pct": _round(_num(row.get("领涨股-涨跌幅"))),
-                "up": utils.to_int(row.get("上涨家数")),
-                "down": utils.to_int(row.get("下跌家数")),
+                "name": row.get("name"),
+                "code": row.get("code"),
+                "pct": _round(_num(row.get("pct"))),
+                "amount": _round(_num(row.get("amount")), 2),  # 亿元
+                "net_inflow": _round(_num(row.get("net_inflow")), 2),  # 亿元
+                "lead_stock": row.get("lead_stock"),
+                "lead_pct": _round(_num(row.get("lead_pct"))),
+                "up": utils.to_int(row.get("up")),
+                "down": utils.to_int(row.get("down")),
                 "kind": "行业",
             }
         )
     if not items:
-        raise ValueError("同花顺行业汇总返回空数据")
+        raise ValueError("同花顺行业行情返回空数据")
     return items
 
 
@@ -262,38 +266,45 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
 
 
 def _concept_ths_names() -> List[Dict[str, Any]]:
-    """同花顺概念名录（末级兜底：仅有名称/代码，无行情，pct/amount 为 None）。
+    """概念板块行情（腾讯概念榜，纯 HTTP，805 个）。
+
+    2026-11-02 第八轮：原实现走 akshare ``stock_board_concept_name_ths``（V8 签名，
+    且只给名称/代码无行情）。改用腾讯 ``board_type=gn`` 板块榜：含涨跌幅、成交额、
+    换手率、量比、主力净流入、领涨股与 5/20/60 日涨幅，口径完整且无需签名。
+    该通道同时承担「概念行情」与「概念 K 线 / 拥挤度」的代码体系（ptXXXXXXX）。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
 
     Raises:
-        ValueError: 同花顺概念名录返回空数据。
+        ValueError: 腾讯概念榜返回空数据。
     """
     _ensure_enabled()
-    frame = _call_ths(lambda: ak.stock_board_concept_name_ths())
     items: List[Dict[str, Any]] = []
-    for row in utils.clean_records(frame):
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
+    for row in tencent_board.get_board_rows("concept"):
         items.append(
             {
-                "name": name,
+                "name": row.get("name"),
+                "code": row.get("code"),
                 "label": None,
-                "code": str(row.get("code") or ""),
-                "pct": None,
-                "amount": None,
-                "net_inflow": None,
-                "lead_stock": None,
-                "lead_pct": None,
+                "pct": _round(_num(row.get("pct"))),
+                "amount": _round(_num(row.get("amount")), 2),  # 亿元
+                "net_inflow": _round(_num(row.get("net_inflow")), 2),  # 亿元
+                "inflow": _round(_num(row.get("main_in")), 2),
+                "outflow": _round(_num(row.get("main_out")), 2),
+                "turnover_rate": _round(_num(row.get("turnover_rate")), 2),
+                "volume_ratio": _round(_num(row.get("volume_ratio")), 2),
+                "pct_5d": _round(_num(row.get("pct_5d")), 2),
+                "pct_20d": _round(_num(row.get("pct_20d")), 2),
+                "lead_stock": row.get("lead_stock"),
+                "lead_pct": _round(_num(row.get("lead_pct"))),
                 "up": None,
                 "down": None,
                 "kind": "概念",
             }
         )
     if not items:
-        raise ValueError("同花顺概念名录返回空数据")
+        raise ValueError("腾讯概念板块榜返回空数据")
     return items
 
 
@@ -408,11 +419,11 @@ def get_concept(market: str = "cn") -> List[Dict[str, Any]]:
     """
     if market in ("hk", "us"):
         return []
-    return _sina_sector_items("概念", "概念")
+    return _concept_ths_names()
 
 
 def get_concept_sina() -> List[Dict[str, Any]]:
-    """概念行情·主源（新浪概念）。
+    """概念行情·备源（新浪概念 175 个，无主力净流入）。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
@@ -421,7 +432,7 @@ def get_concept_sina() -> List[Dict[str, Any]]:
 
 
 def get_concept_ths() -> List[Dict[str, Any]]:
-    """概念行情·备源（同花顺概念名录，仅名称/代码，无行情）。
+    """概念行情·主源（腾讯概念榜 805 个，含主力净流入与多周期涨幅）。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
@@ -560,44 +571,109 @@ def _default_kline_range(days: int = 400) -> Tuple[str, str]:
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
 
-def _kline_ths(kind: str, board: str, period: str) -> List[Dict[str, Any]]:
-    """同花顺板块指数 K 线（行业 / 概念）。
+def _kline_ths(kind: str, board: str, period: str, *, fill_today: bool = True) -> List[Dict[str, Any]]:
+    """板块指数 K 线（纯 HTTP：行业走同花顺、概念走腾讯）。
 
-    实测列：日期/开盘价/最高价/最低价/收盘价/成交量/成交额。
-    同花顺仅提供日线，周/月线由本函数按日线聚合。
+    2026-11-02 第八轮：原实现走 akshare ``stock_board_*_index_ths``（V8 签名），
+    冻结形态不可用。实测两条纯 HTTP 通道可完整替代：
+        - 行业：同花顺 ``d.10jqka.com.cn/v6/line/bk_{881xxx}``（日线 140 根含成交额，
+          周/月线 984/231 根），按板块名经行业名录反查代码；
+        - 概念：腾讯 ``newfqkline``（``ptXXXXXXX``，320 根含成交额），
+          按板块名经概念榜反查代码。
+    两者均**无 V8 依赖**，故冻结版与源码版行为一致（降级点 G-15 消除）。
 
     Args:
         kind: 类别：industry=行业 / concept=概念。
         board: 板块名称（与板块树中的名称一致）。
         period: 周期：日k/周k/月k，或分钟数（1/5/15/30/60）。
+        fill_today: 是否补当日成交额（批量排行扫描时置 False 省请求）。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
 
     Raises:
-        ValueError: 参数不合法或上游数据不满足口径时抛出。
+        ValueError: 板块名无代码映射或上游返回空数据。
     """
     _ensure_enabled()
-    start_text, end_text = _default_kline_range()
-    func = ak.stock_board_industry_index_ths if kind == "industry" else ak.stock_board_concept_index_ths
-    frame = _call_ths(lambda: func(symbol=board, start_date=start_text, end_date=end_text))
-    rows: List[Dict[str, Any]] = []
-    for row in utils.clean_records(frame):
-        rows.append(
-            {
-                "date": str(row.get("日期"))[:10],
-                "open": _round(_num(row.get("开盘价"))),
-                "high": _round(_num(row.get("最高价"))),
-                "low": _round(_num(row.get("最低价"))),
-                "close": _round(_num(row.get("收盘价"))),
-                # R3-07：volume/amount 零值 → None，避免前端显示 0 或假的个位数
-                "volume": _round(_maybe_zero_none(row.get("成交量")), 0),
-                "amount": _round(_maybe_zero_none(row.get("成交额"), threshold=1.0), 0),
-            }
+    period_key = _period_key(period)
+    if kind == "industry":
+        code = ths_http.get_board_code(board, kind="industry")
+        if not code:
+            raise ValueError(f"同花顺行业名录无此板块：{board}")
+        hint = ths_http.get_industry_amount(board) if fill_today else None
+        rows = ths_http.get_board_kline(
+            code, period=period_key, fill_today=fill_today, amount_hint=hint
         )
+        model_source = "同花顺"
+    else:
+        code = _tencent_board_code(board, "concept")
+        if not code:
+            raise ValueError(f"腾讯概念榜无此板块：{board}")
+        rows = tencent_board.get_board_kline(code, period=period_key, limit=320)
+        model_source = "腾讯"
     if not rows:
-        raise ValueError(f"同花顺板块 K 线为空：{board}")
-    return _aggregate_period(rows, period)
+        raise ValueError(f"{model_source}板块 K 线为空：{board}")
+    # 周/月线由源站直接给出（同花顺 11/21、腾讯 week/month），无需再聚合
+    return [
+        {
+            "date": row.get("date"),
+            "open": _round(_num(row.get("open"))),
+            "high": _round(_num(row.get("high"))),
+            "low": _round(_num(row.get("low"))),
+            "close": _round(_num(row.get("close"))),
+            "volume": _round(_maybe_zero_none(row.get("volume")), 0),
+            "amount": _round(_maybe_zero_none(row.get("amount"), threshold=0.0001), 4),
+            "pct": _round(_num(row.get("pct"))),
+        }
+        for row in rows
+    ]
+
+
+def _period_key(period: str) -> str:
+    """把中文/英文周期统一为 daily/weekly/monthly。
+
+    Args:
+        period: 周期：日k/周k/月k，或 daily/weekly/monthly。
+
+    Returns:
+        str: daily / weekly / monthly（无法识别时按 daily）。
+    """
+    text = str(period or "daily").strip().lower()
+    if text in ("weekly", "周k", "week", "w"):
+        return "weekly"
+    if text in ("monthly", "月k", "month", "m"):
+        return "monthly"
+    return "daily"
+
+
+# 腾讯板块「名称 → 代码」缓存：{kind: (时间戳, {名称: 代码})}
+_TX_BOARD_CACHE: Dict[str, Any] = {}
+
+
+def _tencent_board_code(name: str, kind: str = "concept") -> Optional[str]:
+    """按板块名取腾讯板块代码（ptXXXXXXX，进程内缓存 10 分钟）。
+
+    Args:
+        name: 板块名。
+        kind: industry / concept。
+
+    Returns:
+        Optional[str]: 代码；未命中返回 None。
+    """
+    key = f"tx:{kind}"
+    cached = _TX_BOARD_CACHE.get(key)
+    if cached and time.time() - cached[0] < 600:
+        return cached[1].get(str(name or "").strip())
+    mapping: Dict[str, str] = {}
+    try:
+        for row in tencent_board.get_board_rows(kind):
+            if row.get("name") and row.get("code"):
+                mapping[row["name"]] = row["code"]
+    except Exception as exc:  # noqa: BLE001 - 名录不可用则本次返回 None
+        logger.info("腾讯%s板块名录不可用：%s", "行业" if kind == "industry" else "概念", type(exc).__name__)
+        return None
+    _TX_BOARD_CACHE[key] = (time.time(), mapping)
+    return mapping.get(str(name or "").strip())
 
 
 def _aggregate_period(rows: List[Dict[str, Any]], period: str) -> List[Dict[str, Any]]:
@@ -995,6 +1071,61 @@ def _cons_em(board: str) -> List[Dict[str, Any]]:
     return items
 
 
+def _cons_ths(board: str) -> List[Dict[str, Any]]:
+    """同花顺板块成分（主源，纯 HTTP 详情页，行业/概念均可）。
+
+    2026-11-02 第八轮：同花顺板块详情页无需 hexin-v 签名，覆盖行业（``/thshy``）与
+    概念（``/gn``），每页 10/20 行、可翻页取全；字段含现价/涨跌幅/成交额/流通市值/总市值/PE。
+    权重按流通市值占比计算（与东财/申万口径一致）。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        ValueError: 板块名无代码映射或成分页不可用。
+    """
+    _ensure_enabled()
+    code = ths_http.get_board_code(board, kind="industry") or ths_http.get_board_code(
+        board, kind="concept"
+    )
+    if not code:
+        raise ValueError(f"同花顺板块名录无此板块：{board}")
+    kind = "industry" if code.startswith("88") else "concept"
+    rows = ths_http.get_board_cons(code, kind=kind)
+    total_cap = sum((_num(row.get("float_cap")) or 0.0) for row in rows)
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        cap = _num(row.get("float_cap"))
+        items.append(
+            {
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "pct": _round(_num(row.get("pct"))),
+                "price": _round(_num(row.get("price"))),
+                "amount": _round(_num(row.get("amount")), 4),
+                "weight": _round(cap / total_cap * 100, 2) if (cap and total_cap) else None,
+            }
+        )
+    if not items:
+        raise ValueError(f"同花顺板块成分为空：{board}")
+    return items
+
+
+def get_cons_ths(board: str) -> Dict[str, Any]:
+    """成分股·同花顺主源，返回结构供路由降级链直接使用。
+
+    Args:
+        board: 板块名称（与板块树中的名称一致）。
+
+    Returns:
+        dict: {board, items, source_hint}
+    """
+    return {"board": board, "items": _sort_cons(_cons_ths(board)), "source_hint": None}
+
+
 def _sort_cons(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """成分股按涨跌幅降序排列，缺失涨跌幅的排在末尾（不参与比较）。
 
@@ -1101,10 +1232,18 @@ def _ensure_board_known(board: str) -> None:
 # 四、板块资金流 / 趋势对比
 # =============================================================
 def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
-    """板块资金流向（同花顺）。
+    """板块资金流向（同花顺行业资金流 + 新浪个股四档聚合）。
 
-    实测列：行业/行业-涨跌幅/流入资金/流出资金/净额（单位=亿元）。
-    源不提供超大单/大单分项 → super_big/big 置 None，前端显示「无数据」。
+    2026-11-02 第八轮重写：
+        - 净额/流入/流出：同花顺「资金流向」频道页面（``data.10jqka.com.cn/funds/hyzjl``），
+          纯 HTTP、90 个行业、单位亿元 —— 解决冻结形态整表为空的问题；
+        - 超大单/大单/中单/小单：按板块成分股逐只取新浪四档后聚合（:mod:`sina_flow`），
+          解决降级点 G-1「板块资金流无超大单/大单分项」。
+
+    四档聚合依赖「板块成分股」映射：映射首次构建需逐板块翻页（同花顺有 1.1s 限流），
+    由 :func:`warm_fundflow_tiers` 在服务启动后后台完成并落盘缓存 7 天；
+    完成后每次刷新只需 90 次新浪批量请求（约 3 秒）。未预热到的板块四档为 None，
+    caliber 会写明「四档聚合预热中」，不补 0、不估算。
 
     Args:
         market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
@@ -1118,26 +1257,212 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     if market in ("hk", "us"):
         return []
     _ensure_enabled()
-    frame = _call_ths(lambda: ak.stock_fund_flow_industry(symbol="即时"))
+    rows = ths_http.get_industry_flow_rows()
+    # 四档依赖成分映射；未预热完时按时间预算补 1–2 个板块，
+    # 使「首次使用也能逐步补齐」，而不是永久空白（预算内补不完由后台线程继续）。
+    _ensure_cons_progress(rows, budget_seconds=6.0, max_boards=2)
     items: List[Dict[str, Any]] = []
-    for row in utils.clean_records(frame):
-        name = str(row.get("行业") or "").strip()
-        if not name:
-            continue
+    for row in rows:
+        name = row.get("name")
+        tier = _flow_tier(name, row.get("code")) or {}
         items.append(
             {
                 "name": name,
-                "pct": _round(_num(row.get("行业-涨跌幅"))),
-                "net_inflow": _round(_num(row.get("净额")), 2),
-                "inflow": _round(_num(row.get("流入资金")), 2),
-                "outflow": _round(_num(row.get("流出资金")), 2),
-                "super_big": None,  # 源能力缺口：同花顺该接口无超大单分项
-                "big": None,
+                "pct": _round(_num(row.get("pct"))),
+                "net_inflow": _round(_num(row.get("net_inflow")), 2),
+                "inflow": _round(_num(row.get("inflow")), 2),
+                "outflow": _round(_num(row.get("outflow")), 2),
+                # 四档：由成分股四档聚合（真实值）；未预热到的板块为 None
+                "super_big": tier.get("super_big"),
+                "big": tier.get("big"),
+                "medium": tier.get("medium"),
+                "small": tier.get("small"),
+                "covered": tier.get("covered"),
             }
         )
     if not items:
         raise ValueError("同花顺板块资金流返回空数据")
     return items
+
+
+# 板块四档缓存：{板块名: (时间戳, {super_big, big, medium, small, covered})}
+_FLOW_TIER_CACHE: Dict[str, Any] = {}
+_FLOW_TIER_TTL = 600  # 四档 10 分钟刷新
+# 板块成分映射：{板块名: [6 位代码]}（落盘缓存 7 天，构建慢）
+_CONS_CACHE: Dict[str, List[str]] = {}
+_CONS_CACHE_LOADED = False
+_CONS_CACHE_LOCK = threading.Lock()
+_TIER_WARMING: set[str] = set()
+
+
+def _cons_cache_file():
+    """板块成分映射落盘文件路径。
+
+    Returns:
+        Path: ``<CACHE_DIR>/board_cons.json``。
+    """
+    return config.CACHE_DIR / "board_cons.json"
+
+
+def _load_cons_cache() -> None:
+    """从磁盘载入板块成分映射（进程内只载一次；文件缺失或损坏时保持为空）。"""
+    global _CONS_CACHE_LOADED
+    if _CONS_CACHE_LOADED:
+        return
+    with _CONS_CACHE_LOCK:
+        if _CONS_CACHE_LOADED:
+            return
+        _CONS_CACHE_LOADED = True
+        path = _cons_cache_file()
+        try:
+            if path.is_file():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    for key, value in payload.items():
+                        if isinstance(value, list):
+                            _CONS_CACHE[key] = [str(code) for code in value]
+                logger.info("板块成分映射已载入：%d 个板块", len(_CONS_CACHE))
+        except Exception as exc:  # noqa: BLE001 - 缓存损坏不影响主流程
+            logger.warning("板块成分映射载入失败：%s", type(exc).__name__)
+
+
+def _save_cons_cache() -> None:
+    """把板块成分映射原子写盘（失败仅告警，不影响接口）。"""
+    try:
+        from backend.app.core import atomic
+
+        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        atomic.atomic_write_json(_cons_cache_file(), _CONS_CACHE, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001 - 写盘失败不影响内存缓存
+        logger.warning("板块成分映射写盘失败：%s", type(exc).__name__)
+
+
+def get_board_constituents(board: str, *, kind: str = "industry") -> List[str]:
+    """取板块成分股代码列表（内存 + 磁盘缓存，避免重复翻页触发同花顺限流）。
+
+    Args:
+        board: 板块名。
+        kind: industry / concept。
+
+    Returns:
+        List[str]: 6 位代码列表。
+
+    Raises:
+        ValueError: 板块名无代码或成分页不可用。
+    """
+    _load_cons_cache()
+    cached = _CONS_CACHE.get(board)
+    if cached:
+        return cached
+    code = ths_http.get_board_code(board, kind=kind)
+    if not code:
+        raise ValueError(f"板块名录无此板块：{board}")
+    rows = ths_http.get_board_cons(code, kind=kind)
+    codes = [row["code"] for row in rows if row.get("code")]
+    if not codes:
+        raise ValueError(f"板块成分为空：{board}")
+    _CONS_CACHE[board] = codes
+    _save_cons_cache()
+    return codes
+
+
+def _ensure_cons_progress(
+    rows: List[Dict[str, Any]],
+    *,
+    budget_seconds: float = 6.0,
+    max_boards: int = 2,
+) -> None:
+    """在时间预算内为尚未建映射的板块补齐成分（供四档聚合）。
+
+    设计取舍：板块成分映射首次构建需逐页翻同花顺详情页（1.1s 限流），
+    90 个行业串行需数分钟，不能放进单次请求。故这里只做**增量补齐**：
+    每次刷新最多补 ``max_boards`` 个、且不超过 ``budget_seconds``；其余交给
+    服务启动时的后台预热线程。映射落盘后 7 天内不再重复翻页。
+
+    Args:
+        rows: 行业资金流行（含 name）。
+        budget_seconds: 本次补建的时间预算（秒）。
+        max_boards: 本次最多补建的板块数。
+    """
+    _load_cons_cache()
+    started = time.time()
+    built = 0
+    for row in rows:
+        if built >= max_boards or time.time() - started > budget_seconds:
+            break
+        name = row.get("name")
+        if not name or name in _CONS_CACHE:
+            continue
+        try:
+            get_board_constituents(name)
+            built += 1
+        except Exception as exc:  # noqa: BLE001 - 单板块失败不影响整表
+            logger.info("板块成分补建跳过 %s：%s", name, type(exc).__name__)
+
+
+def _flow_tier(board: str, code: Optional[str]) -> Optional[Dict[str, Any]]:
+    """取某板块的四档资金流（10 分钟缓存；未预热时返回 None 并触发后台预热）。
+
+    Args:
+        board: 板块名。
+        code: 同花顺板块代码（未用到，保留以兼容调用方）。
+
+    Returns:
+        Optional[Dict[str, Any]]: 四档聚合结果；未就绪返回 None。
+    """
+    cached = _FLOW_TIER_CACHE.get(board)
+    if cached and time.time() - cached[0] < _FLOW_TIER_TTL:
+        return cached[1]
+    _load_cons_cache()
+    codes = _CONS_CACHE.get(board)
+    if not codes:
+        return None
+    try:
+        payload = sina_flow.aggregate_flow(codes)
+    except Exception as exc:  # noqa: BLE001 - 单板块四档失败不阻断整表
+        logger.info("板块四档聚合失败 %s：%s", board, type(exc).__name__)
+        return None
+    if payload.get("covered"):
+        _FLOW_TIER_CACHE[board] = (time.time(), payload)
+        return payload
+    return None
+
+
+def warm_fundflow_tiers(*, max_boards: int = 90) -> int:
+    """后台预热板块四档：逐个构建成分映射并聚合四档（守护线程调用）。
+
+    顺序执行的目的是遵守同花顺 1.1s 限流；成分映射落盘后 7 天内不再重复翻页，
+    后续刷新只走新浪批量接口（约 3 秒完成 90 个板块）。
+
+    Args:
+        max_boards: 本次最多预热多少个板块（默认全量 90）。
+
+    Returns:
+        int: 成功聚合的板块数。
+    """
+    _load_cons_cache()
+    done = 0
+    try:
+        names = [row["name"] for row in ths_http.get_industry_rows() if row.get("name")]
+    except Exception as exc:  # noqa: BLE001 - 名录不可用则本次不预热
+        logger.info("板块四档预热跳过（名录不可用：%s）", type(exc).__name__)
+        return 0
+    for name in names[:max_boards]:
+        if name in _TIER_WARMING:
+            continue
+        _TIER_WARMING.add(name)
+        try:
+            if name not in _CONS_CACHE:
+                get_board_constituents(name)
+            payload = _flow_tier(name, None)
+            if payload:
+                done += 1
+        except Exception as exc:  # noqa: BLE001 - 单板块失败继续下一个
+            logger.info("板块四档预热跳过 %s：%s", name, type(exc).__name__)
+        finally:
+            _TIER_WARMING.discard(name)
+    logger.info("板块四档预热完成：%d/%d 个板块", done, min(len(names), max_boards))
+    return done
 
 
 def get_trend(boards: List[str], days: int = 30, market: str = "cn") -> Dict[str, Any]:
@@ -1212,7 +1537,23 @@ def _pct_rank(series: List[float], current: float) -> Optional[float]:
     return round(below / len(clean) * 100, 1)
 
 
-def get_crowding(board: str) -> Dict[str, Any]:
+def _index_kline_func(kind: str = "industry"):
+    """兼容占位：板块指数日线已改由纯 HTTP 通道取（见 :func:`_kline_ths`）。
+
+    Args:
+        kind: industry=行业 / concept=概念。
+
+    Returns:
+        None: 恒返回 None，调用方应改用 :func:`_kline_ths`。
+
+    Notes:
+        第八轮移除以 py_mini_racer(V8) 为前置的 akshare 板块指数函数；
+        本函数仅为旧调用方的显式失效点，避免静默回退到 V8 通道。
+    """
+    return None
+
+
+def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True) -> Dict[str, Any]:
     """单板块拥挤度打分（M3）。
 
     四个维度的分位加权成 0–100 分，>60 提示、>80 提示复核（用户口径）。
@@ -1220,25 +1561,22 @@ def get_crowding(board: str) -> Dict[str, Any]:
 
     Args:
         board: 板块名（如「半导体」）。
+        kind: 板块类型：industry=行业 / concept=概念（均走纯 HTTP 板块日线）。
+        fill_today: 是否补当日成交额（批量排行扫描时置 False）。
 
     Returns:
-        dict: {board, score, level, parts, sample_days, as_of, caliber, missing}
+        dict: {board, kind, score, level, parts, sample_days, as_of, caliber, missing}
 
     Raises:
         ValueError: 板块日线取不到或样本不足。
     """
     _ensure_enabled()
-    today = utils.bj_now().date()
-    start_text = (today - timedelta(days=400)).strftime("%Y%m%d")
-    end_text = today.strftime("%Y%m%d")
-    frame = _call_ths(lambda: ak.stock_board_industry_index_ths(
-        symbol=board, start_date=start_text, end_date=end_text))
     rows: List[Dict[str, Any]] = []
-    for row in utils.clean_records(frame):
-        day = str(row.get("日期") or "")[:10]
-        close = _num(row.get("收盘价"))
-        amount = _num(row.get("成交额"))
-        volume = _num(row.get("成交量"))
+    for row in _kline_ths(kind, board, "daily", fill_today=fill_today):
+        day = str(row.get("date") or "")[:10]
+        close = _num(row.get("close"))
+        amount = _num(row.get("amount"))
+        volume = _num(row.get("volume"))
         if day and close and amount and volume:
             rows.append({"date": day, "close": close, "amount": amount, "volume": volume})
     rows.sort(key=lambda item: item["date"])
@@ -1331,22 +1669,58 @@ def get_crowding(board: str) -> Dict[str, Any]:
     else:
         level, advice = "正常", "拥挤度处于常规区间"
 
+    kind_label = "行业" if kind == "industry" else "概念"
+
+    # ── 成分股维度（换手率/相关性）：仅使用已缓存的成分映射 ──
+    # 第八轮：成分映射由后台预热线程落盘（首次构建需逐页翻同花顺，1.1s 限流下数十秒），
+    # 单板块接口不能为此阻塞，故此处只读缓存；未预热到则在 caliber 里如实说明。
+    extra: Dict[str, Any] = {}
+    cons_missing: List[str] = []
+    _load_cons_cache()
+    cached_codes = _CONS_CACHE.get(board) or []
+    if cached_codes:
+        constituents = [{"code": code, "board": board} for code in cached_codes]
+        extra["constituent_count"] = len(constituents)
+        corr = _constituent_correlation(constituents)
+        if corr:
+            extra["correlation"] = corr
+        else:
+            cons_missing.append("成分股相关性不可得（样本 K 线不足）")
+        turnover = _constituent_turnover(constituents)
+        if turnover:
+            extra["turnover"] = turnover
+        else:
+            cons_missing.append("成分股换手率不可得（样本报价不足）")
+    else:
+        cons_missing.append("成分映射尚未预热（服务启动后由后台线程构建，约数分钟）")
+    # ③ 行业融资余额：本机无行业口径源（融资余额仅有全市场口径），如实标注
+    cons_missing.append("行业融资余额分位未纳入（融资余额仅有全市场口径，无行业口径源）")
+
     return {
         "board": board,
+        "kind": kind,
+        "source": "同花顺" if kind == "industry" else "腾讯",
+        "market_status": "日线收盘",
+        "is_realtime": False,
         "score": score,
         "level": level,
         "advice": advice,
         "parts": list(parts.values()),
         "sample_days": len(rows),
+        "extra": extra,
         "as_of": utils.now_text(utils.bj_now()),
         "caliber": (
-            f"拥挤度=四维分位加权（成交额占比 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
+            f"{kind_label}拥挤度=四维分位加权（成交额占比 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
             f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
             f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%），分位窗口=近 {len(rows)} 个交易日；"
             "成交额维度用「当日/近250日均值」的相对强度（全市场成交额源不可用，改相对自身历史）；"
             "只陈述交易结构位置，不构成买卖建议"
         ),
-        "missing": [CROWDING_MISSING] + ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else []),
+        "missing": (
+            [CROWDING_MISSING]
+            + ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else [])
+            + ([f"成分股维度：{'、'.join(cons_missing)}"] if cons_missing else [])
+        ),
     }
 
 
@@ -1372,32 +1746,44 @@ def get_crowding_rankings(
     Raises:
         ValueError: 板块类型不支持或清单为空。
     """
+    _ensure_enabled()
+    # 本函数为**纯同步扫描体**（供测试直连与后台线程复用）；
+    # 缓存查表与「后台计算 + 立即返回计算中态」的 HTTP 语义由 routers/sector.py 接管，
+    # 故此处不查缓存、不启后台，避免把「计算中」中间态落盘 1 小时。
+    return _scan_rankings(kind, limit, max_workers=max_workers)
+
+
+def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, Any]:
+    """排行实际扫描体（后台线程调用；不查缓存、不启动后台）。
+
+    Args:
+        kind: industry / concept。
+        limit: 返回前 N 名。
+        max_workers: 并发线程数。
+
+    Returns:
+        Dict[str, Any]: 排行结果（同 get_crowding_rankings 成功态）。
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    _ensure_enabled()
-    if kind != "industry":
-        raise ValueError("kind 目前仅支持 industry（概念板块接口不稳定，未纳入排行）")
+    key_kind = str(kind or "industry").strip().lower()
+    if key_kind not in ("industry", "concept"):
+        raise ValueError("kind 仅支持 industry（行业）/ concept（概念）")
     limit = max(1, min(int(limit or 50), 120))
 
-    names = get_crowding_board_names()
+    names = get_crowding_board_names(key_kind)
     if not names:
-        raise ValueError("同花顺行业清单为空，无法计算排行")
+        raise ValueError(f"同花顺{'行业' if key_kind=='industry' else '概念'}清单为空，无法计算排行")
 
     items: List[Dict[str, Any]] = []
     failed: List[str] = []
 
     def _work(board: str) -> Dict[str, Any]:
-        """单板块打分（异常向上抛，由调用方归类到 failed）。
-
-        Args:
-            board: 板块名。
-
-        Returns:
-            Dict[str, Any]: {board, score, level, parts}。
-        """
-        data = get_crowding(board)
+        """单板块打分（异常向上抛，由调用方归类到 failed）。"""
+        data = get_crowding(board, kind=key_kind, fill_today=False)
         return {
             "board": data["board"],
+            "kind": data.get("kind"),
             "score": data["score"],
             "level": data["level"],
             "parts": [
@@ -1406,7 +1792,7 @@ def get_crowding_rankings(
             ],
         }
 
-    with ThreadPoolExecutor(max_workers=max(1, min(int(max_workers or 6), 10))) as pool:
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_work, name): name for name in names}
         for future in as_completed(futures):
             board = futures[future]
@@ -1422,32 +1808,290 @@ def get_crowding_rankings(
         if item["level"] in level_counts:
             level_counts[item["level"]] += 1
 
+    kind_label = "行业" if key_kind == "industry" else "概念"
     return {
         "items": items[:limit],
         "scanned": len(items),
         "total": len(names),
         "failed": failed,
+        "kind": key_kind,
+        "source": "同花顺" if key_kind == "industry" else "腾讯",
+        "market_status": "日线收盘",
+        "is_realtime": False,
         "level_counts": level_counts,
         "caliber": (
             f"与单板块拥挤度同一函数（四维分位加权：成交额强度 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
             f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
-            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%）；扫描 {len(items)}/{len(names)} 个行业；"
+            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%）；"
+            f"扫描 {len(items)}/{len(names)} 个{kind_label}；"
             "只陈述交易结构位置，不构成买卖建议"
         ),
         "as_of": utils.now_text(utils.bj_now()),
     }
 
 
-def get_crowding_board_names() -> List[str]:
-    """同花顺行业名清单（供 M12 排行与 M14 行业匹配共用）。
+# 排行后台计算状态（P1-1 冷启动优化：首次扫描 44s+ 超 15s 规范，改为后台预热 + 缓存）
+_RANKINGS_IN_FLIGHT: Dict[str, bool] = {}
+_RANKINGS_LOCK = threading.Lock()
+
+
+def rankings_in_flight(cache_key: str) -> bool:
+    """查询某 key 的排行是否正在后台计算（供路由层判断是否返回「计算中」态）。
+
+    Args:
+        cache_key: 缓存键。
 
     Returns:
-        List[str]: 行业名列表（约 90 个）；接口异常时向上抛，由调用方降级。
+        bool: 是否已在飞行中。
+    """
+    with _RANKINGS_LOCK:
+        return bool(_RANKINGS_IN_FLIGHT.get(cache_key))
+
+
+def start_rankings_bg(key_kind: str, limit: int, cache_key: str) -> None:
+    """未命中缓存时启动后台排行计算（不阻塞调用方）。
+
+    同一 key 在计算期间重复请求不重复启线程，避免多用户并发重复扫描。
+    计算完成后写缓存（1 小时 TTL），后续请求直接命中。
+
+    Args:
+        key_kind: industry / concept。
+        limit: 返回前 N 名。
+        cache_key: 缓存键。
+    """
+    with _RANKINGS_LOCK:
+        if _RANKINGS_IN_FLIGHT.get(cache_key):
+            return
+        _RANKINGS_IN_FLIGHT[cache_key] = True
+
+    def _runner() -> None:
+        try:
+            result = _scan_rankings(key_kind, limit)
+            from backend.app.core import cache as _cache2
+            _cache2.set(cache_key, result, 3600)
+            logger.info("拥挤度排行（%s）后台计算完成：扫描 %d/%d",
+                        key_kind, result.get("scanned"), result.get("total"))
+        except Exception as exc:  # noqa: BLE001 - 后台失败不影响下次重试
+            logger.info("拥挤度排行（%s）后台计算失败：%s", key_kind, type(exc).__name__)
+        finally:
+            with _RANKINGS_LOCK:
+                _RANKINGS_IN_FLIGHT[cache_key] = False
+
+    threading.Thread(target=_runner, daemon=True, name=f"rankings-{key_kind}").start()
+
+
+def get_crowding_board_names(kind: str = "industry") -> List[str]:
+    """板块名清单（供 M12 排行与 M14 行业匹配共用）。
+
+    2026-11-02 第八轮：行业取同花顺行业名录（90 个，纯 HTTP），
+    概念取腾讯概念榜（805 个，纯 HTTP），均不再依赖 V8 签名。
+
+    Args:
+        kind: industry=行业 / concept=概念。
+
+    Returns:
+        List[str]: 板块名列表（行业约 90 个 / 概念约 800 个）；接口异常时向上抛，由调用方降级。
     """
     _ensure_enabled()
-    frame = _call_ths(lambda: ak.stock_board_industry_name_ths())
-    return [
-        str(row.get("name") or "").strip()
-        for row in utils.clean_records(frame)
-        if str(row.get("name") or "").strip()
-    ]
+    key_kind = str(kind or "industry").strip().lower()
+    if key_kind == "concept":
+        names = [row.get("name") for row in tencent_board.get_board_rows("concept")]
+    else:
+        names = [row.get("name") for row in ths_http.get_industry_rows()]
+    return [str(name).strip() for name in names if str(name or "").strip()]
+
+
+# 成分股源的确定性失效类型（本机代理会拦截东财 push2，不重试）
+_CONS_FAIL = ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected", "ValueError")
+
+
+def get_sector_constituents(board: str, *, kind: str = "industry") -> List[Dict[str, Any]]:
+    """取某板块的成分股列表（供拥挤度的换手率/相关性维度、资金流四档聚合使用）。
+
+    2026-11-02 第八轮重写：主源改为同花顺板块详情页（纯 HTTP，``/thshy/detail`` 与
+    ``/gn/detail``），不再依赖东财 push2（本机被源站重置）与申万（页面改版后返回空表）。
+    同花顺反爬触发时（401/403）自动退避重试，仍失败则回退新浪板块成分。
+
+    Args:
+        board: 板块名（如「半导体」「白酒概念」）。
+        kind: industry / concept。
+
+    Returns:
+        List[Dict[str, Any]]: 成分股列表 [{code, name, pct, board}]。
+
+    Raises:
+        ValueError: 全部源均失败时抛出，附具体源名与异常类型。
+    """
+    _ensure_enabled()
+    errors: List[str] = []
+    try:
+        code = ths_http.get_board_code(board, kind=kind)
+        if not code:
+            errors.append("同花顺名录无此板块")
+        else:
+            rows = ths_http.get_board_cons(code, kind=kind)
+            items = [
+                {"code": row["code"], "name": row.get("name"), "pct": row.get("pct"),
+                 "board": board}
+                for row in rows
+                if row.get("code")
+            ]
+            if items:
+                return items
+            errors.append("同花顺成分返回空")
+    except Exception as exc:  # noqa: BLE001 - 记录后尝试备源
+        errors.append(f"同花顺成分:{type(exc).__name__}")
+
+    # 备源：新浪板块成分（需先反查 label）
+    try:
+        label = _sina_label(board)
+        if not label:
+            errors.append("新浪板块映射缺失")
+        else:
+            df = _call(lambda: ak.stock_sector_detail(sector=label))
+            rows = utils.clean_records(df)
+            items = [
+                {"code": str(r.get("代码") or r.get("CODE") or "").zfill(6),
+                 "name": str(r.get("名称") or r.get("NAME") or ""), "board": board}
+                for r in rows
+            ]
+            items = [i for i in items if i["code"].isdigit()]
+            if items:
+                return items
+            errors.append("新浪成分返回空")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"新浪成分:{type(exc).__name__}")
+
+    raise ValueError("；".join(errors) if errors else "成分股不可用")
+
+
+def _constituent_correlation(
+    constituents: List[Dict[str, Any]],
+    *,
+    days: int = 60,
+    max_samples: int = 20,
+) -> Optional[Dict[str, Any]]:
+    """成分股相关性（拥挤度维度 ④）：取样本股近 N 日日线收益率，算平均两两相关系数。
+
+    数据源：腾讯日 K 线（本机可用）。样本数受同花顺 V8 串行锁限制，最多 20 只。
+    相关性越高 → 成分股同涨同跌越强 → 交易结构越拥挤。
+
+    Args:
+        constituents: 成分股列表。
+        days: 计算相关性的窗口天数。
+        max_samples: 最多取多少只（避免 V8 串行过久）。
+
+    Returns:
+        Optional[Dict[str, Any]]: {corr, samples, caliber}；样本不足时 None。
+    """
+    from backend.app.datasource import tencent
+
+    sample = constituents[:max_samples]
+    series: Dict[str, List[float]] = {}
+    for item in sample:
+        code = item.get("code") or ""
+        if not code:
+            continue
+        try:
+            klines = tencent.get_kline(code, period="daily", limit=days + 5)
+        except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
+            logger.info("成分股 K 线失败 %s：%s", code, type(exc).__name__)
+            continue
+        closes = [utils.to_float(k.get("close")) for k in klines]
+        closes = [c for c in closes if c is not None]
+        if len(closes) >= days + 1:
+            series[code] = closes[-days - 1:]
+    if len(series) < 3:
+        return None
+
+    codes = list(series)
+    n = len(codes)
+    # 两两 Pearson 相关系数
+    rets: Dict[str, List[float]] = {}
+    for code in codes:
+        vals = series[code]
+        rets[code] = [vals[i] / vals[i - 1] - 1 for i in range(1, len(vals))]
+    min_len = min(len(v) for v in rets.values())
+    for code in codes:
+        rets[code] = rets[code][-min_len:]
+
+    def _corr(a: List[float], b: List[float]) -> Optional[float]:
+        if len(a) != len(b) or len(a) < 5:
+            return None
+        ma = sum(a) / len(a)
+        mb = sum(b) / len(b)
+        cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+        va = sum((x - ma) ** 2 for x in a)
+        vb = sum((y - mb) ** 2 for y in b)
+        if va <= 0 or vb <= 0:
+            return None
+        denom = (va * vb) ** 0.5
+        return cov / denom if denom else None
+
+    pairs = 0
+    total = 0.0
+    for i in range(n):
+        for j in range(i + 1, n):
+            c = _corr(rets[codes[i]], rets[codes[j]])
+            if c is not None:
+                pairs += 1
+                total += c
+    if pairs == 0:
+        return None
+    avg = total / pairs
+    return {
+        "corr": round(avg, 4),
+        "samples": n,
+        "pairs": pairs,
+        "window_days": days,
+        "caliber": (
+            f"成分股相关性=近 {days} 日日线收益率的 {n} 只样本两两 Pearson 相关系数均值"
+            f"（{pairs} 对）；相关性越高越拥挤"
+        ),
+    }
+
+
+def _constituent_turnover(
+    constituents: List[Dict[str, Any]],
+    *,
+    max_samples: int = 20,
+) -> Optional[Dict[str, Any]]:
+    """成分股换手率（拥挤度维度 ②）：取样本股当日换手率算均值。
+
+    数据源：腾讯报价（含 turnover 字段）。注意：换手率只有当日快照值，
+    **无法构成「分位」**（无历史换手率序列），故只作为水平值标注，
+    不计入加权分——避免把不可比分位的数值混进 0–100 分。
+
+    Args:
+        constituents: 成分股列表。
+        max_samples: 最多取多少只。
+
+    Returns:
+        Optional[Dict[str, Any]]: {turnover, samples, caliber}；样本不足时 None。
+    """
+    from backend.app.datasource import tencent
+
+    sample = constituents[:max_samples]
+    values: List[float] = []
+    for item in sample:
+        code = item.get("code") or ""
+        if not code:
+            continue
+        try:
+            quote = tencent.get_quote(code, market="a")
+            tv = utils.to_float(quote.get("turnover"))
+            if tv is not None:
+                values.append(tv)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("成分股报价失败 %s：%s", code, type(exc).__name__)
+    if len(values) < 3:
+        return None
+    avg = sum(values) / len(values)
+    return {
+        "turnover": round(avg, 2),
+        "samples": len(values),
+        "caliber": (
+            f"成分股换手率= {len(values)} 只样本当日换手率均值 {avg:.2f}%"
+            "（腾讯报价快照，非分位，仅作水平参考，不计入拥挤度加权分）"
+        ),
+    }

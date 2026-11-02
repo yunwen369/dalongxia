@@ -50,17 +50,9 @@ def _load() -> Dict[str, Any]:
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}")
         diff = (resp.json() or {}).get("data", {}).get("diff") or []
-    except Exception as exc:  # noqa: BLE001 - 统一转「不可用」，由前端显示空态
-        logger.warning("涨跌家数获取失败：%s", exc)
-        return {
-            "up": None,
-            "down": None,
-            "flat": None,
-            "available": False,
-            "source": "东方财富 push2",
-            "caliber": "涨跌家数暂不可用（东财 push2 连接异常），本卡显示空态，不以 0 代替",
-            "as_of": as_of,
-        }
+    except Exception as exc:  # noqa: BLE001 - 主源失败转备源，不直接判不可用
+        logger.warning("涨跌家数主源失败，改走同花顺行业汇总：%s", exc)
+        return _load_ths(as_of)
 
     total_up = 0
     total_down = 0
@@ -94,6 +86,61 @@ def _load() -> Dict[str, Any]:
         "available": True,
         "source": "东方财富 push2",
         "caliber": "沪深两市合计（上证指数＋深证综指统计口径），盘中实时、收盘后为收盘值",
+        "as_of": as_of,
+    }
+
+
+def _load_ths(as_of: str) -> Dict[str, Any]:
+    """备源：把同花顺 90 个行业的「上涨家数/下跌家数」逐行相加得全市场家数。
+
+    第八轮补齐（2026-11-02）：东财 push2 在本机被源站重置（L-20），原先整块
+    「市场宽度」直接不可用。同花顺行业行情页每个行业都带上涨/下跌家数，
+    90 个行业覆盖全部 A 股，逐行求和即全市场口径（真实值，不估算）。
+    平盘家数该页不提供，故 ``flat`` 为 None 并在口径中写明，不补 0。
+
+    Args:
+        as_of: 数据时间文本（北京时间）。
+
+    Returns:
+        Dict[str, Any]: ``{up, down, flat, available, source, caliber, as_of}``。
+    """
+    try:
+        from backend.app.datasource import ths_http
+
+        rows = ths_http.get_industry_rows()
+    except Exception as exc:  # noqa: BLE001 - 备源同样失败才判不可用
+        logger.warning("涨跌家数备源失败：%s", type(exc).__name__)
+        return {
+            "up": None,
+            "down": None,
+            "flat": None,
+            "available": False,
+            "source": "同花顺行业汇总",
+            "caliber": "涨跌家数暂不可用（东财 push2 与同花顺两条通道均异常），本卡显示空态，不以 0 代替",
+            "as_of": as_of,
+        }
+    up = sum(int(row.get("up") or 0) for row in rows)
+    down = sum(int(row.get("down") or 0) for row in rows)
+    if not rows or (up + down) <= 0:
+        return {
+            "up": None,
+            "down": None,
+            "flat": None,
+            "available": False,
+            "source": "同花顺行业汇总",
+            "caliber": "同花顺行业页未返回涨跌家数，本卡显示空态，不以 0 代替",
+            "as_of": as_of,
+        }
+    return {
+        "up": up,
+        "down": down,
+        "flat": None,
+        "available": True,
+        "source": "同花顺（行业涨跌家数汇总）",
+        "caliber": (
+            f"{len(rows)} 个同花顺行业逐行相加得全市场涨跌家数（覆盖全部 A 股）；"
+            "该页不提供平盘家数，故平盘为「无数据」不补 0"
+        ),
         "as_of": as_of,
     }
 

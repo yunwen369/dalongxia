@@ -17,9 +17,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query
 
 from backend.app import config
-from backend.app.datasource import utils
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error
 from backend.app.datasource import breadth as breadth_provider
 from backend.app.datasource import news as news_provider
 from backend.app.datasource import sentiment as sentiment_engine
@@ -53,15 +52,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str] 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update({
-        "source": source,
-        "caliber": caliber,
-        "as_of": as_of or utils.now_text(),
-        "market_status": "情绪快照",
-        "is_realtime": False,
-    })
-    return ok(payload)
+    return pack_success(data, source, caliber, as_of, "情绪快照", False)
 
 
 def _samples(items: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:

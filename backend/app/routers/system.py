@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import zipfile
 from pathlib import Path
@@ -72,6 +73,51 @@ def health() -> Dict[str, Any]:
         "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),
     }
     return ok(data)
+
+
+@router.get("/ready")
+def ready() -> Dict[str, Any]:
+    """服务就绪检查（2026-11-02 第二轮检测 P3-2 补齐）。
+
+    区别于 ``/health``（进程/数据源健康），``/ready`` 回答「服务是否已就绪、
+    能否接受业务请求」：路由全部注册、前端静态资源可达、数据目录可写即为就绪。
+    常用于自动化部署的就绪闸门（未就绪时返回 503，就绪时 200）。
+
+    Returns:
+        Dict[str, Any]: {"data": {ready, checked_at, checks}, "error": null}
+    """
+    checks: Dict[str, Any] = {}
+    all_ok = True
+
+    # 路由是否已注册（OpenAPI schema 非空）
+    try:
+        from backend.app.main import app as _app
+        schema = getattr(_app, "openapi_schema", None)
+        if schema is None:
+            schema = _app.openapi()
+        paths = (schema or {}).get("paths") or {}
+        checks["routes"] = {"ok": len(paths) > 0, "count": len(paths)}
+    except Exception as exc:  # noqa: BLE001
+        checks["routes"] = {"ok": False, "error": type(exc).__name__}
+    all_ok = all_ok and bool(checks.get("routes", {}).get("ok"))
+
+    # 前端静态资源是否可达
+    checks["frontend"] = {"ok": config.FRONTEND_DIR.exists(), "path": str(config.FRONTEND_DIR)}
+    all_ok = all_ok and bool(checks["frontend"]["ok"])
+
+    # 数据目录是否可写
+    try:
+        writable = os.access(config.DATA_DIR, os.W_OK)
+    except Exception:  # noqa: BLE001
+        writable = False
+    checks["data_dir"] = {"ok": writable, "path": str(config.DATA_DIR)}
+    all_ok = all_ok and writable
+
+    return ok({
+        "ready": all_ok,
+        "checked_at": utils.bj_now_aware().isoformat(timespec="seconds"),
+        "checks": checks,
+    })
 
 
 @router.post("/cache/clear")

@@ -16,7 +16,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlencode
 
 from backend.app import config
 from backend.app.core import netfix
@@ -24,6 +27,8 @@ from backend.app.core.errors import NonRetryableError
 from backend.app.core.v8_guard import guard_v8
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
+
+from backend.app.datasource import utils  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -430,27 +435,107 @@ def _item(title: str, text: str, source: str, time_text: str, url: str, channel:
 
 
 def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
-    """财联社 7×24 快讯（字段：标题/内容/发布日期/发布时间）。
+    """财联社 7×24 快讯（纯 HTTP，无需 V8 签名）。
+
+    2026-11-02 第八轮：原实现走 akshare ``stock_info_global_cls``（hexin-v 签名需
+    py_mini_racer），冻结形态禁用 V8 后该通道整体失效（降级点 G-6 的一部分）。
+    实测财联社电报接口 ``/v1/roll/get_roll_list`` 使用 ``md5(sha1(sorted_params))``
+    做签名，**纯 Python 即可计算**，故改为直连，并在 ``last_time`` 上翻页取更长列表
+    （每条 20 条/页），同时解决「单次仅 20 条、无分页」的旧缺口。
 
     Args:
         limit: 返回条数上限（超出上限按上限截断）。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        NonRetryableError: 通道确定性失效（交由上层降级到东财/新浪快讯）。
     """
     _ensure_enabled()
-    frame = _call_ths(lambda: ak.stock_info_global_cls(symbol="全部"))
-    records = frame.to_dict("records")
+    wanted = max(1, int(limit or 50))
     items: List[Dict[str, Any]] = []
-    for row in records:
-        title = _text(row.get("标题"))
-        content = _text(row.get("内容"))
-        time_text = f"{_text(row.get('发布日期'))} {_text(row.get('发布时间'))}".strip()
-        if not (title or content):
-            continue
-        items.append(_item(title, content, "财联社", time_text, "", "财联社快讯"))
+    seen: set[str] = set()
+    last_time = int(time.time())
+    for _ in range(6):  # 最多 6 页 ≈ 120 条，足够覆盖列表页与情绪打分
+        page = _cls_roll(last_time)
+        if not page:
+            break
+        for row in page:
+            title = _text(row.get("title"))
+            content = _text(row.get("content")) or _text(row.get("brief"))
+            if not (title or content):
+                continue
+            stamp = utils.to_int(row.get("ctime"))
+            time_text = (
+                utils.now_text(datetime.fromtimestamp(stamp, tz=timezone(timedelta(hours=8))))
+                if stamp
+                else ""
+            )
+            key = f"{title}|{time_text}"
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                _item(title, content, "财联社", time_text, row.get("shareurl") or "", "财联社快讯")
+            )
+        if len(items) >= wanted:
+            break
+        oldest = utils.to_int(page[-1].get("ctime"))
+        if not oldest or oldest >= last_time:
+            break
+        last_time = oldest
     items.sort(key=lambda item: item["time"], reverse=True)
-    return items[: max(1, limit)]
+    if not items:
+        raise NonRetryableError("财联社电报返回空数据")
+    return items[:wanted]
+
+
+def _cls_roll(last_time: int) -> List[Dict[str, Any]]:
+    """请求财联社电报一页（``md5(sha1(urlencode(params)))`` 签名）。
+
+    Args:
+        last_time: 上一页最后一条的 ``ctime``（Unix 秒），首屏传当前时间。
+
+    Returns:
+        List[Dict[str, Any]]: ``roll_data`` 列表；结构异常时返回空列表。
+
+    Raises:
+        NonRetryableError: 网络确定性失效。
+    """
+    params: Dict[str, Any] = {
+        "app": "CailianpressWeb",
+        "category": "",
+        "last_time": int(last_time),
+        "os": "web",
+        "refresh_type": "1",
+        "rn": "20",
+        "sv": "8.4.6",
+    }
+    params["sign"] = hashlib.md5(
+        hashlib.sha1(urlencode(params).encode("utf-8")).hexdigest().encode("utf-8")
+    ).hexdigest()
+    session = netfix.make_session()
+    try:
+        response = session.get(
+            config.CLS_ROLL_URL,
+            params=params,
+            headers={
+                "User-Agent": config.BROWSER_USER_AGENT,
+                "Referer": "https://www.cls.cn/telegraph",
+            },
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+        return ((payload.get("data") or {}).get("roll_data") or [])
+    except Exception as exc:  # noqa: BLE001 - 统一转译为可降级异常
+        name = type(exc).__name__
+        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
+            raise NonRetryableError(f"财联社通道不可用：{name}") from exc
+        raise
+    finally:
+        session.close()
 
 
 def get_flash_multi(limit: int = 50) -> List[Dict[str, Any]]:
@@ -535,20 +620,55 @@ def _global_sina() -> List[Dict[str, Any]]:
 
 
 def _global_ths() -> List[Dict[str, Any]]:
-    """同花顺全球快讯（20 条，标题/内容/发布时间/链接）。
+    """同花顺全球快讯（20 条，标题/摘要/发布时间/链接）。
+
+    2026-11-02 第八轮：原实现走 akshare ``stock_info_global_ths``（V8 签名），
+    冻结形态不可用。改用同花顺资讯站公开接口
+    ``news.10jqka.com.cn/tapp/news/push/stock/``（纯 HTTP，JSON，含 title/digest/url/ctime），
+    保持「同花顺」这一真实来源不消失。
 
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+
+    Raises:
+        NonRetryableError: 网络确定性失效。
     """
-    frame = _call_ths(lambda: ak.stock_info_global_ths())
+    url = "https://news.10jqka.com.cn/tapp/news/push/stock/"
+    session = netfix.make_session()
+    try:
+        response = session.get(
+            url,
+            params={"page": 1, "tag": "", "track": "website", "pagesize": 50},
+            headers={
+                "User-Agent": config.BROWSER_USER_AGENT,
+                "Referer": "https://news.10jqka.com.cn/",
+            },
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+    except Exception as exc:  # noqa: BLE001 - 统一转译为可降级异常
+        name = type(exc).__name__
+        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
+            raise NonRetryableError(f"同花顺快讯通道不可用：{name}") from exc
+        raise
+    finally:
+        session.close()
     items: List[Dict[str, Any]] = []
-    for row in frame.to_dict("records"):
-        title = _text(row.get("标题"))
-        content = _text(row.get("内容"))
-        if not (title or content):
+    for row in ((payload.get("data") or {}).get("list") or []):
+        title = _text(row.get("title"))
+        digest = _text(row.get("digest"))
+        if not (title or digest):
             continue
-        items.append(_item(title, content, "同花顺", _text(row.get("发布时间")),
-                           _text(row.get("链接")), "同花顺全球"))
+        stamp = utils.to_int(row.get("ctime"))
+        time_text = (
+            utils.now_text(datetime.fromtimestamp(stamp, tz=timezone(timedelta(hours=8))))
+            if stamp
+            else ""
+        )
+        items.append(
+            _item(title, digest, "同花顺", time_text, row.get("url") or "", "同花顺全球")
+        )
     return items
 
 

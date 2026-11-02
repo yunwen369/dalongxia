@@ -661,3 +661,16 @@ def today_text() -> str:
         （UTC-5 时比北京晚一天）。TZ-06 收口后统一走 :func:`today_bj`。
     """
     return today_bj().isoformat()
+
+
+def round_or_none(value: Optional[float], digits: int = 4) -> Optional[float]:
+    """按位数四舍五入，None 原样返回（各 provider 的统一实现）。
+
+    Args:
+        value: 待处理数值。
+        digits: 保留小数位数。
+
+    Returns:
+        Optional[float]: 结果；入参为 None 时返回 None（不补 0）。
+    """
+    return None if value is None else round(value, digits)

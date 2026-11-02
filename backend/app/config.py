@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "1.2.0"  # 语义化版本号：1.2.0 第七轮收官（M1–M9 + 待排期 M10–M14 全部落地）
-BUILD_TAG = "v1.2.0-20261101"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "1.2.1"  # 语义化版本号：1.2.1 第八轮（全链路去降级：V8 退出主链路 + 测试报告问题清零）
+BUILD_TAG = "v1.2.1-20261102"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
@@ -59,9 +59,12 @@ EXPORT_DIR = DATA_DIR / "exports"  # 导出文件预留目录
 LOG_DIR = PROJECT_DIR / "logs"  # 日志目录，按天滚动（冻结时 = EXE_DIR/logs）
 AI_CONFIG_FILE = DATA_DIR / "ai_config.json"  # AI 配置落盘文件（含密钥，禁止入库）
 YJB_TOKEN_FILE = DATA_DIR / "yjb_token.json"  # 养基宝 Token 落盘文件（禁止入库）
-# 冻结环境禁用 py_mini_racer(V8) 依赖源（规范 §13.6-2）：
-# akshare 的同花顺/财联社接口经内嵌 V8 执行签名，打包后易原生崩溃；
-# 冻结模式一律跳过这些源，由新浪/申万/东财/腾讯等纯 HTTP 通道降级承接。
+# py_mini_racer(V8) 可用性开关（规范 §13.6-2）。
+# 第八轮（2026-11-02）起，板块行情/K线/成分/资金流/拥挤度、财联社快讯、
+# 同花顺全球快讯、分红数据已全部改走**纯 HTTP** 通道（ths_http / tencent_board /
+# sina_flow / cls / 东财 datacenter），V8 签名不再位于任何业务主链路上，
+# 因此该开关**不再用于关闭任何功能**，仅作为诊断信息保留（v8_guard 仍会拦截
+# 遗留的 akshare 同花顺调用，避免冻结环境原生崩溃）。
 V8_SOURCES_ENABLED = not IS_FROZEN
 ENV_FILE = PROJECT_DIR / ".env"  # 本地环境变量文件（禁止入库）
 
@@ -84,8 +87,10 @@ BROWSER_USER_AGENT = (  # 统一浏览器 UA，降低被源站风控概率
 
 # 数据源基址（允许环境变量覆盖，便于故障演练与联调；生产默认值不变）
 TENCENT_QUOTE_BASE = os.environ.get("OPENBB_TENCENT_QUOTE_BASE", "https://qt.gtimg.cn")
+# 实测（2026-11-02）：ifzq.gtimg.cn 对程序化请求返回 501（跳转校验页），
+# web.ifzq.gtimg.cn 与 proxy.finance.qq.com/ifzqgtimg 正常，故基址改用前者。
 TENCENT_KLINE_BASE = os.environ.get(
-    "OPENBB_TENCENT_KLINE_BASE", "https://ifzq.gtimg.cn"
+    "OPENBB_TENCENT_KLINE_BASE", "https://web.ifzq.gtimg.cn"
 )
 TENCENT_SEARCH_BASE = os.environ.get(
     "OPENBB_TENCENT_SEARCH_BASE", "https://smartbox.gtimg.cn"
@@ -116,6 +121,47 @@ EASTMONEY_FUND_FHSP_REFERER = os.environ.get(
 SINA_FX_URL = os.environ.get(
     "OPENBB_SINA_FX_URL",
     "https://hq.sinajs.cn/list=fx_susdcny,fx_shkdcny",
+)
+
+# ── 纯 HTTP 板块通道（2026-11-02 第八轮）──────────────────────────
+# 背景：同花顺板块数据原经 akshare + py_mini_racer(V8) 签名，冻结形态被禁用后
+#   板块行情/K线/资金流/拥挤度全部降级。实测同花顺「行情中心」与「行情数据」两个
+#   纯 HTTP 域名无需 hexin-v 签名即可取数，故改由下列直连通道承接，彻底移除 V8 依赖。
+# 同花顺行情中心（行业列表、行业成分、板块详情，GBK 编码）
+THS_QUOTE_BASE = os.environ.get("OPENBB_THS_QUOTE_BASE", "http://q.10jqka.com.cn")
+# 同花顺行情数据（板块日/周/月 K 线、板块实时快照，JSONP）
+THS_LINE_BASE = os.environ.get("OPENBB_THS_LINE_BASE", "https://d.10jqka.com.cn")
+THS_REFERER = "http://q.10jqka.com.cn/"
+# 腾讯板块行情（hy2=申万二级行业 124 个、gn=概念 805 个，含主力净流入与领涨股）
+TENCENT_BOARD_URL = os.environ.get(
+    "OPENBB_TENCENT_BOARD_URL",
+    "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank",
+)
+# 新浪板块资金流（行业/概念，净额/流入/流出，单位=元）
+SINA_BOARD_FLOW_URL = os.environ.get(
+    "OPENBB_SINA_BOARD_FLOW_URL",
+    "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk",
+)
+# 新浪个股四档资金流（支持 daima=a,b,c 批量；r0=超大单 r1=大单 r2=中单 r3=小单）
+SINA_STOCK_FLOW_URL = os.environ.get(
+    "OPENBB_SINA_STOCK_FLOW_URL",
+    "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "MoneyFlow.ssi_ssfx_flzjtj",
+)
+# 新浪美股分时（type=1 分钟 / 5 五分钟；返回 d/o/h/l/c/v/a）
+SINA_US_MINUTE_URL = os.environ.get(
+    "OPENBB_SINA_US_MINUTE_URL",
+    "https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getMinK",
+)
+# 财联社电报（md5(sha1(sorted_params)) 签名，纯 HTTP，无需 V8）
+CLS_ROLL_URL = os.environ.get(
+    "OPENBB_CLS_ROLL_URL",
+    "https://www.cls.cn/v1/roll/get_roll_list",
+)
+# 天天基金 F10 行业配置页（HTML 表格，无记录时页面含「暂无数据」）
+EASTMONEY_FUND_HYTZ_URL = os.environ.get(
+    "OPENBB_EASTMONEY_FUND_HYTZ_URL",
+    "https://fundf10.eastmoney.com/hytz_{code}.html",
 )
 
 # 站点 Referer（部分源站缺 Referer 会返回 403）

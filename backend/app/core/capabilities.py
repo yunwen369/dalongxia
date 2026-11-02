@@ -10,8 +10,8 @@
 2. 结果缓存 10 分钟，避免 /api/health 被高频轮询时反复打源站；
 3. 状态文案统一由本模块产出，``/api/health`` 与 ``/api/connectors/status``
    共用同一份快照，杜绝两处说法不一致；
-4. V8 依赖源（同花顺）在冻结形态降级时如实标注「已接入（V8 降级）」，
-   不伪装成完全可用，也不误报为未接入。
+4. 同花顺已改走纯 HTTP 通道（第八轮），不再依赖 py_mini_racer(V8)，
+   故状态统一为「已接入（纯 HTTP，无 V8 依赖）」，不再出现「V8 降级」文案。
 """
 
 from __future__ import annotations
@@ -246,7 +246,6 @@ def datasource_status(force_probe: bool = False) -> Dict[str, Dict[str, Any]]:
         stage, active, detail, probed_at}}。
     """
     probes = probe_snapshot(force=force_probe)
-    v8_enabled = bool(getattr(config, "V8_SOURCES_ENABLED", True))
     result: Dict[str, Dict[str, Any]] = {}
 
     for key, meta in config.DATA_SOURCES.items():
@@ -278,13 +277,10 @@ def datasource_status(force_probe: bool = False) -> Dict[str, Dict[str, Any]]:
             probe = probes.get(key) or {}
             detail = str(probe.get("detail") or "")
             probed_at = str(probe.get("probed_at") or "")
-            if not v8_enabled:
-                # 冻结形态禁用 py_mini_racer：同花顺走新浪备源，能力仍在但降级
-                status_text = "已接入（V8 降级）"
-                active = True
-                stage = "degraded"
-            elif probe.get("ok"):
-                status_text = "已接入（V8 可用）"
+            # 第八轮（2026-11-02）：板块/快讯/分红已全部改走同花顺纯 HTTP 通道，
+            # V8 签名不再位于任何主链路上，故不再有「V8 降级」状态。
+            if probe.get("ok"):
+                status_text = "已接入（纯 HTTP，无 V8 依赖）"
                 active = True
             else:
                 status_text = "通道异常（探测失败）"

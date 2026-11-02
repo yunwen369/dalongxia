@@ -19,11 +19,11 @@ from backend.app.datasource import fund_combo, portfolio as portfolio_module, sc
 # ---------------------------------------------------------------
 def test_rankings_sorted_desc_and_failed_collected(monkeypatch):
     """排行按得分降序，单板块失败进 failed 不阻断。"""
-    monkeypatch.setattr(sector, "get_crowding_board_names", lambda: ["甲", "乙", "丙", "丁"])
+    monkeypatch.setattr(sector, "get_crowding_board_names", lambda kind="industry": ["甲", "乙", "丙", "丁"])
 
     scores = {"甲": 30.0, "乙": 85.0, "丙": 62.0}
 
-    def _fake_crowding(board):
+    def _fake_crowding(board, *, kind="industry", **kwargs):
         """假打分：丁 抛错，其余返回预设分。"""
         if board == "丁":
             raise ValueError("日线样本不足")
@@ -41,18 +41,18 @@ def test_rankings_sorted_desc_and_failed_collected(monkeypatch):
 
 
 def test_rankings_rejects_unknown_kind():
-    """非 industry 类型直接拒绝（概念板块未纳入）。"""
+    """未知 kind 直接拒绝（industry/concept 之外）。"""
     with pytest.raises(ValueError) as err:
-        sector.get_crowding_rankings(kind="concept")
-    assert "仅支持 industry" in str(err.value)
+        sector.get_crowding_rankings(kind="xx")
+    assert "仅支持" in str(err.value)
 
 
 def test_rankings_limit_applied(monkeypatch):
     """limit 生效且不超过扫描数。"""
-    monkeypatch.setattr(sector, "get_crowding_board_names", lambda: ["甲", "乙"])
+    monkeypatch.setattr(sector, "get_crowding_board_names", lambda kind="industry": ["甲", "乙"])
     monkeypatch.setattr(
         sector, "get_crowding",
-        lambda board: {"board": board, "score": 50.0, "level": "正常", "parts": []},
+        lambda board, *, kind="industry", **kwargs: {"board": board, "score": 50.0, "level": "正常", "parts": []},
     )
     data = sector.get_crowding_rankings(limit=1)
     assert len(data["items"]) == 1

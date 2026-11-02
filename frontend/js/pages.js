@@ -88,7 +88,9 @@
     // 第七轮 M9：筛选器页状态（条件行由 DOM 持有，这里存快照与结果缓存）
     screener: { conditions: [], lastResult: null },
     // 第七轮 M6：提醒中心页状态（规则表单草稿）
-    alerts: { draftType: "price", unreadOnly: false }
+    alerts: { draftType: "price", unreadOnly: false },
+    // 第七轮 M12 补齐：拥挤度排行口径（industry/concept）
+    crowdingKind: "industry"
   };
 
   // =============================================================
@@ -991,6 +993,9 @@
       setEmpty(body, t("state.empty"), function () { loadSectors(true); });
       return;
     }
+    // 概念口径 800+ 行，排行表只渲染涨幅前 60（同源同序，不改变统计口径）；
+    // 行业仅 90 行，全量渲染不做截断。
+    var displayRows = list.kind === "concept" ? rows.slice(0, 60) : rows;
     renderTable(
       body,
       [
@@ -1000,7 +1005,7 @@
         { title: t("sectors.col.lead"), key: "lead_stock" },
         { title: t("sectors.col.leadPct"), cls: "num", render: function (row) { return pctNode(row.lead_pct); } }
       ],
-      rows,
+      displayRows,
       function (row) {
         jumpToSectorVal(row.name, market);
       },
@@ -1469,6 +1474,7 @@
         { key: "base_weight", title: t("combo.weight.col.base"), num: true, render: function (row) { return fmt(row.base_weight, 2) + "%"; } },
         { key: "board", title: t("combo.weight.col.board"), render: function (row) { return row.board || t("value.none"); } },
         { key: "crowding", title: t("combo.weight.col.crowd"), num: true, render: function (row) { return row.crowding === null ? t("value.none") : fmt(row.crowding, 1); } },
+        { key: "crowding_source", title: t("combo.weight.col.crowdsrc"), render: function (row) { return row.crowding_source || t("value.none"); } },
         { key: "discount", title: t("combo.weight.col.discount"), num: true, render: function (row) {
             return el("span", row.discount < 0.999 ? "down" : "flat", "×" + fmt(row.discount, 2));
           } },
@@ -1548,6 +1554,10 @@
         { key: "gross", title: t("scr.col.gross"), num: true, render: function (row) { return fmt(row.gross, 2); } },
         { key: "debt_ratio", title: t("scr.col.debt"), num: true, render: function (row) { return fmt(row.debt_ratio, 2); } },
         { key: "mktcap", title: t("scr.col.mktcap"), num: true, render: function (row) { return fmt(row.mktcap, 0); } },
+        { key: "dividend_yield", title: t("scr.col.dividend"), num: true, render: function (row) {
+            return row.dividend_yield === null || row.dividend_yield === undefined ? t("value.none")
+              : fmt(row.dividend_yield, 2) + "%";
+          } },
         { key: "exempt", title: t("scr.col.exempt"), render: function (row) {
             return (row.exempt && row.exempt.length) ? t("scr.exemptYes") : "";
           } }
@@ -1693,6 +1703,21 @@
     // 第七轮 M12：全板块排行（与 M3-01 同一打分函数，全市场同口径）
     var rankCard = buildCard("M12-01", t("crowd.rank.title"), "g-12", t("crowd.rank.sub"));
     rankCard.body.id = "m1201-body";
+    // 行业/概念口径切换（补齐概念排行，不降级）
+    var kindBar = el("div", "page-toolbar");
+    [["industry", t("sectors.kind.industry")], ["concept", t("sectors.kind.concept")]].forEach(function (item) {
+      var btn = el("button", "nav-item" + (state.crowdingKind === item[0] ? " active" : ""));
+      btn.textContent = item[1];
+      btn.addEventListener("click", function () {
+        if (state.crowdingKind === item[0]) {
+          return;
+        }
+        state.crowdingKind = item[0];
+        paintCrowdingRankings();
+      });
+      kindBar.appendChild(btn);
+    });
+    rankCard.card.insertBefore(kindBar, rankCard.body);
     grid.appendChild(rankCard.card);
     page.appendChild(grid);
     paintCrowding();
@@ -1714,8 +1739,15 @@
     body.innerHTML = "";
     body.appendChild(el("div", "pg-state", t("crowd.rank.loading")));
     body.setAttribute("data-state", "loading");
-    api("/api/sector/crowding/rankings", { limit: 30 }).then(function (data) {
+    api("/api/sector/crowding/rankings", { kind: state.crowdingKind, limit: 30 }).then(function (data) {
       body.innerHTML = "";
+      // 后台计算中：不冒充结果，显示计算中态并稍后自动重试
+      if (data.computing) {
+        body.appendChild(el("div", "pg-state", data.caliber || t("crowd.rank.loading")));
+        body.setAttribute("data-state", "loading");
+        setTimeout(paintCrowdingRankings, 8000);
+        return;
+      }
       var counts = data.level_counts || {};
       var kpis = el("div", "pg-kpis");
       [

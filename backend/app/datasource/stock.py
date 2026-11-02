@@ -109,7 +109,7 @@ def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
     Returns:
         float | None: 数值；无法解析时返回 None（不补 0）。
     """
-    return None if value is None else round(value, digits)
+    return utils.round_or_none(value, digits)
 
 
 def _secucode(symbol: str) -> str:

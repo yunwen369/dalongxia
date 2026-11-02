@@ -697,6 +697,166 @@ def _discount_of(score: Optional[float]) -> Tuple[Optional[float], str]:
     return 0.60, "拥挤度 80–100，重度折扣 ×0.60"
 
 
+def get_fund_crowding(code: str) -> Dict[str, Any]:
+    """基金自身拥挤度（第七轮 M14 补齐，替代「重仓行业代理」）。
+
+    从基金**自身净值历史**计算三维度分位（不依赖重仓股行业）：
+    ① 近 60 日年化波动率 → 对自身近 250 日历史的分位；
+    ② 近 20 日动量（净值涨幅）→ 分位；
+    ③ 近 60 日最大回撤 → 分位（回撤越大越「拥挤/过热」）。
+    三维等权加权成 0–100 分，>60 提示、>80 复核，与 M3 股板块拥挤度同口径。
+
+    净值源：蛋卷 ``/djapi/fund/nav/history``（size≤500，一次取够 260 日）→ 东财 lsjz 兜底。
+    样本不足或净值源不可用时返回 available=false + 中文说明（不冒充分数）。
+
+    Args:
+        code: 基金代码。
+
+    Returns:
+        Dict[str, Any]: {code, score, level, parts, sample_days, available, caliber, as_of, missing}
+    """
+    from backend.app.datasource import fund as fund_provider
+
+    try:
+        nav = fund_provider.get_nav(code, page=1, size=500)
+    except Exception as exc:  # noqa: BLE001 - 净值源不可用，如实标不可得
+        return {
+            "code": code, "score": None, "available": False,
+            "level": "不可得", "parts": [], "sample_days": 0,
+            "caliber": f"基金自身拥挤度不可得（净值源异常：{type(exc).__name__}），未折扣",
+            "as_of": utils.now_text(utils.bj_now()),
+            "missing": [f"净值源不可得（{type(exc).__name__}）"],
+        }
+    items = nav.get("items") or []
+    rows = []
+    for item in items:
+        d = str(item.get("date") or "")[:10]
+        v = utils.to_float(item.get("nav"))
+        if d and v:
+            rows.append({"date": d, "nav": v})
+    rows.sort(key=lambda r: r["date"])
+    if len(rows) < 120:
+        return {
+            "code": code, "score": None, "available": False,
+            "level": "不可得", "parts": [], "sample_days": len(rows),
+            "caliber": f"净值样本不足（{len(rows)} < 120 日），无法计算自身拥挤度，未折扣",
+            "as_of": utils.now_text(utils.bj_now()),
+            "missing": [f"净值样本不足（{len(rows)} 日）"],
+        }
+
+    navs = [r["nav"] for r in rows]
+    # 日收益率
+    rets = []
+    for i in range(1, len(navs)):
+        prev = navs[i - 1]
+        if prev:
+            rets.append(navs[i] / prev - 1)
+    if len(rets) < 119:
+        return {
+            "code": code, "score": None, "available": False,
+            "level": "不可得", "parts": [], "sample_days": len(rows),
+            "caliber": "收益率序列不足，无法计算自身拥挤度，未折扣",
+            "as_of": utils.now_text(utils.bj_now()),
+            "missing": ["收益率序列不足"],
+        }
+
+    # 近 60 日年化波动率（历史全序列做分母样本）
+    window_60 = rets[-60:]
+    vol_now = (sum(r * r for r in window_60) / len(window_60)) ** 0.5 * (252 ** 0.5)
+    vol_hist = []
+    for i in range(60, len(rets)):
+        w = rets[i - 59: i + 1]
+        vol_hist.append((sum(r * r for r in w) / len(w)) ** 0.5 * (252 ** 0.5))
+
+    # 近 20 日动量
+    mom_now = navs[-1] / navs[-21] - 1 if len(navs) > 21 else None
+    mom_hist = []
+    for i in range(21, len(navs)):
+        mom_hist.append(navs[i] / navs[i - 21] - 1)
+
+    # 近 60 日最大回撤
+    dd_now = _max_drawdown(navs[-60:])
+    dd_hist = []
+    for i in range(60, len(navs)):
+        dd_hist.append(_max_drawdown(navs[i - 59: i + 1]))
+
+    def _rank(hist, current, higher_is_worse=True):
+        if current is None or len(hist) < 30:
+            return None
+        if higher_is_worse:
+            below = sum(1 for v in hist if v >= current)
+        else:
+            below = sum(1 for v in hist if v <= current)
+        return round(below / len(hist) * 100, 1)
+
+    # 波动率与回撤：值越大越拥挤（higher_is_worse=True）；动量：值越大越热→也视为拥挤
+    p_vol = _rank(vol_hist, vol_now, True)
+    p_mom = _rank(mom_hist, mom_now, True)
+    p_dd = _rank(dd_hist, dd_now, True)
+
+    parts = {
+        "volatility": {"label": "近60日波动率(年化)", "value": round(vol_now * 100, 2),
+                       "pct": p_vol, "weight": 1 / 3, "unit": "%"},
+        "momentum": {"label": "近20日动量", "value": round((mom_now or 0) * 100, 2),
+                     "pct": p_mom, "weight": 1 / 3, "unit": "%"},
+        "max_drawdown": {"label": "近60日最大回撤", "value": round((dd_now or 0) * 100, 2),
+                         "pct": p_dd, "weight": 1 / 3, "unit": "%"},
+    }
+
+    missing_parts = []
+    score = 0.0
+    used = 0.0
+    for key, part in parts.items():
+        pct = part["pct"]
+        if pct is None:
+            missing_parts.append(part["label"])
+            continue
+        score += part["weight"] * pct
+        used += part["weight"]
+    if used <= 0:
+        return {
+            "code": code, "score": None, "available": False, "level": "不可得",
+            "parts": [], "sample_days": len(rows),
+            "caliber": "三维分位均不可用，无法计算自身拥挤度，未折扣",
+            "as_of": utils.now_text(utils.bj_now()),
+            "missing": missing_parts,
+        }
+    score = round(score / used, 1)
+    if score >= 80:
+        level, advice = "高位", "基金自身交易结构拥挤，建议复核"
+    elif score >= 60:
+        level, advice = "偏高", "自身拥挤度进入提示区间"
+    else:
+        level, advice = "正常", "自身拥挤度处于常规区间"
+
+    return {
+        "code": code, "score": score, "available": True, "level": level, "advice": advice,
+        "parts": list(parts.values()), "sample_days": len(rows),
+        "caliber": (
+            f"基金自身拥挤度=三维分位等权（波动率 {int(parts['volatility']['weight']*100)}% / "
+            f"动量 {int(parts['momentum']['weight']*100)}% / 最大回撤 {int(parts['max_drawdown']['weight']*100)}%），"
+            f"分位窗口=自身近 {len(rows)} 个交易日净值；"
+            "只陈述自身交易结构位置，不构成买卖建议"
+        ),
+        "as_of": utils.now_text(utils.bj_now()),
+        "missing": [f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else [],
+    }
+
+
+def _max_drawdown(navs: List[float]) -> Optional[float]:
+    """最大回撤（峰值到谷底的跌幅）。"""
+    peak = None
+    max_dd = 0.0
+    for v in navs:
+        if peak is None or v > peak:
+            peak = v
+        if peak:
+            dd = (peak - v) / peak
+            if dd > max_dd:
+                max_dd = dd
+    return max_dd
+
+
 def weight_breakdown(
     codes: List[str],
     risk_profile: str = "balanced",
@@ -705,20 +865,14 @@ def weight_breakdown(
 ) -> Dict[str, Any]:
     """权重明细：基础权重 × 拥挤度折扣 → 最终权重（第七轮 M14）。
 
-    拥挤度代理口径：取该基金**第一大重仓股所属行业**的同花顺板块拥挤度（调 M3 同一函数）。
-    这是近似（基金 ≠ 单一行业），已在 `caliber` 与逐条 `note` 中写明。
+    拥挤度口径：优先取基金**自身拥挤度**（M14 补齐，从净值历史算）；
+    自身不可得时回退到「第一大重仓股所属行业」的同花顺板块分数（调 M3 同一函数），
+    回退情形在 `caliber` 与逐条 `note` 中如实写明。
 
     折扣后处理：基金部分内部重新归一化到「基础权重合计」，再按单只上限裁剪，
     裁剪余额留现金（不做满仓强制）。折扣不可得的基金按 ×1.00 处理并标注。
-
-    Args:
-        codes: 基金代码列表（2–30 只）。
-        risk_profile: 风险档位（balanced/conservative/aggressive）。
-        crowd_discount: False 时全部按 ×1.00（用于对照）。
-
-    Returns:
-        Dict[str, Any]: {items, totals, missing, caliber, disclaimer, as_of}
     """
+
     base = evaluate(codes, risk_profile)
     weights = {row["code"]: row for row in base.get("weights") or []}
     items = base.get("items") or []
@@ -749,21 +903,33 @@ def weight_breakdown(
         base_weight = float((weights.get(code) or {}).get("weight") or 0.0)
         board: Optional[str] = None
         score: Optional[float] = None
+        crowd_source = "自身"
         note = ""
         if crowd_discount and base_weight > 0:
+            # M14 补齐：优先取基金**自身拥挤度**（净值历史算）；不可得再回退重仓行业代理
             try:
-                holding = fund_provider.get_holding(code)
-                top = (holding.get("items") or [{}])[0]
-                top_code = str(top.get("code") or top.get("symbol") or "")
-                industry = portfolio_provider._industry_of(top_code, "a")
-                board = _match_board(industry)
-                if not board:
-                    note = f"重仓行业「{industry or '未知'}」未匹配到同花顺板块，未折扣"
-                elif board in crowd_cache:
-                    score = crowd_cache[board]
+                fc = get_fund_crowding(code)
+                if fc.get("available") and fc.get("score") is not None:
+                    score = fc["score"]
+                    crowd_source = "自身"
                 else:
-                    score = sector_provider.get_crowding(board).get("score")
-                    crowd_cache[board] = score
+                    # 回退到第一大重仓股所属行业的同花顺板块分数（原代理口径）
+                    holding = fund_provider.get_holding(code)
+                    top = (holding.get("items") or [{}])[0]
+                    top_code = str(top.get("code") or top.get("symbol") or "")
+                    industry = portfolio_provider._industry_of(top_code, "a")
+                    board = _match_board(industry)
+                    crowd_source = "重仓行业代理"
+                    if not board:
+                        note = f"自身拥挤度不可得（{fc.get('caliber', '净值样本不足')}），" \
+                               f"且重仓行业「{industry or '未知'}」未匹配到同花顺板块，未折扣"
+                    elif board in crowd_cache:
+                        score = crowd_cache[board]
+                    else:
+                        score = sector_provider.get_crowding(board).get("score")
+                        crowd_cache[board] = score
+                    if score is None:
+                        note = (note + "；" if note else "") + "行业拥挤度取数失败，未折扣"
             except Exception as exc:  # noqa: BLE001 - 单只失败不影响整体
                 note = f"拥挤度取数失败（{type(exc).__name__}），未折扣"
         factor, factor_label = _discount_of(score) if crowd_discount else (1.00, "未启用拥挤度降权")
@@ -774,6 +940,7 @@ def weight_breakdown(
             "base_weight": round(base_weight, 2),
             "board": board,
             "crowding": round(score, 1) if score is not None else None,
+            "crowding_source": crowd_source,
             "discount": applied,
             "discount_label": factor_label,
             "final_weight": round(base_weight * applied, 4),
@@ -824,7 +991,9 @@ def weight_breakdown(
             "最终权重 = 基础权重（逆波动率 × 得分）× 拥挤度折扣因子；"
             "折扣档：<60 ×1.00 / 60–79 ×0.85 / 80–100 ×0.60；"
             "折后基金部分内部归一化到原基础权重合计，再按单只上限裁剪，余额留现金；"
-            "拥挤度代理=该基金第一大重仓股所属行业的同花顺板块分数（调 M3 同一函数，非基金自身拥挤度）；"
+            "拥挤度优先取基金**自身拥挤度**（M14 补齐：近60日波动率/近20日动量/近60日最大回撤"
+            "三维分位等权，源=自身净值历史），自身不可得时回退到「第一大重仓股所属行业」的"
+            "同花顺板块分数（crowding_source 字段逐只标注）；"
             "折扣是风险控制手段，不是收益预期"
         ),
         "disclaimer": base.get("disclaimer"),

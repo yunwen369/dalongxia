@@ -961,8 +961,9 @@ class TestCapabilityStatus:
         assert status["cls"]["status"] == "通道异常（探测失败）"
         assert status["cls"]["active"] is False
 
-    def test_v8_disabled_reports_degraded(self, monkeypatch):
-        """冻结形态（V8 关闭）下同花顺应如实标注「V8 降级」，而不是未接入。"""
+    def test_v8_disabled_still_reports_active(self, monkeypatch):
+        """冻结形态（V8 关闭）下同花顺仍应「已接入」——第八轮起板块/快讯/分红
+        全部走纯 HTTP，V8 关闭不再导致任何功能降级。"""
         from backend.app import config as cfg
         from backend.app.core import capabilities
 
@@ -970,8 +971,9 @@ class TestCapabilityStatus:
         monkeypatch.setitem(capabilities.PROBES, "ths", lambda: (True, "模拟可达"))
         capabilities._PROBE_CACHE.pop("ths", None)  # noqa: SLF001 - 清掉缓存确保重探
         status = capabilities.datasource_status(force_probe=True)
-        assert status["ths"]["status"] == "已接入（V8 降级）"
+        assert status["ths"]["status"] == "已接入（纯 HTTP，无 V8 依赖）"
         assert status["ths"]["active"] is True
+        assert status["ths"]["stage"] == "active"
 
 
 # =============================================================

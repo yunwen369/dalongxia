@@ -22,7 +22,7 @@ from fastapi import APIRouter, Query
 
 from backend.app import config
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import fcf_health
 from backend.app.datasource import peers as peers_provider
@@ -87,17 +87,7 @@ def _pack(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update(
-        {
-            "source": source,
-            "caliber": caliber,
-            "as_of": as_of,
-            "market_status": market_status,
-            "is_realtime": bool(is_realtime),
-        }
-    )
-    return ok(payload)
+    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _normalize(symbol: str, market: str) -> Optional[tuple]:

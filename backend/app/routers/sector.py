@@ -23,7 +23,7 @@ from fastapi import APIRouter, Query
 
 from backend.app import config
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import sector as sector_provider
 from backend.app.datasource import utils
@@ -86,17 +86,7 @@ def _pack(
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update(
-        {
-            "source": source,
-            "caliber": caliber,
-            "as_of": as_of,
-            "market_status": market_status,
-            "is_realtime": bool(is_realtime),
-        }
-    )
-    return ok(payload)
+    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _status_now() -> tuple[str, str, bool]:
@@ -231,10 +221,10 @@ def _concept_cached(market: str) -> Dict[str, Any]:
         ]
     else:
         candidates = [
-            ("新浪", "新浪/概念板块（成交额单位=元，已折算亿元；无主力净流入）",
-             sector_provider.get_concept_sina),
-            ("同花顺", "同花顺/概念名录（仅名称，无行情，pct/amount 为空）",
+            ("腾讯", "腾讯/概念板块榜（805 个，含涨跌幅·成交额·主力净流入·领涨股·5/20/60 日涨幅；纯 HTTP 无需签名）",
              sector_provider.get_concept_ths),
+            ("新浪", "新浪/概念板块（175 个，成交额单位=元已折算亿元；无主力净流入）",
+             sector_provider.get_concept_sina),
         ]
     return _run_chain(f"sector:concept:{market}", config.TTL["sector"], candidates, [])
 
@@ -493,13 +483,15 @@ def sector_cons(
         )
 
     def loader() -> Dict[str, Any]:
-        """成分股取数：新浪 → 申万 → 东财，三个独立候选便于徽章如实显示命中源。
+        """成分股取数：同花顺 → 新浪 → 申万 → 东财，四个独立候选便于徽章如实显示命中源。
 
         Returns:
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
             [
+                ("同花顺", "同花顺/板块成分（行业与概念均可，纯 HTTP 详情页，权重按流通市值占比）",
+                 lambda: sector_provider.get_cons_ths(board)),
                 ("新浪", "新浪/板块成分（权重按流通市值占比）",
                  lambda: sector_provider.get_cons_sina(board)),
                 ("申万", "申万/行业成分（一/二/三级行业名均可，权重按市值占比）",
@@ -557,29 +549,14 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
             data={"items": [], "market": public_market},
         )
 
-    if not config.V8_SOURCES_ENABLED:
-        # 冻结环境禁用 V8 源（§13.6-2）：板块资金流唯一通道为同花顺（V8 签名）。
-        # 经实测（阶段 10 L-4）：东财板块资金流走 push2（本机被重置）、
-        # ak.stock_fund_flow_concept 名义"概念"实为同花顺 V8 源、自下而上聚合需数百次
-        # HTTP 不可行。故如实返回空态 + 指引（改用个股四档资金流，该通道纯 HTTP 可用）。
-        return _pack(
-            {"items": [], "count": 0, "market": public_market, "available": False},
-            "本地口径",
-            "安装版不提供板块资金流（唯一来源为同花顺 V8 通道，规范 §13.6-2 禁用）。"
-            "可改用「个股 → 资金分布」查看单只标的的四档真实资金流。",
-            None,
-            "不可用",
-            False,
-        )
-
     def loader() -> Dict[str, Any]:
-        """资金流取数（同花顺行业资金流）。
+        """资金流取数（同花顺行业资金流 + 成分股四档聚合）。
 
         Returns:
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
-            [("同花顺", "同花顺/行业资金流（单位=亿元；无超大单/大单分项）",
+            [("同花顺", "同花顺/行业资金流（净额·流入·流出）+ 成分股四档聚合（超大单/大单/中单/小单）",
               sector_provider.get_fundflow)],
             empty_value=[],
         )
@@ -709,26 +686,44 @@ def sector_crowding(
 
 @router.get("/crowding/rankings")
 def sector_crowding_rankings(
-    kind: str = Query("industry", description="板块类型，目前仅 industry"),
+    kind: str = Query("industry", description="板块类型：industry=行业 / concept=概念"),
     limit: int = Query(50, ge=1, le=120, description="返回前 N 名"),
     force: bool = Query(False, description="true=绕过缓存"),
 ) -> Dict[str, Any]:
-    """全板块拥挤度排行（第七轮 M12）。
+    """全板块拥挤度排行（第七轮 M12 + 概念补齐）。
 
     复用 `/crowding` 同一函数逐板块打分后降序（同口径，不另算一套）。
-    首次计算约 30–60 秒（90 个行业并发扫描），结果缓存 1 小时。
+    首次计算约 30–90 秒（行业 90 个 / 概念 375 个并发扫描），结果缓存 1 小时。
 
     Args:
-        kind: 板块类型（仅 industry）。
+        kind: 板块类型：industry=行业 / concept=概念。
         limit: 返回前 N 名。
         force: 是否绕过缓存。
 
     Returns:
-        Dict[str, Any]: {"data": {items, scanned, total, failed, level_counts, caliber, as_of}}
+        Dict[str, Any]: {"data": {items, scanned, total, failed, kind, level_counts, caliber, as_of}}
     """
     key_kind = str(kind or "industry").strip().lower()
-    if key_kind != "industry":
-        return api_error(ErrorCode.INVALID_PARAM, "kind 目前仅支持 industry（概念板块接口不稳定，未纳入排行）")
+    if key_kind not in ("industry", "concept"):
+        return api_error(ErrorCode.INVALID_PARAM, "kind 仅支持 industry（行业）/ concept（概念）")
+
+    # P1-1：排行需扫描 90 行业（约 20 秒）/ 800 概念（约 40 秒）。
+    # 第八轮起全程纯 HTTP（无 V8 串行），并改为「缓存优先 + 后台刷新」：
+    #   ① 命中未过期缓存 → 直接返回（<0.5s）；
+    #   ② 缓存过期 → 先返回旧值（stale-while-revalidate）并触发后台重算；
+    #   ③ 无缓存 → 本次同步计算（服务启动预热已覆盖默认 industry 口径）。
+    # 不再返回「计算中」空态（空态不得掩盖正常数据）。
+    cache_key = f"sector:crowding:rankings:{key_kind}:{limit}"
+    cached = None if force else cache.get(cache_key, 3600 * 24)
+    if cached is not None and not force:
+        # 缓存命中即返回；若已超过 1 小时则在后台刷新（用户无感知）
+        if cache.get(cache_key, 3600) is None and not sector_provider.rankings_in_flight(cache_key):
+            sector_provider.start_rankings_bg(key_kind, limit, cache_key)
+        return ok(cached)
+    if sector_provider.rankings_in_flight(cache_key) and not force:
+        stale = cache.get(cache_key, 3600 * 24)
+        if stale is not None:
+            return ok(stale)
 
     def loader() -> Dict[str, Any]:
         """全量扫描（1 小时缓存：日频数据）。
@@ -739,10 +734,8 @@ def sector_crowding_rankings(
         return sector_provider.get_crowding_rankings(kind=key_kind, limit=limit)
 
     try:
-        if force:
-            data = loader()
-        else:
-            data = cache.get_or_load(f"sector:crowding:rankings:{limit}", 3600, loader)
+        data = loader()
+        cache.set(cache_key, data, 3600)
     except ValueError as exc:
         return api_error(ErrorCode.EMPTY_DATA, str(exc))
     except Exception as exc:  # noqa: BLE001

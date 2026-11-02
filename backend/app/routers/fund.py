@@ -24,7 +24,7 @@ from fastapi import APIRouter, Body, Query
 from backend.app import config
 from backend.app.datasource import utils
 from backend.app.core import cache, user_prefs
-from backend.app.core.errors import ErrorCode, NonRetryableError, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error, ok
 from backend.app.datasource import fund as fund_provider
 from backend.app.datasource import fund_combo
 
@@ -72,15 +72,7 @@ def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    payload = dict(data)
-    payload.update({
-        "source": source,
-        "caliber": caliber,
-        "as_of": as_of or utils.now_text(),
-        "market_status": market_status,
-        "is_realtime": False,  # 场外基金本批无盘中估值通道，恒为 False
-    })
-    return ok(payload)
+    return pack_success(data, source, caliber, as_of, market_status, False)  # 场外基金无盘中估值通道
 
 
 def _run(key: str, ttl: int, loader):
@@ -354,7 +346,7 @@ def fund_dividend(code: str = Query(..., description="6 位基金代码")) -> Di
 
 @router.get("/position")
 def fund_position(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
-    """持仓分布：蛋卷端点需登录，依规范禁用（如实标注，不编造）。
+    """持仓分布（行业配置，东财 F10）。
 
     Args:
         code: 6 位基金代码。
@@ -365,11 +357,27 @@ def fund_position(code: str = Query(..., description="6 位基金代码")) -> Di
     symbol = (code or "").strip()
     if not symbol:
         return _bad("code 参数不可为空")
-    return api_error(
-        ErrorCode.EMPTY_DATA,
-        "基金持仓分布需登录蛋卷账号，依规范已禁用该通道；可查看「重仓股」替代。",
-        data={"code": symbol, "items": [], "disabled": True,
-              "reason": "蛋卷 /djapi/fund/position 需登录（实测 rc=300001）"},
+    try:
+        payload = fund_provider.get_position(symbol)
+    except Exception as exc:  # noqa: BLE001 - 上游失败转中文错误态
+        logger.info("基金持仓分布取数失败 %s：%s", symbol, type(exc).__name__)
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            "基金持仓分布暂不可用，请稍后重试。",
+            data={"code": symbol, "items": []},
+        )
+    return _pack(
+        {
+            "code": symbol,
+            "name": payload.get("name"),
+            "report_date": payload.get("report_date"),
+            "items": payload.get("items") or [],
+            "count": len(payload.get("items") or []),
+        },
+        payload.get("source") or "东财 F10",
+        payload.get("caliber") or "",
+        payload.get("report_date"),
+        "季报口径",
     )
 
 
@@ -549,7 +557,17 @@ def fund_candidates(
     except ValueError as exc:
         return api_error(ErrorCode.INVALID_PARAM, str(exc))
     except RuntimeError as exc:
-        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+        # P3-1：首次进入不得只让用户「自己去点按钮」——自动启动建库，
+        # 并把进度状态回给前端展示（空态给下一步动作，而不是死路）。
+        started = False
+        try:
+            started = bool(screener.start_build_async(reason="candidates").get("started"))
+        except Exception:  # noqa: BLE001 - 建库启动失败不改变错误语义
+            started = False
+        hint = "已自动开始构建全市场快照，约 1–2 分钟完成，稍后重试即可看到候选"
+        if not started:
+            hint = "全市场快照正在构建中，请稍后重试（进度见筛选器页状态卡）"
+        return api_error(ErrorCode.EMPTY_DATA, f"{exc}；{hint}", data={"items": [], "building": True})
     except Exception as exc:  # noqa: BLE001
         logger.warning("候选池计算失败：%s", type(exc).__name__)
         return api_error(ErrorCode.INTERNAL_ERROR, f"候选池计算失败（{type(exc).__name__}）")

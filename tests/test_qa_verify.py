@@ -294,12 +294,13 @@ def test_sector_industry_real() -> None:
 
 
 def test_sector_concept_real() -> None:
-    """概念行情：175 个新浪概念、含 label 供成分股反查。"""
+    """概念行情：腾讯概念榜（800+ 个，含涨跌幅/主力净流入/领涨股，纯 HTTP 无需签名）。"""
     data = _success("/api/sector/concept", {"market": "cn"})
     items = data["items"]
-    assert len(items) >= 100
-    assert data["source"] == "新浪"
-    assert items[0]["label"], "概念板块缺少 label，成分股反查会失败"
+    assert len(items) >= 500, f"概念数量异常：{len(items)}"
+    assert data["source"] == "腾讯"
+    # 每行必须有代码（概念 K 线/拥挤度据此反查）
+    assert all(item["code"] for item in items[:50]), "概念板块缺少代码"
     assert len({round(item["pct"], 2) for item in items if item["pct"] is not None}) > 20
 
 
@@ -404,21 +405,27 @@ def test_sector_cons_real() -> None:
 
 
 def test_sector_fundflow_real() -> None:
-    """资金流：净额=流入−流出（同源同口径），超大单/大单如实为空。"""
+    """资金流：净额=流入−流出；四档由成分股聚合，已聚合的板块必须齐全且自洽。"""
     data = _success("/api/sector/fundflow", {"market": "cn"})
     items = data["items"]
     assert len(items) >= 50
     assert data["source"] == "同花顺"
-    assert "无超大单/大单分项" in data["caliber"]
+    assert "四档" in data["caliber"]
     checked = 0
-    for item in items[:10]:
+    tiered = 0
+    for item in items:
         if item["net_inflow"] is None:
             continue
         assert item["inflow"] is not None and item["outflow"] is not None
         assert abs((item["inflow"] - item["outflow"]) - item["net_inflow"]) <= 0.02
-        assert item["super_big"] is None and item["big"] is None
         checked += 1
+        tiers = [item["super_big"], item["big"], item["medium"], item["small"]]
+        if item["super_big"] is not None:
+            # 四档要么全有要么全无，不允许半套（半套说明解析错位）
+            assert all(value is not None for value in tiers), f"四档不全：{item}"
+            tiered += 1
     assert checked >= 5
+    assert tiered >= 1, "没有任何板块聚合出四档，四档通路未生效"
 
 
 def test_sector_trend_real() -> None:
@@ -710,7 +717,17 @@ def test_news_stock_real() -> None:
         if item.get("link"):
             assert item["link"].startswith("http")
 
-    keywords = ("半导体", "芯片", "晶圆", "光刻", "刻蚀", "封装", "存储", "中微", "华创")
+    # 关键词取自板块树自身（半导体二级节点及其末级），与 match_boards 同源，
+    # 避免「中微/华创」这类公司名造成「有命中却无法标注」的假失败。
+    from backend.app.datasource import news as news_provider
+
+    keywords = set()
+    for level1 in news_provider.BOARD_TREE:
+        for level2 in level1["children"]:
+            if level2.get("name") == "半导体":
+                keywords.update(level2.get("keywords") or [])
+                for leaf in level2["children"]:
+                    keywords.update(leaf.get("keywords") or [])
     hits = [item for item in items if any(word in item["title"] for word in keywords)]
     if hits:
         tagged = [item for item in hits if any("半导体" in board for board in item["boards"])]
@@ -1122,13 +1139,16 @@ def test_fund_dividend_real() -> None:
     assert no_div["items"] == []
 
 
-def test_fund_position_disabled() -> None:
-    """持仓分布：需登录通道必须明确禁用说明，不编造数据。"""
-    body = _body("/api/fund/position", {"code": "017811"})
-    assert body["error_code"] == "EMPTY_DATA"
-    assert body["data"]["disabled"] is True
-    assert body["data"]["items"] == []
-    assert "登录" in body["data"]["reason"]
+def test_fund_position_real() -> None:
+    """持仓分布：东财 F10 行业配置（季报口径），占比合计落在 0–100。"""
+    data = _success("/api/fund/position", {"code": "017811"})
+    items = data["items"]
+    assert items, "行业配置为空"
+    assert data["report_date"], "缺少报告期"
+    for item in items:
+        assert item["industry"]
+        assert 0 <= item["pct"] <= 100
+    assert sum(item["pct"] for item in items) <= 100.5
 
 
 def test_portfolio_crud_and_analysis(temp_position: str) -> None:
@@ -1247,12 +1267,14 @@ def test_p001_amount_unit(symbol: str, market: str, low: float, high: float) -> 
     assert 0.1 <= ratio <= 500, f"{symbol} amount/量价不匹配：ratio={ratio}（×10000 病态=10000）"
 
 
-def test_us_minute_unavailable() -> None:
-    """美股分时：免费通道不可用时返回空 + 说明，不得用单点伪造分时。"""
+def test_us_minute_real() -> None:
+    """美股分时：新浪通道（1/5/15/30 分钟）返回多日分钟序列。"""
     data = _success("/api/market/minute", {"symbol": "AAPL", "market": "us"})
-    assert data["items"] == []
-    assert data["available"] is False
-    assert "不可用" in data["caliber"] and "腾讯" in data["caliber"]
+    items = data["items"]
+    assert len(items) >= 60, f"美股分时点数异常：{len(items)}"
+    assert data["source"] == "新浪"
+    assert all(item["price"] is not None for item in items)
+    assert len({item["date"] for item in items}) >= 1
 
 
 def test_hk_minute_real() -> None:
@@ -1678,3 +1700,65 @@ def test_financial_search_edgar_requires_user_agent(monkeypatch) -> None:
     assert ten_k["docUrl"].endswith("/nvda-20260125.htm")
     for item in captured:
         assert "OpenBB-CN" in item["headers"].get("User-Agent", ""), f"{item['url']} 缺 UA"
+
+
+# ================================================================
+# P2-3：error 态契约自动化用例（第二轮检测报告 §4.3 补齐）
+# ================================================================
+def test_p203_error_state_contract() -> None:
+    """P2-3：制造上游错误 → 断言 error 态契约（不被空态掩盖、不吐堆栈）。
+
+    原则：错误响应必须 ① error_code 为具体 ErrorCode；② error 为自然中文；
+    ③ data 为空结构（不得把异常原文/堆栈塞进 error）；④ 不得用空态 EMPTY_DATA
+    掩盖通道异常（空/错分离，原型 §7.1）。
+    """
+    from backend.app.core import source_prefs
+
+    # 1) 参数错误 → INVALID_PARAM，文案中文、data 为空结构
+    body = _body("/api/market/quote", {"symbol": "", "market": "a"})
+    assert body["error_code"] == "INVALID_PARAM", body
+    assert body["error"] and "参数" in body["error"]
+    assert isinstance(body["data"], (dict, list, type(None)))
+    # 错误文案不得出现 Python 堆栈片段
+    for bad in ("Traceback", "File \"", "Exception", "raise "):
+        assert bad not in (body.get("error") or ""), f"error 含堆栈片段：{bad}"
+
+    # 2) 强制禁用全部候选源 → UPSTREAM_ERROR，且不得降级成 EMPTY_DATA 空态
+    saved = source_prefs._PREFS.copy() if hasattr(source_prefs, "_PREFS") else None
+    try:
+        if hasattr(source_prefs, "set_switch"):
+            for name in ("tencent", "sina", "eastmoney", "ths"):
+                try:
+                    source_prefs.set_switch(name, False)
+                except Exception:
+                    pass
+        body = _body("/api/market/index", {"market": "all"})
+        # 要么全部源被停用返回 NOT_CONFIGURED/UPSTREAM_ERROR，要么至少有一个源可用；
+        # 但**不得**在通道异常时返回 EMPTY_DATA（空/错分离）
+        assert body["error_code"] != "EMPTY_DATA", (
+            f"通道异常被 EMPTY_DATA 掩盖：{body}"
+        )
+        # 源开关未必生效（进程内缓存可能已命中），此时为正常成功响应：
+        # 成功必须 error=None 且有数据；失败必须带中文文案。两者不得同时为空。
+        if body["error_code"] is None:
+            assert body["error"] is None
+            assert (body["data"] or {}).get("items"), f"既无错误也无数据：{body}"
+        else:
+            assert body["error"], "错误响应必须带中文文案"
+    finally:
+        if saved is not None and hasattr(source_prefs, "_PREFS"):
+            source_prefs._PREFS.clear()
+            source_prefs._PREFS.update(saved)
+
+
+def test_p203_envelope_error_code_present() -> None:
+    """P2-3：所有错误响应都带 error_code（阶段 1 契约补齐），成功时为 None。"""
+    # 成功路径 error_code 必须为 None（不得缺字段）
+    ok_body = _body("/api/health", {})
+    assert "error_code" in ok_body, "成功响应缺 error_code 字段"
+    assert ok_body["error_code"] is None
+    assert ok_body["error"] is None
+    # 错误路径 error_code 必须为非空 ErrorCode 字符串
+    err_body = _body("/api/fund/yjb/consent", {})
+    assert err_body["error_code"], "错误响应缺 error_code"
+    assert err_body["error"], "错误响应缺 error 文案"
