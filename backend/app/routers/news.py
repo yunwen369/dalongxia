@@ -175,16 +175,41 @@ def news_flash(
     )
 
 
+def _overseas_news(code: str, market: str, limit: int) -> List[Dict[str, Any]]:
+    """港美股个股新闻：取标的中文名做相关性过滤（东财搜索，G-4 免费源）。
+
+    Args:
+        code: 证券代码。
+        market: hk / us。
+        limit: 返回条数上限。
+
+    Returns:
+        list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
+    """
+    from backend.app.datasource import overseas as overseas_provider
+    from backend.app.datasource import tencent as tencent_provider
+
+    name = ""
+    try:
+        quote = tencent_provider.get_quote(code, market)
+        name = str(quote.get("name") or "").strip()
+    except Exception:  # noqa: BLE001 - 名称取不到时退化为只按代码过滤
+        name = ""
+    return overseas_provider.get_stock_news(code, market, limit, name=name)
+
+
 @router.get("/stock")
 def news_stock(
     symbol: str = Query(..., description="证券代码"),
     limit: int = Query(20, ge=1, le=100),
+    market: str = Query("a", description="a=A股 / hk=港股 / us=美股"),
 ) -> Dict[str, Any]:
-    """个股新闻（东财）+ 本地初评 + 命中板块。
+    """个股新闻（A股东财 / 港美股东财资讯搜索）+ 本地初评 + 命中板块。
 
     Args:
         symbol: 证券代码。
         limit: 返回条数上限（超出上限按上限截断）。
+        market: a=A股 / hk=港股 / us=美股（港美股为 G-4 新增免费源）。
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
@@ -192,19 +217,31 @@ def news_stock(
     code = str(symbol).strip()
     if not code:
         return _bad("symbol 参数不可为空")
+    market_text = (market or "a").lower()
+    if market_text in ("cn",):
+        market_text = "a"
+    if market_text not in ("a", "hk", "us"):
+        return _bad("market 仅支持 a / hk / us")
 
     def loader() -> Dict[str, Any]:
-        """个股新闻取数。
+        """个股新闻取数：A 股走东财个股新闻；港美股走东财资讯搜索（相关性过滤）。
 
         Returns:
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
+        if market_text in ("hk", "us"):
+            return with_fallback(
+                [("东方财富", "东财资讯搜索（关键词相关性过滤，港美股 G-4 免费源）",
+                  lambda: _overseas_news(code, market_text, limit))],
+                empty_value=[],
+            )
         return with_fallback(
             [("东财", "东财/个股新闻（stock_news_em）", lambda: news_provider.get_stock_news(code, limit))],
             empty_value=[],
         )
 
-    result = cache.get_or_load(f"news:stock:{code}:{limit}", config.TTL["news_flash"], loader)
+    result = cache.get_or_load(
+        f"news:stock:{market_text}:{code}:{limit}", config.TTL["news_flash"], loader)
     if result.get("error"):
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
             return _pack({"symbol": code, "items": [], "count": 0},
@@ -214,7 +251,7 @@ def news_stock(
     for item in items:
         item["boards"] = news_provider.match_boards(f"{item.get('title', '')} {item.get('text', '')}")
     return _pack(
-        {"symbol": code, "items": items, "count": len(items)},
+        {"symbol": code, "market": market_text, "items": items, "count": len(items)},
         result.get("source") or "",
         result.get("caliber") or "",
         items[0].get("time") if items else None,

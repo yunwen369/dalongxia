@@ -348,3 +348,46 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "market_status": "对话",
         "is_realtime": False,
     })
+
+
+@router.post("/translate")
+def ai_translate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """文本翻译（港美股英文财报/公告 → 中文，G-4 配套）。
+
+    Args:
+        payload: {text: 待翻译文本, target?: "zh"}。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+
+    Notes:
+        未配置 AI 时返回 NOT_CONFIGURED（不假装翻译）；原文超 4000 字符会截断并标注。
+    """
+    from backend.app.core.errors import ErrorCode as _ErrorCode
+    from backend.app.datasource import translate as translate_provider
+
+    text = str(payload.get("text") or "")
+    target = str(payload.get("target") or "zh")
+    if not text.strip():
+        return api_error(_ErrorCode.INVALID_PARAM, "text 不可为空")
+    if not translate_provider.is_configured():
+        return api_error(
+            _ErrorCode.NOT_CONFIGURED,
+            "未配置 AI 模型，无法翻译。请到「设置 → AI 设置」填写 base_url / api_key / model 后重试。",
+            data={"configured": False},
+        )
+    try:
+        result = translate_provider.translate_text(text, target)
+    except ValueError as exc:
+        return api_error(_ErrorCode.INVALID_PARAM, str(exc))
+    except Exception as exc:  # noqa: BLE001 - 上游异常转中文错误
+        logger.info("翻译失败：%s", type(exc).__name__)
+        return api_error(_ErrorCode.UPSTREAM_ERROR,
+                         f"翻译服务调用失败（{type(exc).__name__}），请稍后重试。")
+    return ok({
+        **result,
+        "source": "用户配置 AI（OpenAI 兼容）",
+        "as_of": _now(),
+        "market_status": "机翻快照",
+        "is_realtime": False,
+    })

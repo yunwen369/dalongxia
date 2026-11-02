@@ -1308,22 +1308,27 @@ def test_overseas_index_real() -> None:
 
 
 def test_connectors_status_matrix() -> None:
-    """连接器能力矩阵：四市场（R3-13 新增场外基金）能力齐全，港美新闻/板块如实标不可用（D3）。"""
+    """连接器能力矩阵：四市场能力齐全；G-4 后港美新闻/中文财报已可用，仅板块仍如实标缺口。"""
     data = _success("/api/connectors/status", {})
     assert set(data["markets"]) == {"a", "hk", "us", "fund"}
     assert data["markets"]["a"]["stock_news"]["available"] is True
     assert data["markets"]["us"]["kline"]["available"] is True
     assert data["markets"]["hk"]["minute"]["available"] is True
+    # G-4 补齐（2026-11-02）：港美股个股新闻 + 中文财务指标可用
+    for market in ("us", "hk"):
+        assert data["markets"][market]["stock_news"]["available"] is True
+        assert data["markets"][market]["financial"]["available"] is True
     # 场外基金：无盘中报价/K线/分时，如实标不可用且给原因
     for feature in ("quote", "kline", "minute"):
         cell = data["markets"]["fund"][feature]
         assert cell["available"] is False
         assert cell.get("note")
     gaps = {(item["market"], item["feature"]) for item in data["gaps"]}
-    assert {("us", "stock_news"), ("us", "sector"),
-            ("hk", "stock_news"), ("hk", "sector")} <= gaps
-    reasons = " ".join(item["reason"] for item in data["gaps"])
-    assert "暂无免费" in reasons or "无免费" in reasons or "无稳定" in reasons or "无" in reasons
+    # 港美股板块通道仍无免费源，必须留在缺口清单
+    assert {("us", "sector"), ("hk", "sector")} <= gaps
+    # 已补齐的能力不得再出现在缺口清单里
+    assert ("us", "stock_news") not in gaps
+    assert ("hk", "stock_news") not in gaps
     assert data["datasources"], "数据源开关列表为空"
 
 

@@ -24,6 +24,7 @@ from backend.app import config
 from backend.app.core import cache
 from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
 from backend.app.core.resilient import with_fallback
+from backend.app.datasource import overseas as overseas_provider
 from backend.app.datasource import fcf_health
 from backend.app.datasource import peers as peers_provider
 from backend.app.datasource import stock as stock_provider
@@ -417,22 +418,50 @@ def stock_financial_trend(
 
 @router.get("/financial-indicator")
 def stock_financial_indicator(
-    symbol: str = Query(..., description="6 位 A股代码"),
+    symbol: str = Query(..., description="证券代码"),
     limit: int = Query(8, ge=1, le=20, description="返回期数"),
+    market: str = Query("a", description="a=A股 / hk=港股 / us=美股（港美股为 G-4 新增中文指标）"),
 ) -> Dict[str, Any]:
     """财务指标明细（ST-09 指标页签）。
 
     Args:
-        symbol: 6 位 A股代码。
+        symbol: 证券代码。
         limit: 返回期数。
+        market: a=A股（新浪财务分析指标）/ hk、us（雪球中文财务指标，G-4 免费源）。
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    normalized = _normalize(symbol, "a")
+    market_text = (market or "a").lower()
+    if market_text == "cn":
+        market_text = "a"
+    if market_text not in ("a", "hk", "us"):
+        return _bad_request("market 仅支持 a / hk / us")
+    normalized = _normalize(symbol, market_text)
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return _bad_request("证券代码格式不正确，请检查代码或市场后重试")
     code = normalized[0]
+    if market_text in ("hk", "us"):
+        def loader_overseas() -> Dict[str, Any]:
+            """雪球港美股中文财务指标取数。
+
+            Returns:
+                dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+            """
+            return with_fallback(
+                [("雪球", "雪球/港美股主要财务指标（中文，36/28 项，含同比）",
+                  lambda: overseas_provider.get_financial_indicators(code, market_text, limit))],
+                empty_value={"periods": [], "metrics": []},
+                validator=lambda value: bool(value.get("periods")),
+            )
+        result = cache.get_or_load(
+            f"stock:fin-indicator:{market_text}:{code}:{limit}", config.TTL["financial"], loader_overseas)
+        if result.get("error"):
+            return _failure(result, {"symbol": code, "market": market_text, "periods": []})
+        data = result["data"] or {}
+        return _pack(data, result.get("source") or "", result.get("caliber") or "",
+                     f"{(data.get('periods') or [{}])[-1].get('date', '')} 报告期".strip()
+                     or None, "定期报告", False)
 
     def loader() -> Dict[str, Any]:
         """新浪财务分析指标取数。
