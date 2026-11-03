@@ -30,6 +30,24 @@ _LOCK = threading.Lock()
 _CACHE: Optional[Set[str]] = None  # 已停用的源名集合（进程内快照）
 
 
+def ensure_enabled(source: str = "akshare") -> None:
+    """检查数据源开关，被环境变量禁用时抛确定性异常（不重试）。
+
+    各 datasource 模块统一调用本函数（第九轮 L-R9-04 收敛），
+    避免 5 份逐字相同的本地实现继续分叉。
+
+    Args:
+        source: 数据源标识（如 akshare / eastmoney / sina）。
+
+    Raises:
+        NonRetryableError: 该源已被环境变量禁用，降级链应切换下一源。
+    """
+    if not config.PROVIDER_SWITCHES.get(source, True):
+        from backend.app.core.errors import NonRetryableError
+
+        raise NonRetryableError(f"{source} 源已被环境变量禁用")
+
+
 def _empty() -> Dict[str, Any]:
     """空配置结构。
 

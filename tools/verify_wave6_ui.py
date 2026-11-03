@@ -15,16 +15,17 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import logging
 import os
-import subprocess
 import tempfile
 import time
-import urllib.request
 
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_clickthrough import CDP, launch_chrome, page_ws, click_at, eval_js  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 CONSOLE_CAPTURE = """
@@ -144,8 +145,8 @@ def main() -> None:
         try:
             proc.terminate()
             proc.wait(timeout=5)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 - 浏览器已退出时忽略，仅记录
+            logger.info("浏览器进程结束失败（可能已退出）：%s", type(exc).__name__)
 
 
 if __name__ == "__main__":

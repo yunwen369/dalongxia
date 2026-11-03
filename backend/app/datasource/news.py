@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.v8_guard import guard_v8
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
@@ -74,19 +75,6 @@ def _call_ths(func) -> Any:
         Any: 结果原样透传（类型由 loader/func 约定）。
     """
     return _call(guard_v8(func))
-
-
-def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关。
-
-    Args:
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    if not config.PROVIDER_SWITCHES.get(source, True):
-        raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _text(value: Any) -> str:
@@ -452,7 +440,7 @@ def get_flash(limit: int = 50) -> List[Dict[str, Any]]:
     Raises:
         NonRetryableError: 通道确定性失效（交由上层降级到东财/新浪快讯）。
     """
-    _ensure_enabled()
+    ensure_enabled()
     wanted = max(1, int(limit or 50))
     items: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -555,8 +543,8 @@ def get_flash_multi(limit: int = 50) -> List[Dict[str, Any]]:
         items = get_flash(limit)
         if items:
             return items
-    except Exception:  # noqa: BLE001 - 主源不可用时降级到全球快讯
-        pass
+    except Exception as exc:  # noqa: BLE001 - 主源不可用时降级到全球快讯
+        logger.info("快讯主源不可用，降级全球快讯：%s", type(exc).__name__)
     return get_global(limit)
 
 
@@ -570,7 +558,7 @@ def get_stock_news(symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_news_em(symbol=str(symbol)))
     items: List[Dict[str, Any]] = []
     for row in frame.to_dict("records"):
@@ -684,7 +672,7 @@ def get_global(limit: int = 100) -> List[Dict[str, Any]]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     items: List[Dict[str, Any]] = []
     errors: List[str] = []
     for name, loader in (("东财", _global_em), ("新浪", _global_sina), ("同花顺", _global_ths)):

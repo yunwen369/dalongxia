@@ -265,11 +265,14 @@ def stats_detail() -> Dict[str, Any]:
     with _LOCK:
         memory_count = len(_MEMORY)
         memory_bytes = 0
+        skipped = 0
         for key, payload in _MEMORY.items():
             try:
                 memory_bytes += len(json.dumps({"k": key, "v": payload}, ensure_ascii=False, default=str))
             except Exception:  # noqa: BLE001 - 不可序列化条目跳过，不影响统计
-                continue
+                skipped += 1
+        if skipped:
+            logger.info("缓存统计跳过 %d 个不可序列化条目（不影响计数）", skipped)
 
     disk_count = 0
     disk_bytes = 0

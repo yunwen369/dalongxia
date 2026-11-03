@@ -176,6 +176,9 @@ def _fetch_pmi() -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
 
     Returns:
         Tuple: (制造业指标, 非制造业指标, 序列)。序列为升序 [{period, value, service}]。
+
+    Raises:
+        ValueError: PMI 返回空。
     """
     import akshare as ak
 
@@ -211,6 +214,9 @@ def _fetch_price_index(fn_name: str, key: str, column: str) -> Tuple[Dict[str, A
 
     Returns:
         Tuple: (指标卡, 序列)。
+
+    Raises:
+        ValueError: 对应指标返回空。
     """
     import akshare as ak
 
@@ -237,6 +243,9 @@ def _fetch_money() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
     Returns:
         Tuple: ([M2 指标, 剪刀差指标], 序列)。
+
+    Raises:
+        ValueError: M2 返回空。
     """
     import akshare as ak
 
@@ -267,6 +276,9 @@ def _fetch_yield() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
     Returns:
         Tuple: ([10Y 指标, 期限利差指标], 序列)。
+
+    Raises:
+        ValueError: 国债收益率返回空。
     """
     import akshare as ak
 

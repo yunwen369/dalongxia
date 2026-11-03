@@ -53,12 +53,20 @@ _ANN_TYPES = ("announcement", "report_date")
 
 
 def _now_text() -> str:
-    """北京时间文本。"""
+    """返回当前北京时间文本。
+
+    Returns:
+        str: ``YYYY-MM-DD HH:MM:SS`` 格式的北京时间。
+    """
     return utils.now_text(utils.bj_now())
 
 
 def _now_ts() -> float:
-    """当前秒级时间戳（用北京 now 推回，保证与落盘时间文本同源）。"""
+    """返回当前秒级时间戳（由北京时区时间换算，与落盘时间文本同源）。
+
+    Returns:
+        float: Unix 秒级时间戳。
+    """
     return utils.bj_now().timestamp()
 
 
@@ -66,7 +74,11 @@ def _now_ts() -> float:
 # 一、存储
 # =============================================================
 def _read_all() -> Dict[str, Any]:
-    """读取规则与事件；缺失/损坏返回空结构。"""
+    """读取规则与事件存储；文件缺失或损坏时返回空结构。
+
+    Returns:
+        Dict[str, Any]: 含 ``rules`` / ``events`` 两键；异常时为空列表结构。
+    """
     import json
 
     try:
@@ -81,7 +93,14 @@ def _read_all() -> Dict[str, Any]:
 
 
 def _write_all(payload: Dict[str, Any]) -> None:
-    """原子写 alerts.json。"""
+    """原子写入 ``alerts.json``。
+
+    Args:
+        payload: 含 rules / events 的完整存储结构。
+
+    Returns:
+        None
+    """
     atomic.atomic_write_json(ALERTS_FILE, payload, ensure_ascii=False)
 
 
@@ -89,7 +108,11 @@ def _write_all(payload: Dict[str, Any]) -> None:
 # 二、规则 CRUD
 # =============================================================
 def list_rules() -> List[Dict[str, Any]]:
-    """返回全部规则（含派生字段 last_fired_text / paused）。"""
+    """返回全部规则（含派生展示字段）。
+
+    Returns:
+        List[Dict[str, Any]]: 规则列表，逐条附 ``last_fired_text`` / ``paused`` / ``type_label``。
+    """
     payload = _read_all()
     rules: List[Dict[str, Any]] = []
     for rule in payload.get("rules") or []:
@@ -103,7 +126,14 @@ def list_rules() -> List[Dict[str, Any]]:
 
 
 def _ts_to_text(ts: Any) -> Optional[str]:
-    """时间戳转北京文本；None/0 → None。"""
+    """把秒级时间戳转成北京文本；None 或非正值返回 None。
+
+    Args:
+        ts: 秒级时间戳，可为 None / 字符串数字。
+
+    Returns:
+        Optional[str]: ``YYYY-MM-DD HH:MM:SS``；无效输入返回 None。
+    """
     try:
         value = float(ts)
     except (TypeError, ValueError):
@@ -234,7 +264,14 @@ def update_rule(rule_id: str, **fields: Any) -> Dict[str, Any]:
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """安全转 float。"""
+    """把任意输入安全转为 float。
+
+    Args:
+        value: 待转换值（数字/字符串/None）。
+
+    Returns:
+        Optional[float]: 转换结果；None、NaN 或不可转换时返回 None。
+    """
     try:
         result = float(value)
     except (TypeError, ValueError):
@@ -268,7 +305,11 @@ def list_events(unread_only: bool = False, limit: int = 100) -> List[Dict[str, A
 
 
 def unread_count() -> int:
-    """未读事件数。"""
+    """统计未读事件条数（铃铛徽标数据源）。
+
+    Returns:
+        int: 未读事件数。
+    """
     return sum(1 for item in (_read_all().get("events") or []) if not item.get("read"))
 
 
@@ -296,7 +337,17 @@ def mark_read(event_id: Optional[str] = None) -> int:
 
 def _fire_event(payload: Dict[str, Any], rule: Dict[str, Any], message: str,
                 value: Optional[float]) -> Dict[str, Any]:
-    """写入一条事件（同 rule_key 24h 去重在调用方完成）。"""
+    """写入一条事件并刷新规则的 ``last_fired``（24h 去重由调用方完成）。
+
+    Args:
+        payload: 全量存储结构（就地追加事件）。
+        rule: 触发的规则。
+        message: 中文提示文案。
+        value: 触发时的指标值；公告类规则为 None。
+
+    Returns:
+        Dict[str, Any]: 新建的事件对象。
+    """
     event = {
         "id": f"e_{int(_now_ts() * 1000) % 10**10}",
         "rule_id": rule.get("id"),
@@ -320,7 +371,16 @@ def _fire_event(payload: Dict[str, Any], rule: Dict[str, Any], message: str,
 
 
 def _dedup_ok(events: List[Dict[str, Any]], rule: Dict[str, Any], now_ts: float) -> bool:
-    """同规则 24h 内是否已触发过（防轰炸）。"""
+    """判断同一规则 24h 内是否已触发过（防重复轰炸）。
+
+    Args:
+        events: 历史事件列表。
+        rule: 待判规则。
+        now_ts: 当前秒级时间戳。
+
+    Returns:
+        bool: True=允许触发；False=窗口内已触发。
+    """
     rule_id = str(rule.get("id"))
     for item in events:
         if str(item.get("rule_id")) == rule_id and now_ts - float(item.get("ts") or 0) < DEDUP_WINDOW:
@@ -354,7 +414,14 @@ def _throttle_ok(kind: str) -> bool:
 
 
 def _rule_kind(rule_type: str) -> str:
-    """规则类型 → 节流类别。"""
+    """把规则类型映射为节流类别。
+
+    Args:
+        rule_type: 规则类型（price/pct_change/valuation/crowding/announcement/report_date）。
+
+    Returns:
+        str: 节流类别，取值 quote / announcement / slow。
+    """
     if rule_type in _SLOW_TYPES:
         return "slow"
     if rule_type in _ANN_TYPES:
@@ -363,12 +430,29 @@ def _rule_kind(rule_type: str) -> str:
 
 
 def _check_op(actual: float, op: str, threshold: float) -> bool:
-    """按 op 比较。"""
+    """按运算符比较实际值与阈值。
+
+    Args:
+        actual: 实际指标值。
+        op: 运算符，``gte``（≥）或 ``lte``（≤）。
+        threshold: 阈值。
+
+    Returns:
+        bool: 是否命中条件。
+    """
     return actual >= threshold if op == "gte" else actual <= threshold
 
 
 def _quote_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """价格/涨跌幅规则评估（tencent 同源）。"""
+    """价格/涨跌幅规则评估（腾讯报价同源）。
+
+    Args:
+        payload: 全量存储结构（本评估器不读取，保留统一签名）。
+        rule: 待评估规则。
+
+    Returns:
+        List[tuple]: 命中项 ``(rule, 中文消息, 指标值)``；未命中为空列表。
+    """
     from backend.app.core.errors import NotFoundError
     from backend.app.datasource import tencent
 
@@ -399,7 +483,15 @@ def _quote_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str,
 
 
 def _crowding_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """拥挤度规则评估（M3 同一函数）。"""
+    """拥挤度规则评估（复用 M3 同一函数，指标全站同源）。
+
+    Args:
+        payload: 全量存储结构（本评估器不读取，保留统一签名）。
+        rule: 待评估规则。
+
+    Returns:
+        List[tuple]: 命中项 ``(rule, 中文消息, 指标值)``；未命中为空列表。
+    """
     from backend.app.datasource import sector
 
     try:
@@ -419,9 +511,16 @@ def _crowding_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[s
 
 
 def _valuation_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """估值分位规则评估（M2 同一接口；目标=指数名）。
+    """估值分位规则评估（复用 M2 同一接口，目标为指数名）。
 
-    分位取 5 年窗口（pct5y）；规则阈值语义为「分位 ≥/≤ X%」。
+    分位取 5 年窗口（pct5y）；阈值语义为「分位 ≥/≤ X%」。
+
+    Args:
+        payload: 全量存储结构（本评估器不读取，保留统一签名）。
+        rule: 待评估规则。
+
+    Returns:
+        List[tuple]: 命中项 ``(rule, 中文消息, 指标值)``；未命中为空列表。
     """
     from backend.app.datasource import valuation
 
@@ -449,10 +548,17 @@ def _valuation_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[
 
 
 def _announcement_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """公告/财报披露规则评估（财报检索同源）。
+    """公告/财报披露规则评估（复用财报检索同一接口）。
 
-    报告期窗口：取「自上次触发以来」的新公告，上限 5 条；
-    财报披露日 = 标题命中年报/季报/业绩报告关键词（近似口径，caliber 写明）。
+    报告期窗口：取「自上次触发以来」的新公告，单轮上限 5 条；
+    财报披露日 = 标题命中年报/季报/业绩报告关键词（近似口径）。
+
+    Args:
+        payload: 全量存储结构（本评估器不读取，保留统一签名）。
+        rule: 待评估规则。
+
+    Returns:
+        List[tuple]: 命中项 ``(rule, 中文消息, None)``；未命中为空列表。
     """
     from backend.app.datasource import financial_report
 
@@ -491,7 +597,14 @@ def _announcement_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Di
 
 
 def _pub_to_ts(pub: str) -> Optional[float]:
-    """'2026-10-30 18:00:00' / '2026-10-30' → 时间戳。"""
+    """把公告时间文本转成秒级时间戳。
+
+    Args:
+        pub: 公告时间文本，支持 ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM`` / ``YYYY-MM-DD HH:MM:SS``。
+
+    Returns:
+        Optional[float]: 秒级时间戳；空串或无法解析返回 None。
+    """
     text = str(pub or "").strip()
     if not text:
         return None

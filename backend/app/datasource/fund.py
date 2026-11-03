@@ -397,8 +397,8 @@ def _t1_latest(code: str) -> Dict[str, Any]:
                 "day_growth": derived.get("day_growth"),
                 "source": "蛋卷",
             }
-    except Exception:  # noqa: BLE001 - 继续东财兜底
-        pass
+    except Exception as exc:  # noqa: BLE001 - 继续东财兜底
+        logger.info("蛋卷派生净值不可用，转东财历史净值兜底：%s", type(exc).__name__)
     payload = utils.http_get_json(
         EM_LSJZ_URL,
         params={"fundCode": code, "pageIndex": 1, "pageSize": 1},

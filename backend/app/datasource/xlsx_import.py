@@ -158,6 +158,9 @@ def parse(data: bytes, filename: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: {rows, errors, warnings, mapped, unmapped, summary, caliber}。
             rows 每项含 symbol/name/market/shares/cost/value_xlsx/price/value/ok/errors/warnings。
+
+    Raises:
+        ValueError: 缺少必需列，或文件格式无法解析。
     """
     frame = _read_frame(data, filename)
     mapping, unmapped = _map_columns(list(frame.columns))

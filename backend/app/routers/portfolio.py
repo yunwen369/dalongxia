@@ -171,6 +171,9 @@ def portfolio_import_xlsx(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]
     - `confirm=false`（默认）：只解析 + 校验，返回预览（不入库）；
     - `confirm=true`：重新解析同一文件，校验通过的行**覆盖写入** `data/portfolio.json`。
 
+    Args:
+        payload: 请求体，含 filename / content_base64 / confirm 三个字段。
+
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 含 rows/errors/warnings/summary。
     """

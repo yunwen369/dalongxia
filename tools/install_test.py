@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import socket
@@ -26,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 BJ_OK = "\u2705"
 BJ_FAIL = "\u274c"
@@ -118,8 +121,8 @@ def _stop_app(proc: subprocess.Popen) -> None:
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                            capture_output=True, timeout=30)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 - 强制结束失败时仅记录，不阻断卸载测试
+            logger.warning("taskkill 结束进程失败（pid=%s）：%s", proc.pid, type(exc).__name__)
 
 
 def main() -> int:

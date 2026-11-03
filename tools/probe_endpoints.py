@@ -21,7 +21,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # 必填参数的基线取值（未列出的端点会被记为 SKIPPED_MISSING_PARAM）
 BASELINE: Dict[str, Dict[str, Any]] = {

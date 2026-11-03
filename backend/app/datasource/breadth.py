@@ -35,6 +35,10 @@ def _load() -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: ``{up, down, flat, available, source, caliber, as_of}``。
 
+    Raises:
+        RuntimeError: 仅在函数内部使用——主源非 200 时抛出后立即被本函数捕获并降级到同花顺汇总，
+        不会向调用方传播。
+
     Notes:
         任一市场缺字段即视为不可用，避免只统计一个市场却当成全市场。
     """

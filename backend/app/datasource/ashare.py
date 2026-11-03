@@ -21,6 +21,7 @@ import requests
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import tencent, utils
 
 # 关键顺序：证书/代理修复必须先于 akshare import
@@ -46,19 +47,6 @@ def _call_ak(func) -> Any:
         return func()
     except requests.exceptions.ProxyError as exc:
         raise NonRetryableError("东财通道代理异常，跳过重试并切换备源") from exc
-
-
-def _ensure_enabled(source: str) -> None:
-    """检查数据源开关。
-
-    Args:
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    if not config.PROVIDER_SWITCHES.get(source, True):
-        raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _date_text(value: Any) -> str:
@@ -126,7 +114,7 @@ def get_kline_em(symbol: str, period: str = "daily", adjust: str = "qfq") -> Lis
     Raises:
         ValueError: 东财K线返回空数据。
     """
-    _ensure_enabled("eastmoney")
+    ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
     start, end = _default_range()
     frame = _call_ak(
@@ -176,7 +164,7 @@ def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> L
         NonRetryableError: 新浪K线仅支持日线。
         ValueError: 新浪K线返回空数据。
     """
-    _ensure_enabled("sina")
+    ensure_enabled("sina")
     if _period_to_ak(period) != "daily":
         # 新浪 stock_zh_a_daily 只有日线，周/月线必须交给腾讯备源，避免口径错位
         raise NonRetryableError("新浪K线仅支持日线")
@@ -225,7 +213,7 @@ def get_quote_sina(symbol: str) -> Dict[str, Any]:
     Raises:
         ValueError: 新浪报价返回格式异常。
     """
-    _ensure_enabled("sina")
+    ensure_enabled("sina")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
     url = f"{config.SINA_QUOTE_BASE}/list={tencent_code}"
     text = utils.http_get_text(url, referer=config.SINA_REFERER, encoding="gb18030")
@@ -299,7 +287,7 @@ def get_minute_em(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
     Raises:
         ValueError: 东财分时返回空数据。
     """
-    _ensure_enabled("eastmoney")
+    ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(
         lambda: ak.stock_zh_a_hist_min_em(symbol=code, period=str(period), adjust="")
@@ -342,7 +330,7 @@ def get_minute_sina(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
     Raises:
         ValueError: 新浪分时返回空数据。
     """
-    _ensure_enabled("sina")
+    ensure_enabled("sina")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(
         lambda: ak.stock_zh_a_minute(symbol=tencent_code, period=str(period), adjust="")
@@ -389,7 +377,7 @@ def get_index_quotes_sina() -> List[Dict[str, Any]]:
     Raises:
         ValueError: 新浪指数快照返回空数据。
     """
-    _ensure_enabled("sina")
+    ensure_enabled("sina")
     selected = [item for item in config.MARKET_INDEXES if item["market"] == "a"]
     codes = ",".join(f"s_{item['tencent']}" for item in selected)
     url = f"{config.SINA_QUOTE_BASE}/list={codes}"
@@ -450,7 +438,7 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
     Raises:
         ValueError: 新浪指数K线返回空数据。
     """
-    _ensure_enabled("sina")
+    ensure_enabled("sina")
     normalized, _ = utils.index_code_to_tencent(code)
     if normalized in ("DJI", "IXIC", "INX"):
         # 新浪美股指数历史：symbol 形如 .DJI，返回 date/open/high/low/close/volume
@@ -510,7 +498,7 @@ def get_profile_em(symbol: str) -> Dict[str, Any]:
     Raises:
         ValueError: 东财个股概况返回空数据。
     """
-    _ensure_enabled("eastmoney")
+    ensure_enabled("eastmoney")
     code, _, _ = utils.normalize_symbol(symbol, "a")
     frame = _call_ak(lambda: ak.stock_individual_info_em(symbol=code))
     if frame is None or frame.empty:
@@ -547,7 +535,7 @@ def get_profile_em_f10(symbol: str) -> Dict[str, Any]:
     Raises:
         ValueError: 东财F10个股概况返回空数据。
     """
-    _ensure_enabled("em_f10")
+    ensure_enabled("em_f10")
     code, _, secucode = utils.normalize_symbol(symbol, "a")
     secucode = f"{code}.{'SH' if code.startswith(('6', '9')) else 'SZ' if code.startswith(('0', '2', '3')) else 'BJ'}"
     url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"

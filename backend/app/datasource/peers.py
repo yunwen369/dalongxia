@@ -146,8 +146,8 @@ def _one(symbol: str) -> Dict[str, Any]:
                 if net_profit and net_profit > 0:
                     # 保留 3 位：实测五粮液 2026Q3 为 0.005（现金流断崖），两位会显示成 0.0 像缺值
                     metrics["ocf_np"] = round(ocf / net_profit, 3)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 - 单指标失败不影响其余同业指标
+                logger.info("同业对比-现金流/净利比失败 %s：%s", symbol, type(exc).__name__)
     except Exception as exc:  # noqa: BLE001
         logger.info("同业对比-现金流失败 %s：%s", symbol, type(exc).__name__)
         missing.append(f"{symbol}（现金流）")

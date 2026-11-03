@@ -63,7 +63,11 @@ import akshare as ak  # noqa: E402
 
 
 def _now_text() -> str:
-    """北京时间文本（禁裸 date.today，时区收口）。"""
+    """返回当前北京时间文本（禁止裸 date.today，时区口径收口）。
+
+    Returns:
+        str: ``YYYY-MM-DD HH:MM:SS``。
+    """
     return utils.now_text(utils.bj_now())
 
 
@@ -454,6 +458,9 @@ def _build_rows(
 
     Returns:
         Tuple[List[Dict[str, Any]], Dict[str, Any]]: (行列表, 统计信息)。
+
+    Raises:
+        RuntimeError: 无法确定最新交易日（估值明细源不可用）。
     """
     today = utils.bj_now().date()
     trade_date = _latest_trade_date()
@@ -631,8 +638,8 @@ def start_build_async(reason: str = "manual") -> Dict[str, Any]:
         """工作线程：执行构建并复位状态。"""
         try:
             _run_build(reason)
-        except Exception:  # noqa: BLE001 - 失败已记 last_error，线程不得向外抛
-            pass
+        except Exception as exc:  # noqa: BLE001 - 失败已记 last_error，线程不得向外抛
+            logger.warning("筛选器快照构建失败（last_error 已记录）：%s", type(exc).__name__)
         finally:
             # 占位与 _run_build 内部复位会叠加，这里兜底确保退出态正确
             with _BUILD_LOCK:

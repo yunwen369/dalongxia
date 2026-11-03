@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -29,6 +30,8 @@ import tempfile
 import time
 import urllib.request
 import websocket  # websocket-client
+
+logger = logging.getLogger(__name__)
 
 
 class CDP:
@@ -267,8 +270,8 @@ def main() -> None:
         try:
             proc.terminate()
             proc.wait(timeout=5)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 - 浏览器已退出时忽略，仅记录
+            logger.info("浏览器进程结束失败（可能已退出）：%s", type(exc).__name__)
 
 
 if __name__ == "__main__":

@@ -854,7 +854,14 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
 
 
 def _max_drawdown(navs: List[float]) -> Optional[float]:
-    """最大回撤（峰值到谷底的跌幅）。"""
+    """计算净值序列的最大回撤。
+
+    Args:
+        navs: 按时间升序的净值序列。
+
+    Returns:
+        Optional[float]: 最大回撤（0–1 小数）；空序列返回 0.0。
+    """
     peak = None
     max_dd = 0.0
     for v in navs:
@@ -879,8 +886,14 @@ def weight_breakdown(
     自身不可得时回退到「第一大重仓股所属行业」的同花顺板块分数（调 M3 同一函数），
     回退情形在 `caliber` 与逐条 `note` 中如实写明。
 
-    折扣后处理：基金部分内部重新归一化到「基础权重合计」，再按单只上限裁剪，
-    裁剪余额留现金（不做满仓强制）。折扣不可得的基金按 ×1.00 处理并标注。
+    Args:
+        codes: 基金代码列表。
+        risk_profile: 风险档位（conservative / balanced / aggressive）。
+        crowd_discount: 是否启用拥挤度折扣。
+
+    Returns:
+        Dict[str, Any]: 含 items（逐只基础/折扣/最终权重）、totals（base/final/cash）、
+        missing、caliber、disclaimer、as_of。
     """
 
     base = evaluate(codes, risk_profile)

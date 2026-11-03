@@ -301,6 +301,9 @@ def _cninfo_resolve(keyword: str) -> List[Dict[str, str]]:
     Returns:
         List[Dict[str, str]]: 形如 ``[{"code": "600519", "orgId": "gssh0600519", "name": "贵州茅台"}]``；
         无匹配返回空列表。
+
+    Raises:
+        RuntimeError: 巨潮检索接口 HTTP 非 200。
     """
     _cninfo_throttle()
     resp = netfix.http_request(
@@ -345,6 +348,9 @@ def _cninfo_query(
 
     Returns:
         Tuple[List[Dict[str, str]], int, str]: (记录列表, 源站总命中数, 口径说明)。
+
+    Raises:
+        RuntimeError: 巨潮公告查询接口 HTTP 非 200。
     """
     start = _since_start(since)
     se_date = ""
@@ -415,6 +421,9 @@ def _em_query(
 
     Returns:
         Tuple[List[Dict[str, str]], int]: (记录列表, 源站总命中数)。
+
+    Raises:
+        RuntimeError: 东财公告接口 HTTP 非 200。
     """
     resp = netfix.http_request(
         "GET",
@@ -696,6 +705,9 @@ def _edgar_tickers() -> Dict[str, Dict[str, Any]]:
 
     Returns:
         Dict[str, Dict[str, Any]]: 形如 ``{"NVDA": {"cik_str": 1045810, "title": "NVIDIA CORP"}}``。
+
+    Raises:
+        RuntimeError: EDGAR ticker 映射接口 HTTP 非 200。
     """
     now = time.time()
     cached = _TICKERS_CACHE.get("data")
@@ -1202,7 +1214,15 @@ def _title_in_text(title_norm: str, text_norm: str, *, ratio: float = 0.82) -> b
 
 
 def _day_diff(day_a: str, day_b: str) -> Optional[int]:
-    """计算两个日期串（YYYY-MM-DD）相差天数（绝对值）；任一不可解析返回 None。"""
+    """计算两个日期串相差天数（绝对值）。
+
+    Args:
+        day_a: 日期串（YYYY-MM-DD 或以空格分隔的时间串）。
+        day_b: 日期串（同上）。
+
+    Returns:
+        Optional[int]: 天数差绝对值；任一不可解析返回 None。
+    """
     signed = _signed_day_diff(day_a, day_b)
     return None if signed is None else abs(signed)
 
@@ -1407,6 +1427,9 @@ def us_detail(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str
 
     Returns:
         Dict[str, Any]: 同 :func:`cn_detail`；正文为 SEC 官方原文。
+
+    Raises:
+        RuntimeError: EDGAR 文档请求异常或 HTTP 非 200。
     """
     doc_url = str(doc_url or "").strip()
     if not doc_url.startswith("https://www.sec.gov/Archives/"):

@@ -40,7 +40,11 @@ class ScreenerRunRequest(BaseModel):
 
 @router.get("/status")
 def screener_status() -> Dict[str, Any]:
-    """快照状态：是否就绪 / 版本 / 覆盖数 / 构建进度 / 自动构建窗口。"""
+    """返回快照状态（是否就绪 / 版本 / 覆盖数 / 构建进度 / 自动构建窗口）。
+
+    Returns:
+        dict: 快照元信息，含 ``ready`` / ``version`` / ``coverage`` / ``progress`` / ``auto_build``。
+    """
     try:
         auto = screener.maybe_auto_build()  # 18:00 后惰性自动构建（当日未建过）
         meta = screener.get_snapshot_meta()
@@ -53,9 +57,12 @@ def screener_status() -> Dict[str, Any]:
 
 @router.post("/refresh")
 def screener_refresh() -> Dict[str, Any]:
-    """手动刷新快照（异步启动，进度见 /status）。
+    """手动刷新快照（异步启动，进度见 ``/status``）。
 
     构建中查询读上一版快照，不阻塞（用户裁决 4）。
+
+    Returns:
+        dict: ``{started, building, message}``；已有构建任务时 started=False。
     """
     try:
         result = screener.start_build_async(reason="manual")
@@ -69,7 +76,14 @@ def screener_refresh() -> Dict[str, Any]:
 
 @router.post("/run")
 def screener_run(request: ScreenerRunRequest) -> Dict[str, Any]:
-    """执行条件筛选（只查本地快照，<1s）。"""
+    """执行条件筛选（只查本地快照，<1s）。
+
+    Args:
+        request: 筛选请求，含 conditions（条件数组，AND 关系）与 limit（返回上限）。
+
+    Returns:
+        dict: 命中行与统计；快照未建库返回 EMPTY_DATA，参数非法返回 INVALID_PARAM。
+    """
     conditions = [item.model_dump() for item in request.conditions]
     try:
         payload = screener.run_screener(conditions, limit=request.limit)

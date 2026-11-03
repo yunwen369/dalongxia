@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import tencent, utils
 
 netfix.apply_netfix()
@@ -31,21 +32,6 @@ logger = logging.getLogger(__name__)
 
 # 东财美股历史接口要求「市场前缀.代码」：105=纳斯达克，106=纽交所，107=美交所
 US_PREFIXES = ("105.", "106.", "107.")
-
-
-def _ensure_enabled(source: str) -> None:
-    """检查数据源开关。
-
-    Args:
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    from backend.app import config
-
-    if not config.PROVIDER_SWITCHES.get(source, True):
-        raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _call(func) -> Any:
@@ -84,7 +70,7 @@ def get_quote_em(symbol: str, market: str) -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled("eastmoney")
+    ensure_enabled("eastmoney")
     if market == "us":
         frame = _call(lambda: ak.stock_us_spot_em())
         code_column, name_column = "代码", "名称"
@@ -135,7 +121,7 @@ def get_kline_em(symbol: str, market: str, period: str, adjust: str) -> List[Dic
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled("eastmoney")
+    ensure_enabled("eastmoney")
     period_map = {"日k": "daily", "周k": "weekly", "月k": "monthly",
                   "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
     ak_period = period_map.get(str(period).lower(), "daily")

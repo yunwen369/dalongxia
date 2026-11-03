@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import sina_flow, tencent, tencent_board, ths_http, utils
@@ -54,19 +55,6 @@ OVERSEAS_REPRESENTATIVES: Dict[str, List[str]] = {
     "hk": ["00700", "09988", "03690", "01810", "00981"],
     "us": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA"],
 }
-
-
-def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关，被环境变量禁用时抛出确定性异常（不重试）。
-
-    Args:
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    if not config.PROVIDER_SWITCHES.get(source, True):
-        raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _call(func) -> Any:
@@ -199,7 +187,7 @@ def _industry_ths() -> List[Dict[str, Any]]:
     Raises:
         ValueError: 同花顺行业行情返回空数据。
     """
-    _ensure_enabled()
+    ensure_enabled()
     items: List[Dict[str, Any]] = []
     for row in ths_http.get_industry_rows():
         items.append(
@@ -237,7 +225,7 @@ def _sina_sector_items(indicator: str, kind: str) -> List[Dict[str, Any]]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_sector_spot(indicator=indicator))
     items: List[Dict[str, Any]] = []
     for row in utils.clean_records(frame):
@@ -279,7 +267,7 @@ def _concept_ths_names() -> List[Dict[str, Any]]:
     Raises:
         ValueError: 腾讯概念榜返回空数据。
     """
-    _ensure_enabled()
+    ensure_enabled()
     items: List[Dict[str, Any]] = []
     for row in tencent_board.get_board_rows("concept"):
         items.append(
@@ -594,7 +582,7 @@ def _kline_ths(kind: str, board: str, period: str, *, fill_today: bool = True) -
     Raises:
         ValueError: 板块名无代码映射或上游返回空数据。
     """
-    _ensure_enabled()
+    ensure_enabled()
     period_key = _period_key(period)
     if kind == "industry":
         code = ths_http.get_board_code(board, kind="industry")
@@ -794,13 +782,13 @@ def is_known_board(board: str) -> bool:
     try:
         if name in ths_http.get_industry_codes():
             return True
-    except Exception:  # noqa: BLE001 - 名录不可用时不阻断判断
-        pass
+    except Exception as exc:  # noqa: BLE001 - 名录不可用时不阻断判断
+        logger.info("同花顺行业名录不可用，继续用腾讯/申万判定 %s：%s", name, type(exc).__name__)
     try:
         if _tencent_board_code(name, "concept"):
             return True
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - 腾讯板块码不可用时不阻断判断
+        logger.info("腾讯板块码查询失败，继续用申万名录判定 %s：%s", name, type(exc).__name__)
     return name in SW_INDEX_CODE
 
 
@@ -824,7 +812,7 @@ def _kline_sw(board: str, period: str) -> List[Dict[str, Any]]:
     code = SW_INDEX_CODE.get(board)
     if not code:
         raise ValueError(f"申万行业映射缺失：{board}")
-    _ensure_enabled()
+    ensure_enabled()
     symbol = code.split(".")[0]
     frame = _call(lambda: ak.index_hist_sw(symbol=symbol, period="day"))
     rows: List[Dict[str, Any]] = []
@@ -868,7 +856,8 @@ def _sina_label(board: str) -> Optional[str]:
         for indicator in ("新浪行业", "概念", "地域"):
             try:
                 frame = _call(lambda: ak.stock_sector_spot(indicator=indicator))
-            except Exception:  # noqa: BLE001 - 单个分类失败不影响整体映射
+            except Exception as exc:  # noqa: BLE001 - 单个分类失败不影响整体映射
+                logger.info("板块映射：%s 分类取数失败，跳过：%s", indicator, type(exc).__name__)
                 continue
             for row in utils.clean_records(frame):
                 name = str(row.get("板块") or "").strip()
@@ -899,7 +888,7 @@ def _cons_sina(board: str) -> List[Dict[str, Any]]:
     label = _sina_label(board)
     if not label:
         raise ValueError(f"新浪板块列表未找到：{board}")
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_sector_detail(sector=label))
     raw_rows = utils.clean_records(frame)
     total_nmc = sum((_num(row.get("nmc")) or 0.0) for row in raw_rows)
@@ -938,7 +927,7 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
 
     def build() -> Dict[str, str]:
         """构建 {申万行业名: 行业代码} 映射（只取一级+二级，三级按需加载）。
@@ -1077,7 +1066,7 @@ def _cons_em(board: str) -> List[Dict[str, Any]]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_board_industry_cons_em(symbol=board))
     rows = utils.clean_records(frame)
     total_cap = sum((_num(row.get("流通市值")) or 0.0) for row in rows)
@@ -1115,7 +1104,7 @@ def _cons_ths(board: str) -> List[Dict[str, Any]]:
     Raises:
         ValueError: 板块名无代码映射或成分页不可用。
     """
-    _ensure_enabled()
+    ensure_enabled()
     code = ths_http.get_board_code(board, kind="industry") or ths_http.get_board_code(
         board, kind="concept"
     )
@@ -1226,14 +1215,15 @@ def _known_board_names() -> set:
                 names.add(level2["name"])
                 for leaf in level2["children"]:
                     names.add(leaf["name"])
-    except Exception:  # noqa: BLE001 - 板块树不可用时仅靠申万名录
-        pass
+    except Exception as exc:  # noqa: BLE001 - 板块树不可用时仅靠申万名录
+        logger.info("板块树不可用，仅用申万名录判定：%s", type(exc).__name__)
     for getter in (get_industry, get_concept):
         try:
             for row in getter("cn"):
                 # 同花顺行业/概念行字段为 name；申万等其他源可能用 名称
                 names.add(str(row.get("name") or row.get("名称") or "").strip())
-        except Exception:  # noqa: BLE001 - 单个列表失败不影响判定
+        except Exception as exc:  # noqa: BLE001 - 单个列表失败不影响判定
+            logger.info("板块名录取数失败，跳过该来源：%s", type(exc).__name__)
             continue
     return {name for name in names if name}
 
@@ -1284,7 +1274,7 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     """
     if market in ("hk", "us"):
         return []
-    _ensure_enabled()
+    ensure_enabled()
     rows = ths_http.get_industry_flow_rows()
     # 四档依赖成分映射；未预热完时按时间预算补 1–2 个板块，
     # 使「首次使用也能逐步补齐」，而不是永久空白（预算内补不完由后台线程继续）。
@@ -1613,7 +1603,7 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     Raises:
         ValueError: 板块日线取不到或样本不足。
     """
-    _ensure_enabled()
+    ensure_enabled()
     rows: List[Dict[str, Any]] = []
     for row in _kline_ths(kind, board, "daily", fill_today=fill_today):
         day = str(row.get("date") or "")[:10]
@@ -1789,7 +1779,7 @@ def get_crowding_rankings(
     Raises:
         ValueError: 板块类型不支持或清单为空。
     """
-    _ensure_enabled()
+    ensure_enabled()
     # 本函数为**纯同步扫描体**（供测试直连与后台线程复用）；
     # 缓存查表与「后台计算 + 立即返回计算中态」的 HTTP 语义由 routers/sector.py 接管，
     # 故此处不查缓存、不启后台，避免把「计算中」中间态落盘 1 小时。
@@ -1806,6 +1796,9 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
 
     Returns:
         Dict[str, Any]: 排行结果（同 get_crowding_rankings 成功态）。
+
+    Raises:
+        ValueError: kind 非法，或对应板块清单为空。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1822,7 +1815,14 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
     failed: List[str] = []
 
     def _work(board: str) -> Dict[str, Any]:
-        """单板块打分（异常向上抛，由调用方归类到 failed）。"""
+        """单板块打分（异常向上抛，由调用方归类到 failed）。
+
+        Args:
+            board: 板块名。
+
+        Returns:
+            Dict[str, Any]: 单板块结果，含 board / kind / score / level / parts。
+        """
         data = get_crowding(board, kind=key_kind, fill_today=False)
         return {
             "board": data["board"],
@@ -1936,7 +1936,7 @@ def get_crowding_board_names(kind: str = "industry") -> List[str]:
     Returns:
         List[str]: 板块名列表（行业约 90 个 / 概念约 800 个）；接口异常时向上抛，由调用方降级。
     """
-    _ensure_enabled()
+    ensure_enabled()
     key_kind = str(kind or "industry").strip().lower()
     if key_kind == "concept":
         names = [row.get("name") for row in tencent_board.get_board_rows("concept")]
@@ -1966,7 +1966,7 @@ def get_sector_constituents(board: str, *, kind: str = "industry") -> List[Dict[
     Raises:
         ValueError: 全部源均失败时抛出，附具体源名与异常类型。
     """
-    _ensure_enabled()
+    ensure_enabled()
     errors: List[str] = []
     try:
         code = ths_http.get_board_code(board, kind=kind)

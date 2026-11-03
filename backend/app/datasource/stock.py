@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
+from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import tencent, utils
 
 netfix.apply_netfix()
@@ -51,19 +52,6 @@ NEGATIVE_WORDS = (
     "下滑", "亏损", "减持", "下调", "处罚", "违规", "诉讼", "降价", "裁员", "风险",
     "终止", "退市", "质押", "冻结", "不及预期", "跌", "警示", "问询", "解禁", "计提",
 )
-
-
-def _ensure_enabled(source: str = "akshare") -> None:
-    """检查数据源开关。
-
-    Args:
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    if not config.PROVIDER_SWITCHES.get(source, True):
-        raise NonRetryableError(f"{source} 源已被环境变量禁用")
 
 
 def _call(func) -> Any:
@@ -462,7 +450,7 @@ def get_news(symbol: str, limit: int = 10) -> List[Dict[str, Any]]:
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_news_em(symbol=str(symbol)))
     items: List[Dict[str, Any]] = []
     for row in utils.clean_records(frame)[: max(1, limit)]:
@@ -673,7 +661,7 @@ def get_financial_summary(symbol: str) -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_financial_abstract(symbol=str(symbol)))
     rows = utils.clean_records(frame)
     if not rows:
@@ -722,7 +710,7 @@ def get_financial_trend(symbol: str, years: int = 5) -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_financial_report_sina(stock=_sina_prefix(symbol), symbol="利润表"))
     rows = utils.clean_records(frame)
     if not rows:
@@ -805,7 +793,7 @@ def get_financial_indicator(symbol: str, limit: int = 8) -> Dict[str, Any]:
     Raises:
         ValueError: 参数不合法或上游数据不满足口径时抛出。
     """
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_financial_analysis_indicator(symbol=str(symbol), start_year="2022"))
     rows = utils.clean_records(frame)
     if not rows:
@@ -871,7 +859,7 @@ def get_financial_report(symbol: str, statement: str = "利润表", limit: int =
     allowed = ("资产负债表", "利润表", "现金流量表")
     if statement not in allowed:
         raise ValueError("statement 仅支持资产负债表/利润表/现金流量表")
-    _ensure_enabled()
+    ensure_enabled()
     frame = _call(lambda: ak.stock_financial_report_sina(stock=_sina_prefix(symbol), symbol=statement))
     rows = utils.clean_records(frame)
     if not rows:

@@ -123,6 +123,9 @@ def _make_base_session() -> "requests.Session":
     """创建基础会话（trust_env=False、浏览器 UA），不挂载重试适配器。
 
     内部函数：供 make_session / make_post_session 复用。
+
+    Returns:
+        requests.Session: 已关闭环境代理继承并设置浏览器 UA 的会话。
     """
     import requests
 
