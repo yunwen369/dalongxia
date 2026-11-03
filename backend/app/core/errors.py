@@ -176,3 +176,26 @@ def bad_request(message: str) -> Dict[str, Any]:
         dict: 统一返回结构，error_code=INVALID_PARAM。
     """
     return api_error(ErrorCode.INVALID_PARAM, message)
+
+
+def failure_pack(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
+    """把降级链失败结果转换为统一错误响应。
+
+    设计依据：设计基准说明书_第九轮_v1.0 §3.4（DS-R9-v1.0）。
+    本函数是路由层构造「降级失败」响应的唯一入口，取代 market/news/sector/stock
+    四处各自实现的 ``_failure``。``empty_value`` 保持与成功态同构，避免前端在
+    错误态拿不到字段结构。
+
+    Args:
+        result: ``with_fallback`` 的失败结果，含 error / error_code。
+        empty_value: 空数据时的同构空值（保持字段结构一致）。
+
+    Returns:
+        dict: {"data": empty_value, "error": 中文文案, "error_code": 错误码}。
+    """
+    try:
+        code = ErrorCode(str(result.get("error_code")))
+    except (ValueError, TypeError):
+        # error_code 缺失/非法（含 None、空串）时归入上游异常，不向上抛
+        code = ErrorCode.UPSTREAM_ERROR
+    return api_error(code, result.get("error"), data=empty_value)

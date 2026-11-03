@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 from fastapi import APIRouter, Body, Query
 
 from backend.app import config
 from backend.app.core import cache, netfix
-from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import financial_report
 from backend.app.datasource import news as news_provider
@@ -38,53 +38,6 @@ router = APIRouter(prefix="/api/news", tags=["新闻"])
 _SORTS = ("time", "impact", "relevance")
 _AI_FEED_REGIONS = ("global", "cn")
 _MARKETS = utils.MARKET_WHITELIST_ALL
-
-
-def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。
-
-    Args:
-        message: 中文提示文案。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
-
-
-def _failure(result: Dict[str, Any], empty: Any) -> Dict[str, Any]:
-    """降级链失败 → 统一错误响应。
-
-    Args:
-        result: 上游返回结果。
-        empty: 空数据时的返回值。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    try:
-        code = ErrorCode(str(result.get("error_code")))
-    except ValueError:
-        code = ErrorCode.UPSTREAM_ERROR
-    return api_error(code, result.get("error"), data=empty)
-
-
-def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
-          market_status: str = "资讯快照", is_realtime: bool = False) -> Dict[str, Any]:
-    """组装响应并附带数据源/口径/时间。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
-        is_realtime: 是否为盘中实时数据。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _sort_items(items: List[Dict[str, Any]], sort: str) -> List[Dict[str, Any]]:
@@ -137,7 +90,7 @@ def news_flash(
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if sort not in _SORTS:
-        return _bad("sort 仅支持 time/impact/relevance")
+        return bad_request("sort 仅支持 time/impact/relevance")
 
     def loader() -> Dict[str, Any]:
         """取数并打分。
@@ -155,9 +108,9 @@ def news_flash(
     if result.get("error"):
         # 空数据属自然空态（§7 空态与错误态严格区分），只有通道异常才走错误态
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
-            return _pack({"items": [], "count": 0, "board": board or None},
-                         "财联社", "快讯池为空，请稍后刷新", None)
-        return _failure(result, {"items": []})
+            return pack_success({"items": [], "count": 0, "board": board or None},
+                                "财联社", "快讯池为空，请稍后刷新", None, "资讯快照", False)
+        return failure_pack(result, {"items": []})
     items = sentiment_engine.analyze_items(result["data"] or [], sectors=news_provider.sector_keywords())
     if board:
         node = news_provider.resolve_board(board)
@@ -167,11 +120,11 @@ def news_flash(
             if any(word and word in f"{item.get('title', '')} {item.get('text', '')}" for word in words)
         ]
     items = _sort_items(items, sort)[:limit]
-    return _pack(
+    return pack_success(
         {"items": items, "count": len(items), "board": board or None},
         result.get("source") or "",
         result.get("caliber") or "",
-        items[0].get("time") if items else None,
+        items[0].get("time") if items else None, "资讯快照", False,
     )
 
 
@@ -216,12 +169,12 @@ def news_stock(
     """
     code = str(symbol).strip()
     if not code:
-        return _bad("symbol 参数不可为空")
+        return bad_request("symbol 参数不可为空")
     market_text = (market or "a").lower()
     if market_text in ("cn",):
         market_text = "a"
     if market_text not in ("a", "hk", "us"):
-        return _bad("market 仅支持 a / hk / us")
+        return bad_request("market 仅支持 a / hk / us")
 
     def loader() -> Dict[str, Any]:
         """个股新闻取数：A 股走东财个股新闻；港美股走东财资讯搜索（相关性过滤）。
@@ -244,17 +197,17 @@ def news_stock(
         f"news:stock:{market_text}:{code}:{limit}", config.TTL["news_flash"], loader)
     if result.get("error"):
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
-            return _pack({"symbol": code, "items": [], "count": 0},
-                         "东财", "该标的暂无相关新闻", None)
-        return _failure(result, {"items": [], "symbol": code})
+            return pack_success({"symbol": code, "items": [], "count": 0},
+                                "东财", "该标的暂无相关新闻", None, "资讯快照", False)
+        return failure_pack(result, {"items": [], "symbol": code})
     items = sentiment_engine.analyze_items(result["data"] or [], sectors=news_provider.sector_keywords())
     for item in items:
         item["boards"] = news_provider.match_boards(f"{item.get('title', '')} {item.get('text', '')}")
-    return _pack(
+    return pack_success(
         {"symbol": code, "market": market_text, "items": items, "count": len(items)},
         result.get("source") or "",
         result.get("caliber") or "",
-        items[0].get("time") if items else None,
+        items[0].get("time") if items else None, "资讯快照", False,
     )
 
 
@@ -284,17 +237,17 @@ def news_global(limit: int = Query(100, ge=1, le=300)) -> Dict[str, Any]:
     result = cache.get_or_load(f"news:global:{limit}", config.TTL["news_flash"], loader)
     if result.get("error"):
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
-            return _pack({"items": [], "count": 0, "before_dedup": 0},
-                         "东财/新浪/同花顺", "三源均无新条目，请稍后刷新", None)
-        return _failure(result, {"items": []})
+            return pack_success({"items": [], "count": 0, "before_dedup": 0},
+                                "东财/新浪/同花顺", "三源均无新条目，请稍后刷新", None, "资讯快照", False)
+        return failure_pack(result, {"items": []})
     raw = result["data"] or []
     merged = news_provider.dedup(raw)
     items = sentiment_engine.analyze_items(merged, sectors=news_provider.sector_keywords())
-    return _pack(
+    return pack_success(
         {"items": items, "count": len(items), "before_dedup": len(raw)},
         result.get("source") or "",
         "三源合并后按标题归一化去重",
-        items[0].get("time") if items else None,
+        items[0].get("time") if items else None, "资讯快照", False,
     )
 
 
@@ -315,10 +268,10 @@ def news_sector_search(
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if sort not in _SORTS:
-        return _bad("sort 仅支持 time/impact/relevance")
+        return bad_request("sort 仅支持 time/impact/relevance")
     name = (sector or "").strip()
     if not name:
-        return _bad("sector 参数不可为空")
+        return bad_request("sector 参数不可为空")
     node = news_provider.resolve_board(name)
     if node is None:
         return api_error(ErrorCode.NOT_FOUND, "板块不存在，请从板块树中选择。",
@@ -339,19 +292,19 @@ def news_sector_search(
     result = cache.get_or_load(f"news:sector:{name}:{limit}", config.TTL["news_flash"], loader)
     if result.get("error"):
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
-            return _pack({"sector": name, "level": node.get("level"), "items": [], "count": 0},
-                         "财联社/东财/新浪/同花顺", "该板块近期无命中资讯（关键词命中口径）", None)
-        return _failure(result, {"items": [], "sector": name})
+            return pack_success({"sector": name, "level": node.get("level"), "items": [], "count": 0},
+                                "财联社/东财/新浪/同花顺", "该板块近期无命中资讯（关键词命中口径）", None, "资讯快照", False)
+        return failure_pack(result, {"items": [], "sector": name})
     items = sentiment_engine.analyze_items(result["data"] or [], sectors=news_provider.sector_keywords())
     # 该接口本身已按板块命中过滤，逐条回填 boards 供前端展示与排序
     for item in items:
         item["boards"] = [name]
     items = _sort_items(items, sort)[:limit]
-    return _pack(
+    return pack_success(
         {"sector": name, "level": node.get("level"), "items": items, "count": len(items)},
         result.get("source") or "",
         "板块关键词命中（含别名），非语义检索",
-        items[0].get("time") if items else None,
+        items[0].get("time") if items else None, "资讯快照", False,
     )
 
 
@@ -363,7 +316,7 @@ def news_board_tree() -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     tree = news_provider.get_board_tree()
-    return _pack(
+    return pack_success(
         tree,
         "内置配置",
         "本地静态板块树（版本 %s），供筛选与板块命中" % tree["version"],
@@ -396,19 +349,19 @@ def news_ai_feed(
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if sort not in _SORTS:
-        return _bad("sort 仅支持 relevance/time/impact")
+        return bad_request("sort 仅支持 relevance/time/impact")
     if region not in _AI_FEED_REGIONS:
-        return _bad("region 仅支持 global/cn")
+        return bad_request("region 仅支持 global/cn")
     market = utils.normalize_market(market, allow_all=True, default="all") or ""
     if not market:
-        return _bad(utils.market_error_message(allow_all=True))
+        return bad_request(utils.market_error_message(allow_all=True))
 
     board_list = [item.strip() for item in (boards or "").split(",") if item.strip()]
     unknown = [item for item in board_list if news_provider.resolve_board(item) is None]
     if unknown:
-        return _bad("以下板块不在板块树中：" + "、".join(unknown))
+        return bad_request("以下板块不在板块树中：" + "、".join(unknown))
     if len(board_list) > 6:
-        return _bad("boards 最多支持 6 个板块")
+        return bad_request("boards 最多支持 6 个板块")
 
     code = str(symbol).strip()
     # 过滤顺序修正（TZ-01 取证时发现）：板块/区域/市场三个过滤都在**截断之后**执行，
@@ -438,10 +391,10 @@ def news_ai_feed(
     result = cache.get_or_load(key, config.TTL["news_flash"], loader)
     if result.get("error"):
         if result.get("error_code") == ErrorCode.EMPTY_DATA.value:
-            return _pack({"items": [], "count": 0, "channels": [], "region": region,
-                          "market": market, "boards": board_list},
-                         "财联社/东财/新浪/同花顺", "多源池暂无新条目，请稍后刷新", None)
-        return _failure(result, {"items": [], "channels": []})
+            return pack_success({"items": [], "count": 0, "channels": [], "region": region,
+                                 "market": market, "boards": board_list},
+                                "财联社/东财/新浪/同花顺", "多源池暂无新条目，请稍后刷新", None, "资讯快照", False)
+        return failure_pack(result, {"items": [], "channels": []})
     payload = result["data"] or {}
     raw_items = payload.get("items") or []
     items = sentiment_engine.analyze_items(raw_items, sectors=news_provider.sector_keywords())
@@ -476,7 +429,7 @@ def news_ai_feed(
         caliber += "；region=cn 仅保留国内快讯"
     if market != "all":
         caliber += f"；market={market} 仅保留该市场有代表个股的板块命中项"
-    return _pack(
+    return pack_success(
         {
             "items": items,
             "count": len(items),
@@ -489,7 +442,7 @@ def news_ai_feed(
         },
         result.get("source") or "",
         caliber,
-        items[0].get("time") if items else None,
+        items[0].get("time") if items else None, "资讯快照", False,
     )
 
 
@@ -509,7 +462,7 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     title = str(payload.get("title") or "").strip()
     content = str(payload.get("content") or "").strip()
     if not title and not content:
-        return _bad("title 与 content 至少提供一个")
+        return bad_request("title 与 content 至少提供一个")
 
     ai = config.load_ai_config()
     if not ai.api_key or not ai.base_url:
@@ -565,7 +518,7 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "AI 返回内容无法解析，请检查模型是否兼容 OpenAI 格式。",
                          data={"reviewed": False})
 
-    return _pack(
+    return pack_success(
         {
             "reviewed": True,
             "model": ai.model,
@@ -614,13 +567,13 @@ def financial_search(
     # 第五轮阶段 4：market 口径统一 a/hk/us（cn 为兼容别名，归一后回写）
     market = utils.normalize_market(market, allow_all=True, default="all") or ""
     if not market:
-        return _bad(utils.market_error_message(allow_all=True))
+        return bad_request(utils.market_error_message(allow_all=True))
     if type_value not in financial_report.TYPE_VALUES:
-        return _bad("type 参数不合法，请从「全部/年报/半年报/一季报/三季报/业绩预告/招股书/10-K/10-Q/8-K/其他」中选择。")
+        return bad_request("type 参数不合法，请从「全部/年报/半年报/一季报/三季报/业绩预告/招股书/10-K/10-Q/8-K/其他」中选择。")
     if since not in financial_report.SINCE_VALUES:
-        return _bad("since 参数不合法，仅支持 all / 7 / 30 / 90 / 365（近 N 天）。")
+        return bad_request("since 参数不合法，仅支持 all / 7 / 30 / 90 / 365（近 N 天）。")
     if len(q) > 60:
-        return _bad("关键词过长（上限 60 字），请缩短后重试。")
+        return bad_request("关键词过长（上限 60 字），请缩短后重试。")
 
     try:
         data = financial_report.search_filings(
@@ -668,11 +621,11 @@ def financial_detail(
     # 第五轮阶段 4：market 口径统一 a/hk/us（cn 为兼容别名，归一后回写）
     market = utils.normalize_market(market, default="a") or ""
     if not market:
-        return _bad(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     title = (title or "").strip()
     doc_url = (doc_url or "").strip()
     if not title and not doc_url:
-        return _bad("缺少公告标识（title 或 doc_url 至少一项），无法拉取正文。")
+        return bad_request("缺少公告标识（title 或 doc_url 至少一项），无法拉取正文。")
     if doc_url and not (
         doc_url.startswith("https://np-anotice-stock.eastmoney.com/")
         or doc_url.startswith("https://data.eastmoney.com/notices/detail/")
@@ -680,7 +633,7 @@ def financial_detail(
         or doc_url.startswith("https://www1.hkexnews.hk/")
         or doc_url.startswith("https://www.sec.gov/Archives/")
     ):
-        return _bad("doc_url 来源不在支持的公告源（巨潮资讯/东方财富/HKEX/SEC）内，已拒绝处理。")
+        return bad_request("doc_url 来源不在支持的公告源（巨潮资讯/东方财富/HKEX/SEC）内，已拒绝处理。")
 
     try:
         data = financial_report.detail_cached(

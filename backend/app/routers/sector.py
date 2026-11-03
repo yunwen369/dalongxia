@@ -23,7 +23,7 @@ from fastapi import APIRouter, Query
 
 from backend.app import config
 from backend.app.core import cache
-from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import sector as sector_provider
 from backend.app.datasource import utils
@@ -34,59 +34,6 @@ router = APIRouter(prefix="/api/sector", tags=["板块"])
 
 # 板块域白名单：cn=国内（A股）、hk=港股、us=美股
 _ALLOWED_MARKETS = utils.MARKET_WHITELIST_SECTOR
-
-
-def _bad_request(message: str) -> Dict[str, Any]:
-    """参数错误响应。
-
-    Args:
-        message: 中文提示文案。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
-
-
-def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """把降级链失败结果转为统一错误响应，空结构保持与成功态同构。
-
-    Args:
-        result: 上游返回结果。
-        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    try:
-        code = ErrorCode(str(result.get("error_code")))
-    except ValueError:
-        code = ErrorCode.UPSTREAM_ERROR
-    return api_error(code, result.get("error"), data=empty_value)
-
-
-def _pack(
-    data: Dict[str, Any],
-    source: str,
-    caliber: str,
-    as_of: Optional[str],
-    market_status: str,
-    is_realtime: bool,
-) -> Dict[str, Any]:
-    """组装成功响应，统一附带数据源/口径/时间/市场状态。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
-        is_realtime: 是否为盘中实时数据。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _status_now() -> tuple[str, str, bool]:
@@ -144,7 +91,7 @@ def _pack_sectors(
         )
         body["empty_hint"] = "UPSTREAM_EMPTY"
     body["available"] = available
-    return _pack(body, source, final_caliber, as_of, market_status, is_realtime)
+    return pack_success(body, source, final_caliber, as_of, market_status, is_realtime)
 
 
 def _run_chain(
@@ -241,12 +188,12 @@ def sector_industry(market: str = Query("a", description="a/hk/us（cn 为 a 的
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     result = _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": public_market})
+        return failure_pack(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack_sectors(
@@ -272,12 +219,12 @@ def sector_concept(market: str = Query("a", description="a/hk/us（cn 为 a 的�
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     result = _concept_cached(selected)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": public_market})
+        return failure_pack(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack_sectors(
@@ -310,16 +257,16 @@ def sector_heatmap(
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     kind_value = (kind or "industry").lower()
     if kind_value not in ("industry", "concept"):
-        return _bad_request("kind 仅支持 industry/concept")
+        return bad_request("kind 仅支持 industry/concept")
 
     result = _concept_cached(selected) if kind_value == "concept" else _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"nodes": [], "market": public_market, "kind": kind_value})
+        return failure_pack(result, {"nodes": [], "market": public_market, "kind": kind_value})
     nodes = sector_provider.heatmap_from_items(result["data"] or [])
     as_of, status, is_realtime = _status_now()
     return _pack_sectors(
@@ -345,12 +292,12 @@ def sector_summary(market: str = Query("a", description="a/hk/us（cn 为 a 的�
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     result = _industry_cached(selected)
     if result.get("error"):
-        return _failure(result, {"gainers": [], "losers": [], "inflow": [], "market": public_market})
+        return failure_pack(result, {"gainers": [], "losers": [], "inflow": [], "market": public_market})
     summary = sector_provider.summary_from_items(result["data"] or [], selected)
     summary = {**summary, "market": public_market}  # 对外口径 a/hk/us（第五轮阶段 4 统一）
     as_of, status, is_realtime = _status_now()
@@ -385,10 +332,10 @@ def sector_kline(
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if not board.strip():
-        return _bad_request("board 参数不可为空")
+        return bad_request("board 参数不可为空")
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
 
@@ -437,7 +384,7 @@ def sector_kline(
     data = result["data"] or {}
     items = data.get("items") or []
     as_of = f"{items[-1].get('date')} 15:00:00" if items else None
-    return _pack(
+    return pack_success(
         {
             "board": data.get("board", board),
             "period": data.get("period", period),
@@ -469,10 +416,10 @@ def sector_cons(
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if not board.strip():
-        return _bad_request("board 参数不可为空")
+        return bad_request("board 参数不可为空")
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
 
@@ -509,10 +456,10 @@ def sector_cons(
 
     result = cache.get_or_load(cache_key, config.TTL["cons"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "board": board, "market": public_market})
+        return failure_pack(result, {"items": [], "board": board, "market": public_market})
     data = result["data"] or {}
     as_of, status, is_realtime = _status_now()
-    return _pack(
+    return pack_success(
         {
             "board": data.get("board", board),
             "market": public_market,
@@ -542,7 +489,7 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     if selected in ("hk", "us"):
@@ -568,7 +515,7 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
 
     result = cache.get_or_load(f"sector:fundflow:{selected}", config.TTL["fund_flow"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "market": public_market})
+        return failure_pack(result, {"items": [], "market": public_market})
     items = result["data"] or []
     as_of, status, is_realtime = _status_now()
     return _pack_sectors(
@@ -600,14 +547,14 @@ def sector_trend(
     """
     normalized = utils.normalize_market(market)
     if normalized is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     selected = utils.sector_source_market(normalized)   # 内部口径 cn/hk/us（provider 与缓存键不变）
     public_market = normalized                           # 对外口径 a/hk/us
     names = [item.strip() for item in (boards or "").split(",") if item.strip()]
     if not names:
-        return _bad_request("boards 参数不可为空")
+        return bad_request("boards 参数不可为空")
     if len(names) > 6:
-        return _bad_request("boards 最多支持 6 个板块")
+        return bad_request("boards 最多支持 6 个板块")
 
     cache_key = f"sector:trend:{selected}:{','.join(names)}:{days}"
 
@@ -628,10 +575,10 @@ def sector_trend(
 
     result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
-        return _failure(result, {"series": [], "boards": names})
+        return failure_pack(result, {"series": [], "boards": names})
     data = result["data"] or {}
     _, status, is_realtime = _status_now()
-    return _pack(
+    return pack_success(
         {
             "boards": names,
             "days": days,

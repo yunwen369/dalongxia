@@ -23,24 +23,12 @@ from fastapi import APIRouter, Query
 from backend.app import config
 from backend.app.datasource import utils
 from backend.app.core import cache
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import ErrorCode, api_error, ok, bad_request
 from backend.app.datasource import moneyflow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/moneyflow", tags=["资金面"])
-
-
-def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。
-
-    Args:
-        message: 中文提示。
-
-    Returns:
-        dict: 统一信封的错误响应。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _lhb_like(*, cache_key: str, loader, empty_source: str, empty_caliber: str,
@@ -159,7 +147,7 @@ def lhb(date: str = Query("", description="YYYY-MM-DD；留空取最近披露日
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
-            return _bad("date 需为 YYYY-MM-DD 格式。")
+            return bad_request("date 需为 YYYY-MM-DD 格式。")
     return _lhb_like(
         cache_key=f"moneyflow:lhb:{date or 'latest'}:{limit}",
         loader=lambda: moneyflow.get_lhb(date, limit),
@@ -186,7 +174,7 @@ def lhb_institution(date: str = Query("", description="YYYY-MM-DD；留空取最
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
-            return _bad("date 需为 YYYY-MM-DD 格式。")
+            return bad_request("date 需为 YYYY-MM-DD 格式。")
     return _lhb_like(
         cache_key=f"moneyflow:lhb-inst:{date or 'latest'}:{limit}",
         loader=lambda: moneyflow.get_lhb_institution(date, limit),
@@ -213,7 +201,7 @@ def lhb_broker(date: str = Query("", description="YYYY-MM-DD；留空取最近�
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
-            return _bad("date 需为 YYYY-MM-DD 格式。")
+            return bad_request("date 需为 YYYY-MM-DD 格式。")
     return _lhb_like(
         cache_key=f"moneyflow:lhb-broker:{date or 'latest'}:{limit}",
         loader=lambda: moneyflow.get_lhb_broker(date, limit),

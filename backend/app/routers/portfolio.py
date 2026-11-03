@@ -26,20 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/portfolio", tags=["持仓"])
 
 
-def _pack(data: Dict[str, Any], caliber: str, as_of: str = None) -> Dict[str, Any]:
-    """组装响应（持仓为本地数据，source 固定「本地持仓」）。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, "本地持仓", caliber, as_of, "本地快照", False)
-
-
 @router.get("")
 @router.get("/")
 def list_portfolio() -> Dict[str, Any]:
@@ -49,11 +35,14 @@ def list_portfolio() -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     data = store.load()
-    return _pack(
+    return pack_success(
         {"items": data.get("items") or [], "count": len(data.get("items") or []),
          "updated_at": data.get("updated_at")},
+        "本地持仓",
         "本地 JSON（data/portfolio.json），单位成本与份额按用户录入",
         data.get("updated_at"),
+        "本地快照",
+        False,
     )
 
 
@@ -73,7 +62,7 @@ def create_portfolio(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     except ValueError as exc:
         return api_error(ErrorCode.INVALID_PARAM, str(exc))
     cache.clear_cache()  # 持仓变更后清空分析缓存，避免展示旧市值
-    return _pack({"item": item}, "新增一条本地持仓")
+    return pack_success({"item": item}, "本地持仓", "新增一条本地持仓", None, "本地快照", False)
 
 
 @router.put("/{item_id}")
@@ -94,7 +83,7 @@ def update_portfolio(item_id: str = Path(...), payload: Dict[str, Any] = Body(..
     except ValueError as exc:
         return api_error(ErrorCode.INVALID_PARAM, str(exc))
     cache.clear_cache()
-    return _pack({"item": item}, "按 id 更新本地持仓")
+    return pack_success({"item": item}, "本地持仓", "按 id 更新本地持仓", None, "本地快照", False)
 
 
 @router.delete("/{item_id}")
@@ -112,7 +101,7 @@ def delete_portfolio(item_id: str = Path(...)) -> Dict[str, Any]:
     except KeyError:
         return api_error(ErrorCode.NOT_FOUND, "未找到该持仓记录，请刷新后重试。")
     cache.clear_cache()
-    return _pack({"deleted": item_id}, "删除本地持仓")
+    return pack_success({"deleted": item_id}, "本地持仓", "删除本地持仓", None, "本地快照", False)
 
 
 @router.get("/analysis")
@@ -132,10 +121,13 @@ def portfolio_analysis() -> Dict[str, Any]:
         return store.analyze()
 
     data = cache.get_or_load("portfolio:analysis", 30, loader)
-    return _pack(
+    return pack_success(
         data,
+        "本地持仓",
         data.get("caliber") or "市值=份额×最新价；人民币折算用新浪实时汇率",
         data.get("updated_at"),
+        "本地快照",
+        False,
     )
 
 
@@ -159,10 +151,13 @@ def portfolio_attribution() -> Dict[str, Any]:
         return store.attribution()
 
     data = cache.get_or_load("portfolio:attribution", 60, loader)
-    return _pack(
+    return pack_success(
         data,
+        "本地持仓",
         data.get("caliber") or "权重=市值/合计；贡献=权重×盈亏率；HHI=Σ权重²",
         data.get("as_of"),
+        "本地快照",
+        False,
     )
 
 
@@ -201,16 +196,26 @@ def portfolio_import_xlsx(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]
         preview = xlsx_import.parse(raw, filename)
         if not confirm:
             cache.clear_cache()  # 预览不打缓存，但清一次避免旧分析残留（无副作用）
-            return _pack(
+            return pack_success(
                 preview,
+                "本地持仓",
                 preview.get("caliber") or "只读导入：预览阶段不写库",
                 preview.get("as_of"),
+                "本地快照",
+                False,
             )
         result = xlsx_import.commit(preview["rows"], confirm=True)
         cache.clear_cache()  # 台账变更后清缓存，保证下一次 analysis 读新数据
         merged = dict(preview)
         merged["result"] = result
-        return _pack(merged, preview.get("caliber") or "已覆盖写入系统台账", result.get("updated_at"))
+        return pack_success(
+            merged,
+            "本地持仓",
+            preview.get("caliber") or "已覆盖写入系统台账",
+            result.get("updated_at"),
+            "本地快照",
+            False,
+        )
     except ValueError as exc:
         return api_error(ErrorCode.INVALID_PARAM, str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -235,10 +240,13 @@ def portfolio_risk(force: bool = False) -> Dict[str, Any]:
 
     try:
         data = risk.risk_report(force=force)
-        return _pack(
+        return pack_success(
             data,
+            "本地持仓",
             data.get("caliber") or "按当前持仓权重回溯，非真实逐日净值",
             data.get("as_of"),
+            "本地快照",
+            False,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("组合风险计算失败：%s", type(exc).__name__)

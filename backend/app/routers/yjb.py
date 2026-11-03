@@ -45,20 +45,6 @@ CONSENT_TEXT = """# 养基宝 / 盘中估值 合规告知书
 本人已知悉并同意上述说明后，方可启用。"""
 
 
-def _pack(data: Dict[str, Any], source: str, caliber: str) -> Dict[str, Any]:
-    """统一响应（连接器状态为配置/状态快照，非行情）。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, None, "连接器状态", False)
-
-
 def _cached_load(key: str, loader, source: str, caliber: str) -> Dict[str, Any]:
     """带 30 秒缓存的加载包装（养基宝接口不宜高频调用）。
 
@@ -97,7 +83,7 @@ def _cached_load(key: str, loader, source: str, caliber: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - 上游异常统一降级
         logger.info("养基宝数据读取失败：%s（%s）", key, type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, "养基宝数据暂不可用，请稍后重试。")
-    return _pack(data, source, caliber)
+    return pack_success(data, source, caliber, None, "连接器状态", False)
 
 
 def _require_explicit(payload: Dict[str, Any], field: str, hint: str):
@@ -129,7 +115,7 @@ def yjb_status() -> Dict[str, Any]:
     """
     data = yangjibao.status()
     data["consent_text"] = CONSENT_TEXT
-    return _pack(data, "本地配置", "token 仅以 DPAPI 加密存储，禁用明文/日志/前端回显")
+    return pack_success(data, "本地配置", "token 仅以 DPAPI 加密存储，禁用明文/日志/前端回显", None, "连接器状态", False)
 
 
 @router.post("/consent")
@@ -154,10 +140,10 @@ def yjb_consent(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     audit.record("yjb.consent", "ok",
                  {"accepted": bool(accepted), "consent": state.get("consent"),
                   "enabled": state.get("enabled")})
-    return _pack(
+    return pack_success(
         {"consent": state.get("consent"), "enabled": state.get("enabled")},
         "本地配置",
-        "确认记录仅存本机；拒绝将同时关闭增强通道",
+        "确认记录仅存本机；拒绝将同时关闭增强通道", None, "连接器状态", False,
     )
 
 
@@ -185,10 +171,10 @@ def yjb_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         return api_error(ErrorCode.INVALID_PARAM, str(exc), data={"enabled": False})
     logger.info("养基宝增强通道开关：enabled=%s（操作经显式请求体）", bool(enabled))
     audit.record("yjb.toggle", "ok", {"enabled": bool(state.get("enabled"))})
-    return _pack(
+    return pack_success(
         {"enabled": state.get("enabled")},
         "本地配置",
-        "关闭后基金估值回退 T+1 净值 + 重仓股涨跌参考，不再请求养基宝",
+        "关闭后基金估值回退 T+1 净值 + 重仓股涨跌参考，不再请求养基宝", None, "连接器状态", False,
     )
 
 
@@ -231,14 +217,14 @@ def yjb_secret(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         cache.clear_cache()
         logger.info("养基宝签名盐已清除（confirm=true 显式确认；盐值不记录）")
         audit.record("yjb.secret.clear", "ok", {"cleared": not written})
-        return _pack(
+        return pack_success(
             {
                 "secret_configured": yangjibao.secret_configured(),
                 "secret_source": yangjibao.secret_source(),
                 "cleared": not written,
             },
             "本地配置",
-            "签名盐以 DPAPI 加密落盘（YJB2），不回显、不写日志；环境变量优先于本地配置",
+            "签名盐以 DPAPI 加密落盘（YJB2），不回显、不写日志；环境变量优先于本地配置", None, "连接器状态", False,
         )
     try:
         written = yangjibao.set_secret(new_secret, old_secret)
@@ -253,14 +239,14 @@ def yjb_secret(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     # 只记「写了哪一个」不记值本身：审计文件可被他人读取，绝不能成为凭据副本
     audit.record("yjb.secret.write", "ok",
                  {"wrote_new": bool(new_secret), "wrote_old": bool(old_secret)})
-    return _pack(
+    return pack_success(
         {
             "secret_configured": yangjibao.secret_configured(),
             "secret_source": yangjibao.secret_source(),
             "cleared": not written,
         },
         "本地配置",
-        "签名盐以 DPAPI 加密落盘（YJB2），不回显、不写日志；环境变量优先于本地配置",
+        "签名盐以 DPAPI 加密落盘（YJB2），不回显、不写日志；环境变量优先于本地配置", None, "连接器状态", False,
     )
 
 
@@ -280,7 +266,7 @@ def yjb_qrcode() -> Dict[str, Any]:
             "养基宝二维码通道暂不可用（非官方接口易变）。可先使用拟合估算或 T+1 净值。",
             data={"available": False, "reason": str(exc)[:120]},
         )
-    return _pack(session, "养基宝", "扫码会话仅在内存，成功绑定后 token 才加密落盘")
+    return pack_success(session, "养基宝", "扫码会话仅在内存，成功绑定后 token 才加密落盘", None, "连接器状态", False)
 
 
 @router.get("/poll")
@@ -294,7 +280,7 @@ def yjb_poll(session_id: str = Query(..., description="二维码会话 id")) -> 
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     data = yangjibao.poll_session(session_id)
-    return _pack(data, "养基宝", "状态机：等待扫码/已扫码待确认/成功/失效/超时")
+    return pack_success(data, "养基宝", "状态机：等待扫码/已扫码待确认/成功/失效/超时", None, "连接器状态", False)
 
 
 @router.post("/bind")
@@ -318,7 +304,7 @@ def yjb_bind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         logger.info("养基宝绑定失败：%s", type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, "绑定失败，请刷新二维码后重试。",
                          data={"bound": False})
-    return _pack(result, "养基宝", "token 已 DPAPI 加密落盘，前端与日志均不可见")
+    return pack_success(result, "养基宝", "token 已 DPAPI 加密落盘，前端与日志均不可见", None, "连接器状态", False)
 
 
 @router.post("/unbind")
@@ -348,7 +334,7 @@ def yjb_unbind(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     cache.clear_cache()
     logger.info("养基宝已解绑（confirm=true 显式确认；token 内容不记录）")
     audit.record("yjb.unbind", "ok", {"was_bound": was_bound, "bound": False})
-    return _pack({"bound": False}, "本地配置", "已清除本地 token；不影响基金 T+1 净值功能")
+    return pack_success({"bound": False}, "本地配置", "已清除本地 token；不影响基金 T+1 净值功能", None, "连接器状态", False)
 
 
 @router.get("/collect")
@@ -420,8 +406,8 @@ def yjb_realtime(code: str = Query(..., description="6 位基金代码")) -> Dic
     if estimate and disclaimer not in caliber:
         # 数据源可能已自带该前缀（如养基宝），避免重复拼接
         caliber = f"{disclaimer}｜{caliber}"
-    return _pack(
+    return pack_success(
         data,
         data.get("source") or "",
-        caliber,
+        caliber, None, "连接器状态", False,
     )

@@ -24,25 +24,13 @@ from fastapi import APIRouter, Body, Query
 from backend.app import config
 from backend.app.datasource import utils
 from backend.app.core import cache, user_prefs
-from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error, ok, bad_request
 from backend.app.datasource import fund as fund_provider
 from backend.app.datasource import fund_combo
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/fund", tags=["基金"])
-
-
-def _bad(message: str) -> Dict[str, Any]:
-    """参数错误响应。
-
-    Args:
-        message: 中文提示文案。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
 
 
 def _not_found(message: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -56,23 +44,6 @@ def _not_found(message: str, data: Optional[Dict[str, Any]] = None) -> Dict[str,
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     return api_error(ErrorCode.NOT_FOUND, message, data=data or {})
-
-
-def _pack(data: Dict[str, Any], source: str, caliber: str, as_of: Optional[str],
-          market_status: str = "T+1 公布净值") -> Dict[str, Any]:
-    """组装响应，附带数据源/口径/时间。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, as_of, market_status, False)  # 场外基金无盘中估值通道
 
 
 def _run(key: str, ttl: int, loader):
@@ -109,15 +80,15 @@ def fund_search(
     """
     keyword = (q or "").strip()
     if not keyword:
-        return _bad("q 参数不可为空")
+        return bad_request("q 参数不可为空")
     result = _run(f"fund:search:{keyword}:{limit}", config.TTL["search"],
                   lambda: fund_provider.get_search(keyword, limit))
     if result["error"]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "基金名录暂不可用，请稍后点击刷新重试。",
                          data={"items": []})
     items = result["data"]
-    return _pack({"items": items, "count": len(items), "keyword": keyword},
-                 "天天基金", "天天基金全量名录本地过滤（代码/简称/拼音）", None, "名录快照")
+    return pack_success({"items": items, "count": len(items), "keyword": keyword},
+                        "天天基金", "天天基金全量名录本地过滤（代码/简称/拼音）", None, "名录快照", False)
 
 
 @router.get("/estimation")
@@ -146,7 +117,7 @@ def fund_estimation_toggle(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any
         dict: 统一信封；data 含 enabled。
     """
     if "enabled" not in payload:
-        return _bad("缺少 enabled 参数。")
+        return bad_request("缺少 enabled 参数。")
     try:
         prefs = user_prefs.set_flag("fund_estimation", bool(payload.get("enabled")))
     except NonRetryableError as exc:
@@ -171,7 +142,7 @@ def fund_realtime(code: str = Query(..., description="6 位基金代码")) -> Di
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:realtime:{symbol}", config.TTL["fund_nav"],
                   lambda: fund_provider.get_realtime(symbol))
     if result["error"]:
@@ -188,8 +159,8 @@ def fund_realtime(code: str = Query(..., description="6 位基金代码")) -> Di
     if data.get("is_estimate") is not True and not (nav_value and nav_value > 0):
         return _not_found("未找到该基金代码的净值数据，请检查代码后重试。",
                           data={"code": symbol, "items": []})
-    return _pack(data, data.get("source") or "蛋卷", data.get("caliber") or "T+1 公布净值",
-                 data.get("nav_date"))
+    return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "T+1 公布净值",
+                        data.get("nav_date"), "T+1 公布净值", False)
 
 
 @router.get("/nav")
@@ -210,7 +181,7 @@ def fund_nav(
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:nav:{symbol}:{page}:{size}", config.TTL["fund_nav"],
                   lambda: fund_provider.get_nav(symbol, page, size))
     if result["error"]:
@@ -222,8 +193,8 @@ def fund_nav(
                          data={"items": [], "code": symbol})
     data = result["data"]
     first = (data.get("items") or [{}])[0]
-    return _pack(data, data.get("source") or "蛋卷", data.get("caliber") or "",
-                 first.get("date"))
+    return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "",
+                        first.get("date"), "T+1 公布净值", False)
 
 
 @router.get("/holding")
@@ -238,15 +209,15 @@ def fund_holding(code: str = Query(..., description="6 位基金代码")) -> Dic
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:holding:{symbol}", config.TTL["fund_holding"],
                   lambda: fund_provider.get_holding(symbol))
     if result["error"]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "重仓数据暂不可用，请稍后点击刷新重试。",
                          data={"items": [], "code": symbol})
     data = result["data"]
-    return _pack(data, data.get("source") or "东财季报", data.get("caliber") or "",
-                 data.get("quarter"), "定期报告")
+    return pack_success(data, data.get("source") or "东财季报", data.get("caliber") or "",
+                        data.get("quarter"), "定期报告", False)
 
 
 @router.get("/info")
@@ -261,15 +232,15 @@ def fund_info(code: str = Query(..., description="6 位基金代码")) -> Dict[s
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:info:{symbol}", config.TTL["fund_holding"],
                   lambda: fund_provider.get_info(symbol))
     if result["error"]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "基金档案暂不可用，请稍后点击刷新重试。",
                          data={"code": symbol})
     data = result["data"]
-    return _pack(data, data.get("source") or "蛋卷", data.get("caliber") or "",
-                 data.get("end_date"), "档案快照")
+    return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "",
+                        data.get("end_date"), "档案快照", False)
 
 
 @router.get("/performance")
@@ -284,15 +255,15 @@ def fund_performance(code: str = Query(..., description="6 位基金代码")) ->
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:performance:{symbol}", config.TTL["fund_performance"],
                   lambda: fund_provider.get_performance(symbol))
     if result["error"]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "阶段业绩暂不可用，请稍后点击刷新重试。",
                          data={"periods": [], "code": symbol})
     data = result["data"]
-    return _pack(data, data.get("source") or "蛋卷", data.get("caliber") or "",
-                 data.get("end_date"))
+    return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "",
+                        data.get("end_date"), "T+1 公布净值", False)
 
 
 @router.get("/drawdown")
@@ -313,15 +284,15 @@ def fund_drawdown(
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:drawdown:{symbol}:{start}:{end}", config.TTL["fund_performance"],
                   lambda: fund_provider.get_drawdown(symbol, start, end))
     if result["error"]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "回撤计算暂不可用，请稍后点击刷新重试。",
                          data={"series": [], "code": symbol})
     data = result["data"]
-    return _pack(data, data.get("source") or "自算", data.get("caliber") or "",
-                 data.get("end"))
+    return pack_success(data, data.get("source") or "自算", data.get("caliber") or "",
+                        data.get("end"), "T+1 公布净值", False)
 
 
 @router.get("/dividend")
@@ -336,7 +307,7 @@ def fund_dividend(code: str = Query(..., description="6 位基金代码")) -> Di
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     result = _run(f"fund:dividend:{symbol}", config.TTL["fund_performance"],
                   lambda: fund_provider.get_dividend(symbol))
     if result["error"]:
@@ -344,8 +315,8 @@ def fund_dividend(code: str = Query(..., description="6 位基金代码")) -> Di
                          data={"items": [], "code": symbol})
     data = result["data"]
     first = (data.get("items") or [{}])[0]
-    return _pack(data, data.get("source") or "东财", data.get("caliber") or "",
-                 first.get("record_date"), "历史记录")
+    return pack_success(data, data.get("source") or "东财", data.get("caliber") or "",
+                        first.get("record_date"), "历史记录", False)
 
 
 @router.get("/position")
@@ -360,7 +331,7 @@ def fund_position(code: str = Query(..., description="6 位基金代码")) -> Di
     """
     symbol = (code or "").strip()
     if not symbol:
-        return _bad("code 参数不可为空")
+        return bad_request("code 参数不可为空")
     try:
         payload = fund_provider.get_position(symbol)
     except Exception as exc:  # noqa: BLE001 - 上游失败转中文错误态
@@ -370,7 +341,7 @@ def fund_position(code: str = Query(..., description="6 位基金代码")) -> Di
             "基金持仓分布暂不可用，请稍后重试。",
             data={"code": symbol, "items": []},
         )
-    return _pack(
+    return pack_success(
         {
             "code": symbol,
             "name": payload.get("name"),
@@ -381,7 +352,7 @@ def fund_position(code: str = Query(..., description="6 位基金代码")) -> Di
         payload.get("source") or "东财 F10",
         payload.get("caliber") or "",
         payload.get("report_date"),
-        "季报口径",
+        "季报口径", False,
     )
 
 

@@ -22,7 +22,7 @@ from fastapi import APIRouter, Query
 
 from backend.app import config
 from backend.app.core import cache
-from backend.app.core.errors import pack_success, ErrorCode, api_error, ok
+from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import overseas as overseas_provider
 from backend.app.datasource import fcf_health
@@ -36,59 +36,6 @@ router = APIRouter(prefix="/api/stock", tags=["个股"])
 
 # 行情/个股域白名单：a=A股、hk=港股、us=美股
 _ALLOWED_MARKETS = utils.MARKET_WHITELIST_QUOTE
-
-
-def _bad_request(message: str) -> Dict[str, Any]:
-    """参数错误响应。
-
-    Args:
-        message: 中文提示文案。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
-
-
-def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """降级链失败 → 统一错误响应。
-
-    Args:
-        result: 上游返回结果。
-        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    try:
-        code = ErrorCode(str(result.get("error_code")))
-    except ValueError:
-        code = ErrorCode.UPSTREAM_ERROR
-    return api_error(code, result.get("error"), data=empty_value)
-
-
-def _pack(
-    data: Dict[str, Any],
-    source: str,
-    caliber: str,
-    as_of: Optional[str],
-    market_status: str,
-    is_realtime: bool,
-) -> Dict[str, Any]:
-    """组装成功响应，附带数据源/口径/时间/市场状态。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
-        is_realtime: 是否为盘中实时数据。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
 
 
 def _normalize(symbol: str, market: str) -> Optional[tuple]:
@@ -141,10 +88,10 @@ def stock_profile(
     """
     selected = utils.normalize_market(market)
     if selected is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -164,10 +111,10 @@ def stock_profile(
 
     result = cache.get_or_load(f"stock:profile:{selected}:{code}", config.TTL["profile"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code})
+        return failure_pack(result, {"symbol": code})
     data = result["data"] or {}
     as_of, status, is_realtime = _quote_status(None)
-    return _pack(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
 
 
 @router.get("/holders")
@@ -182,7 +129,7 @@ def stock_holders(symbol: str = Query(..., description="6 位 A股代码")) -> D
     """
     normalized = _normalize(symbol, "a")
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -200,10 +147,10 @@ def stock_holders(symbol: str = Query(..., description="6 位 A股代码")) -> D
 
     result = cache.get_or_load(f"stock:holders:{code}", config.TTL["profile"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "top10": [], "free_top10": []})
+        return failure_pack(result, {"symbol": code, "top10": [], "free_top10": []})
     data = result["data"] or {}
     as_of = data.get("top10_period") or data.get("free_top10_period")
-    return _pack(data, result.get("source") or "", result.get("caliber") or "",
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                  f"{as_of} 报告期" if as_of else None, "报告期披露", False)
 
 
@@ -229,10 +176,10 @@ def stock_realtime_panel(
     """
     selected = utils.normalize_market(market)
     if selected is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -252,10 +199,10 @@ def stock_realtime_panel(
 
     result = cache.get_or_load(f"stock:panel:{selected}:{code}", config.TTL["realtime_quote"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "market": selected, "blocks": {}})
+        return failure_pack(result, {"symbol": code, "market": selected, "blocks": {}})
     data = result["data"] or {}
     as_of, status, is_realtime = _quote_status(data.get("quote"))
-    return _pack(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
 
 
 # =============================================================
@@ -292,7 +239,7 @@ def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代�
     """
     normalized = _normalize(symbol, "a")
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -310,10 +257,10 @@ def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代�
 
     result = cache.get_or_load(f"stock:fin-summary:{code}", config.TTL["financial"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "periods": [], "metrics": []})
+        return failure_pack(result, {"symbol": code, "periods": [], "metrics": []})
     data = result["data"] or {}
     periods = data.get("periods") or []
-    return _pack(data, result.get("source") or "", result.get("caliber") or "",
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                  f"{periods[0]} 报告期" if periods else None, "定期报告", False)
 
 
@@ -336,10 +283,10 @@ def stock_estimates(
     """
     selected = utils.normalize_market(market)
     if selected is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     normalized = _normalize(symbol, selected)
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -361,11 +308,11 @@ def stock_estimates(
 
     result = cache.get_or_load(f"stock:estimates:{selected}:{code}", config.TTL["estimates"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "market": selected,
+        return failure_pack(result, {"symbol": code, "market": selected,
                                  "eps": [], "profit": [], "institutions": [], "detail": [], "years": []})
     data = result["data"] or {}
     years = data.get("years") or []
-    return _pack(
+    return pack_success(
         {"symbol": code, "market": selected, **data},
         result.get("source") or "",
         result.get("caliber") or data.get("caliber_note") or "",
@@ -391,7 +338,7 @@ def stock_financial_trend(
     """
     normalized = _normalize(symbol, "a")
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -409,10 +356,10 @@ def stock_financial_trend(
 
     result = cache.get_or_load(f"stock:fin-trend:{code}:{years}", config.TTL["financial"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "periods": [], "series": []})
+        return failure_pack(result, {"symbol": code, "periods": [], "series": []})
     data = result["data"] or {}
     periods = data.get("periods") or []
-    return _pack(data, result.get("source") or "", result.get("caliber") or "",
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                  f"{periods[-1]} 年报" if periods else None, "年报披露", False)
 
 
@@ -436,10 +383,10 @@ def stock_financial_indicator(
     if market_text == "cn":
         market_text = "a"
     if market_text not in ("a", "hk", "us"):
-        return _bad_request("market 仅支持 a / hk / us")
+        return bad_request("market 仅支持 a / hk / us")
     normalized = _normalize(symbol, market_text)
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请检查代码或市场后重试")
+        return bad_request("证券代码格式不正确，请检查代码或市场后重试")
     code = normalized[0]
     if market_text in ("hk", "us"):
         def loader_overseas() -> Dict[str, Any]:
@@ -457,9 +404,9 @@ def stock_financial_indicator(
         result = cache.get_or_load(
             f"stock:fin-indicator:{market_text}:{code}:{limit}", config.TTL["financial"], loader_overseas)
         if result.get("error"):
-            return _failure(result, {"symbol": code, "market": market_text, "periods": []})
+            return failure_pack(result, {"symbol": code, "market": market_text, "periods": []})
         data = result["data"] or {}
-        return _pack(data, result.get("source") or "", result.get("caliber") or "",
+        return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                      f"{(data.get('periods') or [{}])[-1].get('date', '')} 报告期".strip()
                      or None, "定期报告", False)
 
@@ -478,10 +425,10 @@ def stock_financial_indicator(
 
     result = cache.get_or_load(f"stock:fin-indicator:{code}:{limit}", config.TTL["financial"], loader)
     if result.get("error"):
-        return _failure(result, {"symbol": code, "periods": [], "metrics": []})
+        return failure_pack(result, {"symbol": code, "periods": [], "metrics": []})
     data = result["data"] or {}
     periods = data.get("periods") or []
-    return _pack(data, result.get("source") or "", result.get("caliber") or "",
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                  f"{periods[-1]} 报告期" if periods else None, "定期报告", False)
 
 
@@ -503,9 +450,9 @@ def stock_financial_report(
     """
     normalized = _normalize(symbol, "a")
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     if statement not in ("资产负债表", "利润表", "现金流量表"):
-        return _bad_request("statement 仅支持资产负债表/利润表/现金流量表")
+        return bad_request("statement 仅支持资产负债表/利润表/现金流量表")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -525,10 +472,10 @@ def stock_financial_report(
         f"stock:fin-report:{code}:{statement}:{limit}", config.TTL["financial"], loader
     )
     if result.get("error"):
-        return _failure(result, {"symbol": code, "statement": statement, "periods": [], "metrics": []})
+        return failure_pack(result, {"symbol": code, "statement": statement, "periods": [], "metrics": []})
     data = result["data"] or {}
     periods = data.get("periods") or []
-    return _pack(data, result.get("source") or "", result.get("caliber") or "",
+    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
                  f"{periods[0]} 报告期" if periods else None, "定期报告", False)
 
 
@@ -556,7 +503,7 @@ def stock_fcf_health(
     """
     normalized = _normalize(symbol, "a")
     if normalized is None:
-        return _bad_request("证券代码格式不正确，请输入 6 位 A股代码")
+        return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
 
     def loader() -> Dict[str, Any]:
@@ -597,14 +544,14 @@ def stock_peer_compare(
     """
     codes = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
     if len(codes) < 2:
-        return _bad_request("请至少提供 2 个代码（symbols 用逗号分隔）")
+        return bad_request("请至少提供 2 个代码（symbols 用逗号分隔）")
     if len(codes) > 5:
-        return _bad_request("最多对比 5 家公司")
+        return bad_request("最多对比 5 家公司")
     normalized = []
     for code in codes:
         item = _normalize(code, "a")
         if item is None:
-            return _bad_request(f"证券代码格式不正确：{code}")
+            return bad_request(f"证券代码格式不正确：{code}")
         normalized.append(item[0])
 
     def loader() -> Dict[str, Any]:

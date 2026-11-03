@@ -23,7 +23,7 @@ from fastapi import APIRouter, Query
 from backend.app import config
 from backend.app.datasource import utils
 from backend.app.core import cache
-from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error
+from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error, bad_request, failure_pack
 from backend.app.core.resilient import circuit_open, trip_circuit, with_fallback
 from backend.app.datasource import ashare, overseas, tencent
 
@@ -33,35 +33,6 @@ router = APIRouter(prefix="/api/market", tags=["行情"])
 
 # 行情/个股域白名单：a=A股、hk=港股、us=美股
 _ALLOWED_MARKETS = utils.MARKET_WHITELIST_QUOTE
-
-
-def _bad_request(message: str) -> Dict[str, Any]:
-    """返回参数错误响应。
-
-    Args:
-        message: 中文提示文案。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return api_error(ErrorCode.INVALID_PARAM, message)
-
-
-def _failure(result: Dict[str, Any], empty_value: Any) -> Dict[str, Any]:
-    """把 with_fallback 的失败结果转换为统一错误响应。
-
-    Args:
-        result: 上游返回结果。
-        empty_value: 空数据时返回的同构空值（保持字段结构一致）。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    try:
-        code = ErrorCode(str(result.get("error_code")))
-    except ValueError:
-        code = ErrorCode.UPSTREAM_ERROR
-    return api_error(code, result.get("error"), data=empty_value)
 
 
 def _symbol_missing(code: str, market: str) -> bool:
@@ -96,30 +67,6 @@ def _cached(key: str, ttl: int, loader) -> Dict[str, Any]:
     return cache.get_or_load(key, ttl, loader)
 
 
-def _pack(
-    data: Dict[str, Any],
-    source: str,
-    caliber: str,
-    as_of: Optional[str],
-    market_status: str,
-    is_realtime: bool,
-) -> Dict[str, Any]:
-    """组装成功响应，统一附带数据源/口径/时间/市场状态。
-
-    Args:
-        data: 待包装或清洗的数据主体。
-        source: 数据源标识（用于降级链溯源与徽章展示）。
-        caliber: 口径说明（展示在口径徽章）。
-        as_of: 数据时间（北京时间，格式 YYYY-MM-DD HH:MM:SS）。
-        market_status: 市场状态文案（盘中/盘前/盘后/休市/收盘快照）。
-        is_realtime: 是否为盘中实时数据。
-
-    Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
-    """
-    return pack_success(data, source, caliber, as_of, market_status, is_realtime)
-
-
 def _kline_status(items: List[Dict[str, Any]]) -> tuple[Optional[str], str, bool]:
     """K 线以最后一根日期作为数据时间，始终标记为日线收盘口径。
 
@@ -148,7 +95,7 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
     """
     selected = utils.normalize_market(market, allow_all=True, default="all")
     if selected is None:
-        return _bad_request(utils.market_error_message(allow_all=True))
+        return bad_request(utils.market_error_message(allow_all=True))
     cache_key = f"market:index:{selected}"
 
     def loader() -> Dict[str, Any]:
@@ -172,11 +119,11 @@ def market_index(market: str = Query("all", description="all/a/hk/us")) -> Dict[
 
     result = _cached(cache_key, config.TTL["index_quote"], loader)
     if result.get("error"):
-        return _failure(result, {"items": []})
+        return failure_pack(result, {"items": []})
     items = result["data"]
     # 多市场混合时取最晚时间作为 as_of；状态统一标“多市场快照”，不冒充实时
     as_of = max((item.get("quote_time") or "" for item in items), default="")
-    return _pack(
+    return pack_success(
         {"items": items},
         result["source"] or "",
         result["caliber"] or "",
@@ -204,7 +151,7 @@ def market_index_kline(
         normalized_code, _ = utils.index_code_to_tencent(code)
         utils.period_to_tencent(period)
     except ValueError as exc:
-        return _bad_request(str(exc))
+        return bad_request(str(exc))
     cache_key = f"market:index-kline:{normalized_code}:{period}"
 
     def loader() -> Dict[str, Any]:
@@ -227,10 +174,10 @@ def market_index_kline(
 
     result = _cached(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "code": normalized_code, "period": period})
+        return failure_pack(result, {"items": [], "code": normalized_code, "period": period})
     items = result["data"]
     as_of, status, realtime = _kline_status(items)
-    return _pack(
+    return pack_success(
         {"items": items, "code": normalized_code, "period": period},
         result["source"] or "",
         result["caliber"] or "",
@@ -259,11 +206,11 @@ def market_quote(
     """
     normalized_market = utils.normalize_market(market)
     if normalized_market is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
-        return _bad_request(str(exc))
+        return bad_request(str(exc))
     # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
     if _symbol_missing(code, normalized_market):
         return api_error(
@@ -323,9 +270,9 @@ def market_quote(
 
     result = _cached(cache_key, config.TTL["realtime_quote"], loader)
     if result.get("error"):
-        return _failure(result, {"quote": {}})
+        return failure_pack(result, {"quote": {}})
     quote = result["data"]
-    return _pack(
+    return pack_success(
         {"quote": quote},
         result["source"] or quote.get("source") or "",
         result["caliber"] or quote.get("caliber") or "",
@@ -358,13 +305,13 @@ def market_kline(
     """
     normalized_market = utils.normalize_market(market)
     if normalized_market is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
         utils.period_to_tencent(period)
         adjust_value = utils.normalize_adjust(adjust)
     except ValueError as exc:
-        return _bad_request(str(exc))
+        return bad_request(str(exc))
     # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
     if _symbol_missing(code, normalized_market):
         return api_error(
@@ -402,10 +349,10 @@ def market_kline(
 
     result = _cached(cache_key, config.TTL["kline"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "symbol": code, "market": normalized_market})
+        return failure_pack(result, {"items": [], "symbol": code, "market": normalized_market})
     items = result["data"]
     as_of, status, realtime = _kline_status(items)
-    return _pack(
+    return pack_success(
         {
             "items": items,
             "symbol": code,
@@ -439,14 +386,14 @@ def market_minute(
     """
     normalized_market = utils.normalize_market(market)
     if normalized_market is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     period_value = str(period or "1min").lower().replace("min", "").replace("m", "")
     if period_value not in ("1", "5", "15", "30", "60"):
-        return _bad_request("period 仅支持 1/5/15/30/60 分钟")
+        return bad_request("period 仅支持 1/5/15/30/60 分钟")
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
-        return _bad_request(str(exc))
+        return bad_request(str(exc))
     # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
     if _symbol_missing(code, normalized_market):
         return api_error(
@@ -487,12 +434,12 @@ def market_minute(
 
     result = _cached(cache_key, config.TTL["minute"], loader)
     if result.get("error"):
-        return _failure(result, {"items": [], "symbol": code, "market": normalized_market})
+        return failure_pack(result, {"items": [], "symbol": code, "market": normalized_market})
     items = result["data"]
     # 美股分时：主源已是新浪（1/5/15/30 分钟，约千点）。若只剩腾讯单点，说明新浪通道
     # 当次失败，属瞬时异常 → 返回空 + 说明，让前端走「重试」而不是把单点画成分时图。
     if normalized_market == "us" and len(items) < 5:
-        return _pack(
+        return pack_success(
             {"items": [], "symbol": code, "market": "us", "available": False},
             result["source"] or "腾讯",
             "美股分时本次仅取到单点数据（新浪分时通道本次异常，腾讯仅返回最新一笔），请稍后重试",
@@ -506,7 +453,7 @@ def market_minute(
     as_of = f"{last_date} {last_time}:00" if last_date else None
     parsed = utils.parse_datetime(as_of) if as_of else None
     status, realtime = utils.classify_market_status(parsed, normalized_market)
-    return _pack(
+    return pack_success(
         {
             "items": items,
             "symbol": code,
@@ -537,7 +484,7 @@ def market_search(
     """
     keyword = (q or "").strip()
     if not keyword:
-        return _bad_request("搜索关键词不能为空")
+        return bad_request("搜索关键词不能为空")
     cache_key = f"market:search:{keyword}:{limit}"
 
     def loader() -> Dict[str, Any]:
@@ -553,8 +500,8 @@ def market_search(
 
     result = _cached(cache_key, config.TTL["search"], loader)
     if result.get("error"):
-        return _failure(result, {"items": []})
-    return _pack(
+        return failure_pack(result, {"items": []})
+    return pack_success(
         {"items": result["data"], "query": keyword},
         result["source"] or "",
         result["caliber"] or "",
@@ -583,11 +530,11 @@ def market_profile(
     """
     normalized_market = utils.normalize_market(market)
     if normalized_market is None:
-        return _bad_request(utils.market_error_message())
+        return bad_request(utils.market_error_message())
     try:
         code, normalized_market, _ = utils.normalize_symbol(symbol, normalized_market)
     except ValueError as exc:
-        return _bad_request(str(exc))
+        return bad_request(str(exc))
     # 存在性闸门（P1-03）：确认查无此物立即 NOT_FOUND，不进降级链
     if _symbol_missing(code, normalized_market):
         return api_error(
@@ -638,10 +585,10 @@ def market_profile(
 
     result = _cached(cache_key, config.TTL["profile"], loader)
     if result.get("error"):
-        return _failure(result, {"profile": {}})
+        return failure_pack(result, {"profile": {}})
     profile = result["data"]
     # 概况可能内部合并腾讯快照并在失败时改写口径，优先取 profile 内的实际口径
-    return _pack(
+    return pack_success(
         {"profile": profile},
         profile.get("source") or result["source"] or "",
         profile.get("caliber") or result["caliber"] or "",
