@@ -20,7 +20,7 @@ import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.app.datasource import portfolio, tencent, utils
+from backend.app.datasource import ashare, portfolio, tencent, utils
 from backend.app.core import cache
 
 logger = logging.getLogger(__name__)
@@ -231,8 +231,11 @@ def risk_report(force: bool = False) -> Dict[str, Any]:
                 missing.append(f"{row['symbol']}（场外基金无日线，未纳入风险序列）")
                 continue
             try:
-                rows = tencent.get_kline(row["symbol"], market=row["market"], period="daily",
-                                         adjust="qfq", limit=MAX_POINTS)
+                if row["market"] == "a":
+                    rows = ashare.get_kline(row["symbol"], "daily", "qfq", MAX_POINTS)
+                else:
+                    rows = tencent.get_kline(row["symbol"], market=row["market"], period="daily",
+                                             adjust="qfq", limit=MAX_POINTS)
                 if len(rows) >= MIN_SAMPLE:
                     series[row["symbol"]] = rows
                 else:

@@ -32,7 +32,7 @@ from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
-from backend.app.datasource import tencent, utils
+from backend.app.datasource import ashare, tencent, utils
 
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
@@ -904,7 +904,11 @@ def get_realtime_panel(symbol: str, market: str = "a") -> Dict[str, Any]:
         logger.info("FinScope 报价失败：%s（%s）", symbol, type(exc).__name__)
 
     try:
-        panel["kline"] = tencent.get_kline(symbol, market, "daily", "qfq", 160)
+        # A股走三源降级（腾讯 fqkline 2026-11-04 起返回 501 反爬，不能单源直连）
+        if market == "a":
+            panel["kline"] = ashare.get_kline(symbol, "daily", "qfq", 160)
+        else:
+            panel["kline"] = tencent.get_kline(symbol, market, "daily", "qfq", 160)
         blocks["kline"] = "ok"
     except Exception as exc:  # noqa: BLE001
         panel["kline"] = []

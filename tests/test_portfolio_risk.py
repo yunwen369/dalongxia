@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.datasource import portfolio, portfolio_risk, tencent
+from backend.app.datasource import ashare, portfolio, portfolio_risk, tencent
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +91,7 @@ def test_sample_too_short_not_reliable(ledger, monkeypatch):
     """日线不足 30 条 → reliable=false（不给结论标签）。"""
     monkeypatch.setattr(tencent, "get_quote", lambda symbol, market="a": {"price": 100.0})
     monkeypatch.setattr(tencent, "get_kline", lambda *a, **k: _series(10, 100.0, 0.001))
+    monkeypatch.setattr(ashare, "get_kline", lambda *a, **k: _series(10, 100.0, 0.001))
     monkeypatch.setattr(tencent, "get_index_kline", lambda *a, **k: _series(10, 4000.0, 0.001))
     data = portfolio_risk.risk_report(force=True)
     # 两只都只有 10 条 → 全部进 missing，可用序列 <2 → available=false
@@ -103,6 +104,7 @@ def test_risk_metrics_with_synthetic_series(ledger, monkeypatch):
     monkeypatch.setattr(tencent, "get_quote", lambda symbol, market="a": {"price": 100.0})
     # 两只股票同比例波动（与基准同步）
     monkeypatch.setattr(tencent, "get_kline", lambda *a, **k: _series(120, 100.0, 0.002, wave=0.01))
+    monkeypatch.setattr(ashare, "get_kline", lambda *a, **k: _series(120, 100.0, 0.002, wave=0.01))
     monkeypatch.setattr(tencent, "get_index_kline", lambda *a, **k: _series(120, 4000.0, 0.002, wave=0.01))
     data = portfolio_risk.risk_report(force=True)
     assert data["available"] is True

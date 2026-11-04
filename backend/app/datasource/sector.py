@@ -37,7 +37,7 @@ from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
-from backend.app.datasource import sina_flow, tencent, tencent_board, ths_http, utils
+from backend.app.datasource import ashare, sina_flow, tencent, tencent_board, ths_http, utils
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
 netfix.apply_netfix()
@@ -2028,8 +2028,6 @@ def _constituent_correlation(
     Returns:
         Optional[Dict[str, Any]]: {corr, samples, caliber}；样本不足时 None。
     """
-    from backend.app.datasource import tencent
-
     sample = constituents[:max_samples]
     series: Dict[str, List[float]] = {}
     for item in sample:
@@ -2037,7 +2035,7 @@ def _constituent_correlation(
         if not code:
             continue
         try:
-            klines = tencent.get_kline(code, period="daily", limit=days + 5)
+            klines = ashare.get_kline(code, "daily", "qfq", days + 5)
         except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
             logger.info("成分股 K 线失败 %s：%s", code, type(exc).__name__)
             continue

@@ -201,6 +201,43 @@ def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> L
     return items[-320:]
 
 
+def get_kline(symbol: str, period: str = "daily", adjust: str = "qfq",
+              limit: int = 320) -> List[Dict[str, Any]]:
+    """A股 K 线统一入口：东财 → 新浪 → 腾讯 三源降级。
+
+    背景（2026-11-04 实测）：腾讯 A 股 ``fqkline`` 返回 HTTP 501 反爬页，
+    直连调用会让个股面板 K 线块与组合风险同时失效，故收口为带降级链的单一入口。
+
+    Args:
+        symbol: 6 位 A股代码。
+        period: daily/weekly/monthly（新浪仅日线，周/月线会自动落到腾讯）。
+        adjust: qfq/hfq/不复权。
+        limit: 返回条数上限（按日期升序取最近 N 条）。
+
+    Returns:
+        List[Dict[str, Any]]: 日期/开/收/高/低/量/额/涨跌幅，按日期升序。
+
+    Raises:
+        RuntimeError: 三个源均失败，异常信息内附各源失败原因。
+    """
+    errors: List[str] = []
+    for name, caller in (
+        ("东财", lambda: get_kline_em(symbol, period, adjust)),
+        ("新浪", lambda: get_kline_sina(symbol, period, adjust)),
+        ("腾讯", lambda: tencent.get_kline(symbol, "a", period, adjust, max(int(limit), 320))),
+    ):
+        try:
+            rows = caller()
+            if rows:
+                logger.info("A股K线命中：%s %s（%s 源，%d 条）", symbol, period, name, len(rows))
+                return rows[-max(1, int(limit)):]
+            errors.append(f"{name}:空数据")
+        except Exception as exc:  # noqa: BLE001 - 逐源降级，最终统一抛错
+            errors.append(f"{name}:{type(exc).__name__}")
+            logger.info("A股K线 %s 源不可用，切换下一源：%s", name, type(exc).__name__)
+    raise RuntimeError("A股K线三源均失败（" + "；".join(errors) + "）")
+
+
 def get_quote_sina(symbol: str) -> Dict[str, Any]:
     """新浪单只 A股报价（腾讯主源失败时的备源）。
 
