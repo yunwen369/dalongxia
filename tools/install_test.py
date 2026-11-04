@@ -38,6 +38,37 @@ DESKTOP = Path(os.environ.get("USERPROFILE", "")) / "Desktop"
 START_MENU = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
 
 
+DESKTOP_LNK = DESKTOP / "OpenBB 中文投研工作台.lnk"
+
+
+def _backup_shortcut() -> "Path | None":
+    """备份桌面快捷方式。
+
+    原因：安装测试的最后一步是卸载，NSIS 会删除桌面同名快捷方式（属于正式环境的那份），
+    若不预先备份，每跑一次安装测试就会把用户的快捷方式弄丢。
+
+    Returns:
+        Path | None: 备份文件路径；桌面原本没有快捷方式时返回 None。
+    """
+    if not DESKTOP_LNK.exists():
+        return None
+    SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
+    bak = SANDBOX_DIR / "desktop_shortcut.bak.lnk"
+    shutil.copy2(DESKTOP_LNK, bak)
+    return bak
+
+
+def _restore_shortcut(bak: "Path | None") -> None:
+    """恢复桌面快捷方式（仅当测试后消失时）。
+
+    Args:
+        bak: :func:`_backup_shortcut` 返回的备份路径。
+    """
+    if bak and bak.exists() and not DESKTOP_LNK.exists():
+        shutil.copy2(bak, DESKTOP_LNK)
+        logger.warning("安装测试删除了桌面快捷方式，已自动恢复：%s", DESKTOP_LNK)
+
+
 def _port_free(port: int) -> bool:
     """端口是否空闲。
 
@@ -137,6 +168,7 @@ def main() -> int:
         print(f"{BJ_FAIL} 安装包不存在：{setup}")
         return 2
 
+    shortcut_bak = _backup_shortcut()
     results = {"setup": str(setup), "setup_size": setup.stat().st_size, "scenarios": []}
 
     def record(name: str, ok: bool, detail: dict) -> None:
@@ -240,6 +272,8 @@ def main() -> int:
         "internal_removed": not leftover_internal,
         "data_kept_by_design": (upgrade / "data").exists(),
     })
+
+    _restore_shortcut(shortcut_bak)
 
     results["passed"] = all(item["ok"] for item in results["scenarios"])
     out_path = Path(args.out)
