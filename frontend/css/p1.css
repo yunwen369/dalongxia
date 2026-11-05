@@ -477,3 +477,95 @@
   color: var(--accent);
   outline: none;
 }
+
+/* ---------- 12 列布局引擎（GL-04） ---------- */
+.grid-card {
+  position: relative;
+}
+
+.grid-handle {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 6;
+  display: none;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: grab;
+  user-select: none;
+}
+
+.grid-width {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 6;
+  display: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
+
+.grid-width-btn {
+  width: 22px;
+  height: 18px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.grid-width-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* 句柄/宽度按钮只在布局模式显示 */
+.layout-mode .grid-handle,
+.layout-mode .grid-width {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.layout-mode .pg-card {
+  outline: 1px dashed var(--border-strong);
+  outline-offset: 2px;
+}
+
+.grid-dragging {
+  opacity: 0.5;
+}
+
+.grid-drop {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+/* 多卡容器在布局模式下启用 12 列栅格；宽度由 --card-span 控制 */
+.grid-host.layout-mode {
+  display: grid !important;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.grid-host.layout-mode > .pg-card {
+  grid-column: span var(--card-span, 12);
+  min-width: 0;
+}
+
+@media (max-width: 1280px) {
+  .grid-host.layout-mode > .pg-card {
+    grid-column: span 12;
+  }
+}

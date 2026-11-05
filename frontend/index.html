@@ -45,6 +45,7 @@
   <script src="js/pages/alerts.js" defer></script>
   <script src="js/core/tree.js" defer></script>
   <script src="js/core/ctxmenu.js" defer></script>
+  <script src="js/core/grid.js" defer></script>
   <script src="js/pages/p1_views.js" defer></script>
   <script src="js/pages/init.js" defer></script>
   <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
@@ -176,6 +177,8 @@
           <span class="badge" id="build-badge" data-i18n="health.buildLoading">构建标识加载中</span>
           <span class="badge" id="health-badge" data-i18n="health.checking">健康检查中</span>
           <span class="toolbar-spacer"></span>
+          <button class="icon-button" id="layout-toggle" type="button" title="布局模式：拖拽排序 / 4·6·12 列宽度">◧ 布局</button>
+          <button class="icon-button" id="layout-reset" type="button" title="重置本页布局">↺ 重置</button>
           <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）" data-i18n-title="action.refreshTitle">刷新</button>
         </div>
 
