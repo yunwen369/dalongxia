@@ -1537,19 +1537,24 @@ def get_trend(boards: List[str], days: int = 30, market: str = "cn") -> Dict[str
 
 # 拥挤度权重：只保留数据可得的维度，缺失维度在 caliber 里逐条写明（不编造）
 CROWDING_WEIGHTS = {
-    "amount_share": 0.45,   # 成交额占比分位
-    "bias": 0.25,           # 乖离率分位（收盘/MA20−1）
-    "volume_share": 0.15,   # 成交量占比分位
+    "amount_share": 0.35,   # 成交额强度分位（当日/250 日均值）
+    "bias": 0.20,           # 乖离率分位（收盘/MA20−1）
+    "volume_share": 0.15,   # 量能偏离分位（当日/20 日均量−1）
     "momentum": 0.15,       # 近 20 日动量分位
+    "amplitude": 0.08,      # 振幅分位（R4 新增：波动放大=分歧加剧）
+    "high_distance": 0.07,  # 距 60 日高点分位（R4 新增：贴近高点=追高密集）
 }
 
 CROWDING_MISSING = (
-    "五项里有两项口径调整、三项未纳入："
-    "① 成交额维度改用「当日/近250日均值」的相对强度，不是「占全市场比重」——"
+    "设计原定五维（成交额/换手率/两融/相关性/动量），第十轮 P3 R4 扩为六维实测："
+    "① 成交额维度用「当日/近250日均值」相对强度，不是「占全市场比重」——"
     "全市场成交额源（东财 push2his）在本机被源站重置，新浪指数日线只有成交量无成交额；"
-    "② 换手率分位未纳入，同花顺行业日线不含换手率与流通股本；"
-    "③ 行业融资余额分位未纳入，融资余额仅有全市场口径无行业口径；"
-    "④ 成分股相关性未纳入，东财 push2 成分股接口在本机被源站重置，取不到行业成分"
+    "② 换手率分位未纳入：同花顺行业日线不含换手率与流通股本，无法合成板块换手率；"
+    "③ 行业融资余额分位未纳入：两融仅有全市场口径，无行业口径；"
+    "④ 成分股相关性/换手率只作参考值不参与加权：相关性需逐只成分股日线（约 20 只 × 60 日），"
+    "换手率只有当日快照，两者都无历史序列可算分位，混进 0–100 分会破坏同质性，故列在 extra 里供参考；"
+    "⑤ 新增两维替代上述缺口：振幅分位（波动放大→分歧加剧）与距 60 日高点分位（贴近高点→追高密集），"
+    "两者都只用板块日线自身，可复算且能与历史分位同质比较"
 )
 
 
@@ -1610,8 +1615,11 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
         close = _num(row.get("close"))
         amount = _num(row.get("amount"))
         volume = _num(row.get("volume"))
+        high = _num(row.get("high"))
+        low = _num(row.get("low"))
         if day and close and amount and volume:
-            rows.append({"date": day, "close": close, "amount": amount, "volume": volume})
+            rows.append({"date": day, "close": close, "amount": amount,
+                         "volume": volume, "high": high, "low": low})
     rows.sort(key=lambda item: item["date"])
     if len(rows) < 60:
         raise ValueError(f"{board} 日线样本不足（{len(rows)} 个交易日），无法计算分位")
@@ -1640,6 +1648,22 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     momenta: List[float] = []
     for index in range(20, len(closes)):
         momenta.append(closes[index] / closes[index - 20] - 1)
+
+    # R4 新增：振幅（当日 high−low / 前收）× 100，缺 high/low 的交易日跳过
+    amplitudes: List[float] = []
+    for index in range(1, len(rows)):
+        high = rows[index].get("high")
+        low = rows[index].get("low")
+        prev = closes[index - 1]
+        if high is None or low is None or not prev:
+            continue
+        amplitudes.append((high - low) / prev * 100)
+
+    # R4 新增：距 60 日高点（收盘 / 近 60 日最高收盘 − 1）× 100，越接近 0 越贴近高点
+    high_distances: List[float] = []
+    for index in range(59, len(closes)):
+        window_high = max(closes[index - 59: index + 1])
+        high_distances.append((closes[index] / window_high - 1) * 100 if window_high else 0.0)
 
     # 成交量占比（用成交量相对全市场：市场成交量取不到，退化用板块自身 20 日均量比值）
     vols = [item["volume"] for item in rows]
@@ -1676,6 +1700,21 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
             "value": round(momenta[-1] * 100, 2),
             "pct": _pct_rank(momenta[:-1], momenta[-1]),
             "weight": CROWDING_WEIGHTS["momentum"],
+            "unit": "%",
+        },
+        "amplitude": {
+            "label": "振幅(相对前收)",
+            "value": round(amplitudes[-1], 2) if amplitudes else 0.0,
+            "pct": _pct_rank(amplitudes[:-1], amplitudes[-1]) if len(amplitudes) > 5 else 50.0,
+            "weight": CROWDING_WEIGHTS["amplitude"],
+            "unit": "%",
+        },
+        "high_distance": {
+            "label": "距60日高点",
+            "value": round(high_distances[-1], 2) if high_distances else 0.0,
+            # 距高点越近（值越接近 0）越拥挤：分位取「−距离」的历史分位
+            "pct": _pct_rank([-x for x in high_distances[:-1]], -high_distances[-1]) if len(high_distances) > 5 else 50.0,
+            "weight": CROWDING_WEIGHTS["high_distance"],
             "unit": "%",
         },
     }
@@ -1743,11 +1782,11 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
         "extra": extra,
         "as_of": utils.now_text(utils.bj_now()),
         "caliber": (
-            f"{kind_label}拥挤度=四维分位加权（成交额占比 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
-            f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
-            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%），分位窗口=近 {len(rows)} 个交易日；"
-            "成交额维度用「当日/近250日均值」的相对强度（全市场成交额源不可用，改相对自身历史）；"
-            "只陈述交易结构位置，不构成买卖建议"
+            f"{kind_label}拥挤度=六维分位加权（成交额强度 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
+            f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能偏离 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
+            f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}% / 振幅 {int(CROWDING_WEIGHTS['amplitude']*100)}% / "
+            f"距60日高点 {int(CROWDING_WEIGHTS['high_distance']*100)}%）；"
+            f"缺失维度不清零而是按可用权重归一；成分股相关性与换手率见 extra（仅参考，不参与加权）；{CROWDING_MISSING}"
         ),
         "missing": (
             [CROWDING_MISSING]
@@ -1765,7 +1804,7 @@ def get_crowding_rankings(
 ) -> Dict[str, Any]:
     """全板块拥挤度排行（第七轮 M12）。
 
-    复用 `get_crowding()` 同一套四维打分（同口径、同函数），逐板块并发计算后按得分降序。
+    复用 `get_crowding()` 同一套六维打分（同口径、同函数），逐板块并发计算后按得分降序。
     只陈述交易结构位置，不给买卖指令。
 
     Args:
@@ -1863,7 +1902,7 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
         "is_realtime": False,
         "level_counts": level_counts,
         "caliber": (
-            f"与单板块拥挤度同一函数（四维分位加权：成交额强度 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
+            f"与单板块拥挤度同一函数（六维分位加权：成交额强度 {int(CROWDING_WEIGHTS['amount_share']*100)}% / "
             f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
             f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}%）；"
             f"扫描 {len(items)}/{len(names)} 个{kind_label}；"

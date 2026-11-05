@@ -879,3 +879,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 拥挤度参考值（不参与加权）：成分股相关性/换手率 */
+.sd-ref {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.sd-ref-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+
+.sd-ref-v {
+  font-family: var(--mono);
+  color: var(--text);
+}

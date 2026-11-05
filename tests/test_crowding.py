@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """第七轮 M3 板块拥挤度契约测试。
 
-覆盖：参数校验、分值域、四维权重完整性、等级与分值一致、缺失维度如实登记。
+覆盖：参数校验、分值域、六维权重完整性、等级与分值一致、缺失维度如实登记。
 真实调用同花顺日线，上游不可用时 skip（不把数据源波动当实现缺陷）。
 """
 
@@ -36,23 +36,26 @@ def test_crowding_requires_board(client: TestClient) -> None:
 
 
 def test_crowding_weights_sum_to_one() -> None:
-    """四维权重之和必须为 1（加权后不再归一才不失真）。"""
+    """六维权重之和必须为 1（加权后不再归一才不失真）。"""
     total = sum(sector_provider.CROWDING_WEIGHTS.values())
     assert abs(total - 1.0) < 1e-9, f"权重合计应为 1，实际 {total}"
 
 
 def test_crowding_score_and_parts(client: TestClient) -> None:
-    """正常板块：分值 0–100、四维齐全、等级与阈值一致。"""
+    """正常板块：分值 0–100、六维齐全、等级与阈值一致。"""
     payload = client.get("/api/sector/crowding", params={"board": "半导体"}).json()
     if payload.get("error"):
         pytest.skip(f"板块日线本次不可用：{payload['error']}")
 
     data = payload["data"]
     assert 0 <= data["score"] <= 100
-    assert len(data["parts"]) == 4, "四维缺一不可（缺维度应在 missing 里说明，不是悄悄少一项）"
+    assert len(data["parts"]) == 6, "六维缺一不可（缺维度应在 missing 里说明，不是悄悄少一项）"
+    # R4 新增两维必须在场（振幅 / 距60日高点），否则等于回退成四维
+    labels = " ".join(part["label"] for part in data["parts"])
+    assert "振幅" in labels and "距60日高点" in labels, f"R4 两维缺失：{labels}"
     for part in data["parts"]:
         assert part["label"]
-        assert part["weight"] in (0.45, 0.25, 0.15)
+        assert part["weight"] in (0.35, 0.20, 0.15, 0.08, 0.07)
         if part["pct"] is not None:
             assert 0 <= part["pct"] <= 100
 

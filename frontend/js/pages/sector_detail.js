@@ -9,7 +9,8 @@
  * 口径约束：
  * - 主力净额一律取 `/api/sector/fundflow`（R1 全站唯一口径），不混用 industry 源；
  * - 相对强弱以 20 日归一（base=100）对比沪深300，基准缺失时只画板块线并如实标注；
- * - 拥挤度分解直接呈现后端 parts（四维，权重和为 1），前端不重算、不猜维度；
+ * - 拥挤度分解直接呈现后端 parts（六维，权重和为 1），前端不重算、不猜维度；
+ * - 成分股相关性/换手率见 extra：仅作参考值展示，无历史分位，不参与加权；
  * - 四档资金取 fundflow 的 super_big/big/medium/small（新浪成分股聚合），covered 标注覆盖数；
  * - 空值显示「无数据」，不补 0（§八 边界）。
  * ============================================================= */
@@ -144,7 +145,7 @@
     // ---- 卡片骨架 ----
     var head = buildCard("sd-head", "板块概况", "g-12", board + " · /api/sector/fundflow（R1 统一口径）");
     var trend = buildCard("sd-trend", "走势与相对强弱", "g-7", "/api/sector/kline · 相对沪深300（20日归一）");
-    var crowd = buildCard("sd-crowd", "拥挤度分解", "g-5", "/api/sector/crowding · 四维加权");
+    var crowd = buildCard("sd-crowd", "拥挤度分解", "g-5", "/api/sector/crowding · 六维加权");
     var flow = buildCard("sd-flow", "资金流四档", "g-5", "/api/sector/fundflow · 新浪成分股聚合");
     var cons = buildCard("sd-cons", "成分股", "g-7", "/api/sector/cons · 贡献度按成交额");
     var news = buildCard("sd-news", "板块资讯", "g-12", "/api/news/sector-search");
@@ -316,7 +317,7 @@
     api("/api/sector/crowding", { board: board })
       .then(function (body) {
         var data = unwrap(body);
-        setBadges(card.card, data.source || "同花顺", data.caliber || "四维加权", false);
+        setBadges(card.card, data.source || "同花顺", data.caliber || "六维加权", false);
         card.body.innerHTML = "";
         var parts = data.parts || [];
         if (!parts.length) {
@@ -343,8 +344,35 @@
           row.appendChild(el("div", "sd-part-pct", "分位 " + num(part.pct, 1) + "%"));
           card.body.appendChild(row);
         });
+        // 参考值（不参与加权）：成分股相关性/换手率只有当期值、无历史分位，故单列
+        var extra = data.extra || {};
+        var refs = [];
+        if (extra.correlation && extra.correlation.corr !== undefined) {
+          refs.push(["成分股相关性", num(extra.correlation.corr, 3) + "（" +
+            (extra.correlation.samples || "无数据") + " 只 × " + (extra.correlation.window_days || "无数据") + " 日）"]);
+        }
+        if (extra.turnover) {
+          var tv = extra.turnover.mean !== undefined ? extra.turnover.mean : extra.turnover.avg;
+          if (tv !== undefined) {
+            refs.push(["成分股平均换手率", num(tv, 2) + "%（" + (extra.turnover.samples || "无数据") + " 只）"]);
+          }
+        }
+        if (extra.constituent_count) {
+          refs.push(["成分股样本", extra.constituent_count + " 只"]);
+        }
+        if (refs.length) {
+          var refBox = el("div", "sd-ref");
+          refs.forEach(function (pair) {
+            var line = el("div", "sd-ref-row");
+            line.appendChild(el("span", "sd-ref-k", pair[0]));
+            line.appendChild(el("span", "sd-ref-v", String(pair[1])));
+            refBox.appendChild(line);
+          });
+          card.body.appendChild(refBox);
+        }
         card.body.appendChild(el("p", "pg-hint",
-          "样本 " + (data.sample_days || "无数据") + " 个交易日；分数=各维分位加权（权重和 1），分项由后端计算，前端不重算。"));
+          "样本 " + (data.sample_days || "无数据") + " 个交易日；分数=六维分位加权（权重和 1，缺失维度按可用权重归一），分项由后端计算，前端不重算。" +
+          (refs.length ? "上方参考值只有当期值、无历史分位，不参与加权。" : "")));
         card.body.setAttribute("data-state", "default");
       })
       .catch(function (err) {
