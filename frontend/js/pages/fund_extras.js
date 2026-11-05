@@ -197,10 +197,67 @@
     });
   }
 
+
+  /** FD-03 补充：重仓股行业配置（按前十大重仓的个股行业聚合占比）。 */
+  function paintIndustry(payload) {
+    var holding = (payload && payload.holding) || {};
+    var items = (holding.items || []).slice(0, 10);
+    if (!items.length) {
+      return;
+    }
+    var holder = ensureCard("F-09", "行业配置", "前十大重仓按个股行业聚合 · /api/stock/profile", "", "F-04");
+    if (!holder || !holder.body) {
+      return;
+    }
+    var body = holder.body;
+    P.setLoading(body);
+    var tasks = items.map(function (item) {
+      return P.api("/api/stock/profile", { symbol: item.code, market: "a" })
+        .then(function (res) {
+          var data = (res && res.data) || res || {};
+          return { ratio: Number(item.ratio) || 0, industry: data.industry || "未分类", name: item.name || item.code };
+        })
+        .catch(function () {
+          return { ratio: Number(item.ratio) || 0, industry: "未分类", name: item.name || item.code };
+        });
+    });
+    Promise.all(tasks).then(function (rows) {
+      var buckets = {};
+      rows.forEach(function (row) {
+        buckets[row.industry] = (buckets[row.industry] || 0) + row.ratio;
+      });
+      var list = Object.keys(buckets).map(function (key) {
+        return { industry: key, ratio: buckets[key] };
+      }).sort(function (a, b) { return b.ratio - a.ratio; });
+      var total = list.reduce(function (acc, x) { return acc + x.ratio; }, 0) || 1;
+      var max = list.length ? list[0].ratio : 1;
+      body.innerHTML = "";
+      list.forEach(function (row) {
+        var line = el("div", "sd-flow-row");
+        line.appendChild(el("span", "sd-flow-k", row.industry));
+        var track = el("div", "sd-flow-track");
+        var bar = el("div", "sd-flow-bar pos");
+        bar.style.width = Math.max(3, row.ratio / max * 100) + "%";
+        track.appendChild(bar);
+        line.appendChild(track);
+        line.appendChild(el("span", "sd-flow-v", num(row.ratio, 2) + "%"));
+        body.appendChild(line);
+      });
+      body.appendChild(el("p", "pg-hint",
+        "口径：仅统计前十大重仓股（合计 " + num(total, 2) + "%），行业取个股档案 industry；" +
+        "未分类=档案缺行业字段。非全持仓行业分布，不据此推断整体风格。"));
+      setBadges(holder.card, holding.source || "天天基金", holding.caliber || "前十大重仓", false);
+      body.setAttribute("data-state", "default");
+    }).catch(function (err) {
+      P.setError(body, err.message || "行业配置加载失败", null);
+    });
+  }
+
   /** 入口：在 paintFund 之后调用。 */
   function paintFundExtras(payload) {
     paintQuartile(payload);
     paintDrawdown(payload);
+    paintIndustry(payload);
     bindManagerLink(payload);
   }
 
