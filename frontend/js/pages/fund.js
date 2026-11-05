@@ -502,6 +502,10 @@
       posBody.appendChild(boxState);
       posBody.setAttribute("data-state", "empty");
     }
+    if (typeof P.paintFundExtras === "function") {
+      P.paintFundExtras(payload);  // FD-01 四分位 / FD-02 回撤分析 / FD-04 经理入口
+    }
+
   }
 
   // ---- 导出到 window.Pages（供兄弟模块与 init 使用） ----
