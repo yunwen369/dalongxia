@@ -1,7 +1,7 @@
 /* =============================================================
  * OpenBB 中文投研工作台 · 主题变量
  * 依据《工作规范》v7.0 §7.4 / §9.4，与后端 config.py 配色常量保持一致。
- * 深色为默认主题；浅色通过 [data-theme="light"] 切换（Ctrl+M）。
+ * 浅色「砚」为默认主题；深色（§7.4 OpenBB 色板）通过 [data-theme="dark"] 切换（Ctrl+M）。
  * ============================================================= */
 
 :root {
@@ -51,19 +51,26 @@
   --fs-aux: 12px;             /* 辅助文字 */
 }
 
-/* 浅色主题：仅覆盖颜色，不动布局尺寸 */
+/* 浅色主题「砚」：DS-R10-v2.1 §7 定稿色板（用户 2026-11-04/05 两次裁决的专用皮肤）
+   注意：涨跌色与深色主题取值不同（砚 #c8102e/#00843d vs §7.4 #FF4B4B/#00B061），
+   该偏差已在设计基准 §7 偏差登记表登记；深色主题为 §7.4 全等断言基准。 */
 [data-theme="light"] {
-  --bg-app: #f2f2f4;
-  --bg-widget: #ffffff;
-  --bg-panel: #ffffff;
-  --bg-sidebar: #fafafa;
-  --bg-hover: #eeeeF2;
-  --border: #dcdcdc;
-  --border-strong: #c4c4c4;
-  --text: #1a1a1a;
-  --text-dim: #5a5a5a;
-  --text-muted: #7a7a7a;
-  --accent: #822661;
-  --accent-strong: #9b5181;
-  --accent-deep: #822661;
+  --bg-app: #ffffff;          /* 应用底：白底（灰底看久累） */
+  --bg-widget: #ffffff;       /* 卡片 */
+  --bg-panel: #f7f9fb;        /* 面板 */
+  --bg-sidebar: #f7f9fb;      /* 侧栏 */
+  --bg-hover: #eef3f8;        /* 悬停 */
+  --border: #e6ebf1;          /* 台账线 */
+  --border-strong: #d3dbe5;   /* 强调线 */
+  --text: #12161d;            /* 正文 */
+  --text-dim: #5b6572;        /* 次要 */
+  --text-muted: #8a94a2;      /* 更弱 */
+  --accent: #17457a;          /* 品牌：墨蓝 */
+  --accent-strong: #1f5a99;
+  --accent-deep: #0f2f54;
+  --up: #c8102e;              /* 涨（A 股口径） */
+  --down: #00843d;            /* 跌 */
+  --warn: #b06a00;            /* 告警：琥珀 */
+  --danger: #c8102e;
+  --info: #17457a;
 }

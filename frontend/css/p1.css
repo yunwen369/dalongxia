@@ -569,3 +569,20 @@
     grid-column: span 12;
   }
 }
+
+/* ---------- 四态演示下拉（GL-06，验收用） ---------- */
+.state4-select {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.state4-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

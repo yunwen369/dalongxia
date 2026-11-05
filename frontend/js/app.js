@@ -85,7 +85,7 @@
 
   /** 切换深浅主题（对应 Ctrl+M）。 */
   function toggleTheme() {
-    const current = document.documentElement.getAttribute("data-theme") || "dark";
+    const current = document.documentElement.getAttribute("data-theme") || "light";
     applyTheme(current === "dark" ? "light" : "dark");
   }
 
@@ -538,7 +538,7 @@
   function init() {
     let savedTheme = "dark";
     try {
-      savedTheme = window.localStorage.getItem("openbb-theme") || "dark";
+      savedTheme = window.localStorage.getItem("openbb-theme") || "light";
     } catch (error) {
       savedTheme = "dark";
     }

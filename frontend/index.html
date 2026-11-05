@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -46,6 +46,7 @@
   <script src="js/core/tree.js" defer></script>
   <script src="js/core/ctxmenu.js" defer></script>
   <script src="js/core/grid.js" defer></script>
+  <script src="js/core/state4.js" defer></script>
   <script src="js/pages/p1_views.js" defer></script>
   <script src="js/pages/init.js" defer></script>
   <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
@@ -179,6 +180,12 @@
           <span class="toolbar-spacer"></span>
           <button class="icon-button" id="layout-toggle" type="button" title="布局模式：拖拽排序 / 4·6·12 列宽度">◧ 布局</button>
           <button class="icon-button" id="layout-reset" type="button" title="重置本页布局">↺ 重置</button>
+          <select id="state4-select" class="state4-select" title="四态演示（验收用，不影响业务渲染）">
+            <option value="default">◧ 四态：正常</option>
+            <option value="loading">◧ 加载中</option>
+            <option value="empty">◧ 空数据</option>
+            <option value="error">◧ 错误态</option>
+          </select>
           <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）" data-i18n-title="action.refreshTitle">刷新</button>
         </div>
 
