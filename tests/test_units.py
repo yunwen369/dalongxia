@@ -1002,7 +1002,7 @@ class TestFrontendViews:
         """VIEW_IDS 每一项都在 index.html 有对应 page-* 容器（含带连字符的引号键）。"""
         import re
 
-        pages = self._read("js/pages.js")
+        pages = self._read("js/pages/core.js")
         index = self._read("index.html")
         view_block = pages.split("VIEW_IDS")[1].split("};")[0]
         pairs = re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"(page-[\w-]+)"', view_block)
@@ -1021,27 +1021,33 @@ class TestFrontendViews:
         """
         import re
 
-        pages = self._read("js/pages.js")
+        pages = self._read("js/pages/core.js")
         index = self._read("index.html")
         view_block = pages.split("VIEW_IDS")[1].split("};")[0]
         view_ids = set(re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"page-[\w-]+"', view_block))
         menu_views = set(re.findall(r'data-view="([\w-]+)"', index))
-        assert view_ids <= menu_views, f"以下视图缺菜单入口：{sorted(view_ids - menu_views)}"
+        # 第十轮 P1：19 页 IA 中「工具」为单页，screener/valuation/crowding/charting
+        # 收敛为工具页内的五个入口卡（唯一实现仍在各自视图），故这 4 个视图由工具页承载。
+        tool_view_ids = {"screener", "valuation", "crowding", "charting"}
+        assert tool_view_ids <= view_ids, "工具子视图必须仍在 VIEW_IDS 内"
+        assert view_ids <= menu_views | tool_view_ids, f"以下视图缺菜单入口：{sorted(view_ids - menu_views - tool_view_ids)}"
         assert menu_views <= view_ids | {"home"}, f"菜单出现未登记视图：{sorted(menu_views - view_ids - {'home'})}"
 
     def test_new_views_wired_in_router(self):
         """route() 分发含 charting/settings，renderCharting/renderSettings 已实现。"""
-        pages = self._read("js/pages.js")
+        pages = self._read("js/pages/core.js")
         assert 'name === "charting"' in pages and "renderCharting(parsed.params)" in pages
         assert 'name === "settings"' in pages and "renderSettings()" in pages
-        assert "function renderCharting(" in pages and "function renderCharting(params)" in pages
-        assert "function renderSettings(" in pages
+        # R17 拆分后实现分散在各页模块，函数定义到对应文件里查
+        assert "function renderCharting(" in self._read("js/pages/charting.js")
+        assert "function renderCharting(params)" in self._read("js/pages/charting.js")
+        assert "function renderSettings(" in self._read("js/pages/settings.js")
 
     def test_chart_settings_i18n_keys_defined(self):
         """charting/settings 用到的全部 i18n 键都已在语言包定义（防 key 漂移）。"""
         import re
 
-        pages = self._read("js/pages.js")
+        pages = self._read("js/pages/charting.js") + self._read("js/pages/settings.js")
         i18n = self._read("js/i18n.js")
         used = set(re.findall(r't\("((?:chart|set)\.[\w.]+)"', pages))
         assert len(used) >= 40, f"新视图 i18n 键用量异常：{len(used)}"

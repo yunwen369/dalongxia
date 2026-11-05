@@ -88,7 +88,9 @@ def test_watchlist_reject_bad_input(temp_store) -> None:
 
 def test_northbound_real() -> None:
     """L-01：北向历史返回 20 个有披露交易日，日期升序、数值可用、口径自洽。"""
-    body = client.get("/api/moneyflow/northbound", params={"days": 20}).json()
+    # 第十轮 R3：northbound 扩参 metric=turnover|legacy_net，默认 turnover（新披露口径）。
+    # 本用例校验历史净买额口径，显式指定 legacy_net（旧能力保留，不随新口径删除）。
+    body = client.get("/api/moneyflow/northbound", params={"days": 20, "metric": "legacy_net"}).json()
     assert body["error"] is None, body
     data = body["data"]
     items = data["items"]
@@ -102,6 +104,23 @@ def test_northbound_real() -> None:
     if data["discontinued"]:
         assert "停止披露" in data["note"], "停更必须给出中文说明"
     assert data["source"] and data["caliber"]
+
+
+def test_northbound_turnover_new_caliber() -> None:
+    """R3：新披露口径返回沪深股通当日成交总额（亿元）与前十活跃证券，且不再给净买额。"""
+    body = client.get("/api/moneyflow/northbound", params={"days": 20, "metric": "turnover"}).json()
+    assert body["error"] is None, body
+    data = body["data"]
+    assert data["metric"] == "turnover"
+    items = data["items"]
+    assert items, "成交总额序列不得为空"
+    first = items[0]
+    assert {"date", "total"} <= set(first)
+    assert isinstance(first["total"], (int, float)) and first["total"] > 0
+    # 单日沪深股通成交总额量级：百亿~万亿（亿元）
+    assert 10 < first["total"] < 100000, f"成交总额量级异常：{first['total']}"
+    assert "成交总额" in (data.get("caliber") or ""), "口径文案须说明成交总额"
+    assert data.get("latest_label"), "须给出最新披露日标签"
 
 
 def test_north_top_contract() -> None:

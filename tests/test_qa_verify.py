@@ -529,8 +529,11 @@ def test_stock_realtime_panel_real() -> None:
 
     kline = data["kline"]
     assert len(kline) >= 60
-    # 日线含当日 bar 时与现价比；未含（盘中新浪只回已完成日）时与昨收比，避免把时段差异判成回归
-    if kline[-1]["date"] == utils.today_bj().isoformat():
+    # 日线含当日 bar 时与现价比；未含（盘中新浪只回已完成日）时与昨收比，避免把时段差异判成回归。
+    # 补充（2026-11-06）：零点前后 today 会跨日、而最新交易日仍是前一日，仅用「日期==今天」判断
+    # 会把「收盘快照价 vs 收盘价」误判成偏差；收市后/休市时 quote.price 即最近交易日收盘，直接比。
+    closed = quote["market_status"] in {"收盘快照", "休市", "盘后"}
+    if kline[-1]["date"] >= utils.today_bj().isoformat() or closed:
         drift = abs(quote["price"] - kline[-1]["close"]) / kline[-1]["close"]
     else:
         ref = quote.get("prev_close") or kline[-1]["close"]

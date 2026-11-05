@@ -249,13 +249,24 @@ def main() -> int:
     cdp.call("Runtime.enable")
     cdp.call("Page.enable")
     cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": HOOK})
-    cdp.call("Page.navigate", {"url": args.base_url + "/"})
+    cdp.call("Page.navigate", {"url": args.base_url + "/?v=%d" % int(time.time())})
     time.sleep(6)
 
     records = []
     for key, hash_, label, selector, min_cards in PAGES:
         eval_js(cdp, "location.hash='%s'" % hash_)
-        time.sleep(2.6)
+        time.sleep(1.2)
+        # 等页面自身四态稳定（不再有 loading），再截图；否则会拍到骨架屏（P1 首轮验收踩过）
+        wait_js(cdp, """(function(){
+          var p = document.querySelector('.page-view:not([hidden])');
+          if (!p) { return false; }
+          var bodies = p.querySelectorAll('.pg-body');
+          if (!bodies.length) { return true; }
+          for (var i = 0; i < bodies.length; i++) {
+            if (bodies[i].getAttribute('data-state') === 'loading') { return false; }
+          }
+          return true;
+        })()""", 15)
         # 截图前等所有区块退出 loading，避免截到骨架屏（取证无效）
         wait_js(cdp, "!document.querySelector('.page-view:not([hidden]) .pg-body[data-state=\'loading\']')", 10)
         raw = eval_js(cdp, PROBE)

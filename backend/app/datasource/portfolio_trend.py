@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Dict, List
 
 from backend.app import config
 from backend.app.datasource import portfolio as portfolio_provider
+from backend.app.datasource.utils import bj_now, now_text, today_bj
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def take_snapshot(day: str | None = None) -> Dict[str, Any]:
     Returns:
         dict: 写入的记录；失败抛异常由调用方处理。
     """
-    target = day or date.today().isoformat()
+    target = day or today_bj().isoformat()
     analysis = portfolio_provider.analyze()
     totals = analysis.get("totals") or {}
     record = {
@@ -59,7 +60,7 @@ def take_snapshot(day: str | None = None) -> Dict[str, Any]:
         "cost": totals.get("cny_cost"),
         "pnl": totals.get("cny_pnl"),
         "count": analysis.get("count") or 0,
-        "taken_at": datetime.now().isoformat(timespec="seconds"),
+        "taken_at": now_text(),
     }
     _ensure_dir()
     _snap_path(target).write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -81,7 +82,7 @@ def ensure_today(now: datetime | None = None) -> Dict[str, Any]:
     Returns:
         dict: `{written, reason, date}`。
     """
-    moment = now or datetime.now()
+    moment = now or bj_now()
     today = moment.date()
     key = today.isoformat()
     if not is_workday(today):
@@ -120,7 +121,7 @@ def load_trend(days: int = 90) -> Dict[str, Any]:
             "is_realtime": False,
             "hint": "尚无快照：服务需在交易日 15:05 后运行一次才会产生首个数据点",
         }
-    cutoff = (date.today() - timedelta(days=max(1, min(days, 3650)))).isoformat()
+    cutoff = (today_bj() - timedelta(days=max(1, min(days, 3650)))).isoformat()
     for path in sorted(SNAP_DIR.glob("*.json")):
         stem = path.stem
         if stem < cutoff:

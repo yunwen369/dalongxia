@@ -481,7 +481,7 @@
     var l1 = P.buildCard("L-01", t("lhb.northTitle"), "g-7", t("lhb.northSub"));
     l1.body.id = "l01-body";
     grid.appendChild(l1.card);
-    var l2 = P.buildCard("L-02", t("lhb.topTitle"), "g-5", t("lhb.topSub"));
+    var l2 = P.buildCard("L-02", t("lhb.legacyTitle"), "g-5", t("lhb.legacySub"));
     l2.body.id = "l02-body";
     grid.appendChild(l2.card);
     var l3 = P.buildCard("L-03", t("lhb.detailTitle"), "g-12", t("lhb.detailSub"));
@@ -496,7 +496,7 @@
     grid.appendChild(l5.card);
     page.appendChild(grid);
     loadNorthbound();
-    loadNorthTop();
+    loadNorthLegacy();
     loadLhb();
     loadLhbInstitution();
     loadLhbBroker();
@@ -699,40 +699,38 @@
   /** L-02：北向个股净买入 Top10（无当日数据时空态 + 说明）。
    * @returns {void} 无返回值（异步渲染）
    */
-  function loadNorthTop() {
+  function loadNorthLegacy() {
     var body = document.getElementById("l02-body");
     if (!body) {
       return;
     }
     P.setLoading(body);
-    api("/api/moneyflow/north-top", { limit: 10 }).then(function (data) {
+    // R3：2024-08-19 起交易所改披露口径，净买额停更；历史序列保留并标注分界，不做空态替代。
+    api("/api/moneyflow/northbound", { days: 20, metric: "legacy_net" }).then(function (data) {
       var card = document.getElementById("L-02");
       P.setBadges(card, data.source, data.caliber);
-      var items = data.items || [];
+      var items = (data.items || []).slice().reverse();
       if (!items.length) {
-        P.setEmpty(body, data.note || t("state.empty"), function () { loadNorthTop(); });
+        P.setEmpty(body, data.note || t("state.empty"), function () { loadNorthLegacy(); });
         return;
       }
       P.renderTable(body, [
+        { title: t("lhb.col.date"), render: function (row) { return el("span", "", row.date || ""); } },
         {
-          title: t("watchlist.col.name"), cls: "l",
-          /** 名称列：代码加粗 + 名称（北向/龙虎榜通用）。
+          title: t("lhb.col.netBuy"), num: true,
+          /** 净买额列：正红负绿。
            * @param {Object} row 数据行
            * @returns {HTMLElement} 单元格节点
            */
-          render: function (row) {
-            var box = el("span", "");
-            box.appendChild(el("b", "", row.code));
-            box.appendChild(document.createTextNode(" " + (row.name || "")));
-            return box;
-          }
-        },
-        { title: t("lhb.col.netBuy"), num: true, render: function (row) { return el("span", P.pctClass(row.net), fmt(row.net, 2)); } }
-      ], items, function (row) {
-        window.location.hash = "#/stock?symbol=" + row.code + "&market=a";
-      });
+          render: function (row) { return el("span", P.pctClass(row.net), fmt(row.net, 2)); }
+        }
+      ], items, null, "table-scroll");
+      var tip = el("p", "pg-hint", (data.latest_disclosed ? "最新披露日 " + data.latest_disclosed + "；" : "") +
+        "2024-08-19 起交易所不再披露北向净买额，本表保留历史序列（口径分界已标注）。");
+      body.appendChild(tip);
+      body.setAttribute("data-state", "default");
     }).catch(function (error) {
-      P.setError(body, error.message || t("state.errorHint"), function () { loadNorthTop(); });
+      P.setError(body, error.message || t("state.errorHint"), function () { loadNorthLegacy(); });
     });
   }
 
@@ -789,7 +787,7 @@
   P.loadLhb = loadLhb;
   P.loadLhbBroker = loadLhbBroker;
   P.loadLhbInstitution = loadLhbInstitution;
-  P.loadNorthTop = loadNorthTop;
+  P.loadNorthLegacy = loadNorthLegacy;
   P.loadNorthbound = loadNorthbound;
   P.loadWatchlist = loadWatchlist;
   P.marketLabel = marketLabel;

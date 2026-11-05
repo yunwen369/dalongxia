@@ -99,11 +99,18 @@
         pulse.body.appendChild(wrap);
         var breadth = senti.breadth || {};
         var line = el("div", "td-breadth");
+        // 平盘家数源站不提供时如实显示「无数据」，不补 0（§八 边界：空值不补 0）
         line.textContent = "涨 " + num(breadth.up, 0) + " / 跌 " + num(breadth.down, 0) + " / 平 " + num(breadth.flat, 0);
-        if (senti.market_status) {
-          line.textContent += " · " + senti.market_status;
+        if (senti.temperature !== null && senti.temperature !== undefined) {
+          line.textContent += " · 情绪温度 " + num(senti.temperature, 1) + (senti.level ? "（" + senti.level + "）" : "");
+        }
+        if (senti.as_of) {
+          line.textContent += " · " + String(senti.as_of).slice(11, 19);
         }
         pulse.body.appendChild(line);
+        if (breadth.caliber) {
+          pulse.body.appendChild(el("p", "pg-hint", breadth.caliber));
+        }
         pulse.body.setAttribute("data-state", "default");
       })
       .catch(function (err) {
@@ -194,14 +201,14 @@
         rows.push({
           rule: "单票 ≤20% 总资产",
           value: items.length ? num(maxWeight, 2) + "%" : "无数据",
-          verdict: !items.length ? "无数据" : (maxWeight > 20 ? "违反" : "通过"),
+          verdict: !items.length ? "待导入持仓" : (maxWeight > 20 ? "违反" : "通过"),
           tone: !items.length ? "neu" : (maxWeight > 20 ? "neg" : "pos")
         });
         var cash = Number(data.cash_ratio || data.cash_pct || 0);
         rows.push({
           rule: "现金 20–30%",
           value: data.cash_ratio === undefined && data.cash_pct === undefined ? "无数据" : num(cash, 2) + "%",
-          verdict: data.cash_ratio === undefined && data.cash_pct === undefined ? "无数据" : (cash < 20 ? "警示" : "通过"),
+          verdict: data.cash_ratio === undefined && data.cash_pct === undefined ? "待导入持仓" : (cash < 20 ? "警示" : "通过"),
           tone: data.cash_ratio === undefined && data.cash_pct === undefined ? "neu" : (cash < 20 ? "warn" : "pos")
         });
         rows.push({

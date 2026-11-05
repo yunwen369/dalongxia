@@ -21,8 +21,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
 from typing import Any, Dict, List
+
+from .utils import today_bj
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def get_manager(code: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "found": False,
             "code": symbol,
             "reason": "该基金未在基金经理表中命中（可能为新发基金或代码有误）",
-            "as_of": date.today().isoformat(),
+            "as_of": today_bj().isoformat(),
         }
 
     name = str(target.get("姓名") or "").strip()
@@ -108,7 +109,7 @@ def get_manager(code: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         "source": SOURCE,
         "caliber": CALIBER,
-        "as_of": date.today().isoformat(),
+        "as_of": today_bj().isoformat(),
         "market_status": "档案快照",
         "is_realtime": False,
     }
