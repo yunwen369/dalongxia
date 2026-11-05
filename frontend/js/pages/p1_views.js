@@ -593,28 +593,31 @@
     loadManager(card, code, null);
   }
 
-  /** 经理卡：基金档案里的经理/任职/在管字段（P2 接 /api/fund/manager 深度画像）。 */
+  /** 经理画像：主用 /api/fund/manager（深度画像 + 在管列表），未命中回落到 fund/info 基础档案。 */
   function loadManager(card, code, done) {
     var holder = el("div", "p1-result");
     card.body.appendChild(holder);
     setLoading(holder);
-    api("/api/fund/info?code=" + encodeURIComponent(code))
+    api("/api/fund/manager?code=" + encodeURIComponent(code))
       .then(function (body) {
         var data = unwrap(body);
-        setBadges(card.card, data.source || "天天基金/东财", data.caliber || "基金档案", false);
+        if (!data.found) {
+          throw new Error(data.reason || "该基金未命中经理画像");
+        }
+        var info = data.manager || {};
+        setBadges(card.card, data.source || "东财基金经理", data.caliber || "经理画像", false);
         holder.innerHTML = "";
-        var manager = data.manager || data.fund_manager || "";
         var grid = el("div", "mg-grid");
         grid.setAttribute("data-ctx", "fund");
         grid.setAttribute("data-code", code);
-        grid.setAttribute("data-name", data.name || "");
+        grid.setAttribute("data-name", info.name || "");
         [
-          ["基金", (data.name || "无数据") + (data.code ? " " + data.code : "")],
-          ["基金经理", manager || "无数据"],
-          ["任职年限", data.manager_since ? data.manager_since + " 起" : "无数据"],
-          ["管理规模", data.scale ? num(data.scale, 2) + " 亿" : "无数据"],
-          ["成立日期", data.established || "无数据"],
-          ["基金公司", data.company || "无数据"]
+          ["基金经理", info.name || "无数据"],
+          ["所属公司", info.company || "无数据"],
+          ["累计从业", info.tenure_days ? info.tenure_days + " 天（" + num(info.tenure_years, 1) + " 年）" : "无数据"],
+          ["在管规模", info.scale_aum === null || info.scale_aum === undefined ? "无数据" : num(info.scale_aum, 2) + " 亿"],
+          ["最佳回报", info.best_return === null || info.best_return === undefined ? "无数据" : num(info.best_return, 2) + "%"],
+          ["在管基金", (info.fund_count || 0) + " 只"]
         ].forEach(function (pair) {
           var cell = el("div", "mg-cell");
           cell.appendChild(el("div", "mg-k", pair[0]));
@@ -622,18 +625,68 @@
           grid.appendChild(cell);
         });
         holder.appendChild(grid);
-        var note = el("p", "pg-hint", "深度画像（履历时间轴 / 在管列表 / 回撤控制 / 大佬评分）由 P2 的 /api/fund/manager 提供，届时本页自动切换为完整版。");
+
+        var funds = info.funds || [];
+        if (funds.length) {
+          holder.appendChild(el("div", "mg-sub", "在管基金（点行进入基金详情）"));
+          var table = el("table", "pg-table");
+          var head = el("tr");
+          ["代码", "基金名称", "操作"].forEach(function (text) { head.appendChild(el("th", "", text)); });
+          table.appendChild(head);
+          funds.forEach(function (item) {
+            var tr = el("tr");
+            tr.setAttribute("data-ctx", "fund");
+            tr.setAttribute("data-code", item.code);
+            tr.setAttribute("data-name", item.name || "");
+            tr.appendChild(el("td", "", item.code));
+            tr.appendChild(el("td", "", item.name || ""));
+            var td = el("td");
+            var go = el("button", "pg-btn pg-btn-sm", "基金详情");
+            go.type = "button";
+            go.addEventListener("click", function () {
+              location.hash = "#/fund?code=" + encodeURIComponent(item.code);
+            });
+            td.appendChild(go);
+            tr.appendChild(td);
+            table.appendChild(tr);
+          });
+          holder.appendChild(table);
+        }
+        var note = el("p", "pg-hint", "口径：规模与最佳回报为经理级指标（长表按经理聚合，非单只基金）；数据日更，24 小时缓存。");
         holder.appendChild(note);
         holder.setAttribute("data-state", "default");
         if (done) {
           done();
         }
       })
-      .catch(function (err) {
-        setError(holder, err.message || "基金档案加载失败", null);
-        if (done) {
-          done();
-        }
+      .catch(function () {
+        // 未命中经理表时回落基础档案（不伪造画像字段）
+        api("/api/fund/info?code=" + encodeURIComponent(code))
+          .then(function (body) {
+            var data = unwrap(body);
+            setBadges(card.card, data.source || "天天基金/东财", data.caliber || "基金档案", false);
+            holder.innerHTML = "";
+            var grid = el("div", "mg-grid");
+            [
+              ["基金", (data.name || "无数据") + (data.code ? " " + data.code : "")],
+              ["基金经理", data.manager || "无数据"],
+              ["成立日期", data.established || "无数据"],
+              ["基金公司", data.company || "无数据"]
+            ].forEach(function (pair) {
+              var cell = el("div", "mg-cell");
+              cell.appendChild(el("div", "mg-k", pair[0]));
+              cell.appendChild(el("div", "mg-v", String(pair[1])));
+              grid.appendChild(cell);
+            });
+            holder.appendChild(grid);
+            holder.appendChild(el("p", "pg-hint", "该基金未出现在经理长表中（新发或代码差异），以上为基础档案字段。"));
+            holder.setAttribute("data-state", "default");
+            if (done) { done(); }
+          })
+          .catch(function (err) {
+            setError(holder, err.message || "基金档案加载失败", null);
+            if (done) { done(); }
+          });
       });
   }
 

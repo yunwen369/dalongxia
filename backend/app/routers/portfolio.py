@@ -15,11 +15,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Body, Path
+from fastapi import APIRouter, Body, Path, Query
 
 from backend.app.core import cache
 from backend.app.core.errors import pack_success, ErrorCode, api_error
 from backend.app.datasource import portfolio as store
+from backend.app.datasource import portfolio_trend
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,27 @@ def delete_portfolio(item_id: str = Path(...)) -> Dict[str, Any]:
         return api_error(ErrorCode.NOT_FOUND, "未找到该持仓记录，请刷新后重试。")
     cache.clear_cache()
     return pack_success({"deleted": item_id}, "本地持仓", "删除本地持仓", None, "本地快照", False)
+
+
+@router.get("/trend")
+def portfolio_trend_series(days: int = Query(90, ge=1, le=3650, description="最近 N 个自然日")) -> Dict[str, Any]:
+    """持仓收益走势（第十轮 P2 新增 · R13）：逐交易日快照序列，缺日即断点、禁止补零。
+
+    Args:
+        days: 回溯自然日数（默认 90）。
+
+    Returns:
+        dict: 统一返回结构；无快照时 items=[] + hint 说明（空态非错误）。
+    """
+    data = portfolio_trend.load_trend(days)
+    return pack_success(
+        data,
+        data.get("source") or "本地快照",
+        data.get("caliber") or "",
+        data.get("to"),
+        "本地快照",
+        False,
+    )
 
 
 @router.get("/analysis")

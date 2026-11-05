@@ -73,29 +73,48 @@ def _lhb_like(*, cache_key: str, loader, empty_source: str, empty_caliber: str,
 
 
 @router.get("/northbound")
-def northbound(days: int = Query(20, ge=5, le=60, description="交易日数量")) -> Dict[str, Any]:
-    """北向资金近 N 个有披露交易日净流入。
+def northbound(
+    days: int = Query(20, ge=5, le=60, description="交易日数量"),
+    metric: str = Query("turnover", description="口径：turnover=沪深股通成交总额（2024-08-19 新披露机制）/ legacy_net=历史净买额（至 2024-08-16）"),
+) -> Dict[str, Any]:
+    """北向资金：新披露口径成交总额（默认）或历史净买额（R3）。
+
+    口径切换（DS-R10-v2.1 §12）
+    ---------------------------
+    - `metric=turnover`（默认）：沪深股通每日**成交总额 / 成交笔数 / 前十活跃证券**，
+      交易所收市后披露；不含净买额新数据；
+    - `metric=legacy_net`：2024-08-16 及之前的历史净买额序列，用于分界线左侧绘图。
 
     Args:
         days: 交易日数量（5–60）。
+        metric: 口径枚举。
 
     Returns:
-        dict: 统一信封；data.items 为 [{date,net,buy,sell}]（亿元）。
+        dict: 统一信封；turnover 为 `{turnover:{total,hu,shen,deals_total},items,top}`，
+              legacy_net 为 `{items:[{date,net,buy,sell}]}`。
     """
+    mode = (metric or "turnover").strip().lower()
+    if mode not in ("turnover", "legacy_net"):
+        return bad_request("metric 仅支持 turnover 或 legacy_net")
+
     def loader() -> Dict[str, Any]:
-        """带缓存的北向历史取数。
+        """带缓存的口径取数（两个口径各自独立缓存键）。
 
         Returns:
-            dict: moneyflow.get_northbound 的载荷。
+            dict: 对应口径的载荷。
         """
-        return moneyflow.get_northbound(days)
+        if mode == "legacy_net":
+            return moneyflow.get_northbound(days)
+        return moneyflow.get_northbound_turnover(days)
 
+    cache_key = f"moneyflow:northbound:{mode}"
     try:
-        payload = cache.get_or_load("moneyflow:northbound", config.TTL.get("northbound", 3600), loader)
+        payload = cache.get_or_load(cache_key, config.TTL.get("northbound", 3600), loader)
     except Exception as exc:  # noqa: BLE001 - 上游异常统一中文错误
-        logger.warning("北向资金取数失败：%s（%s）", type(exc).__name__, exc)
-        return api_error(ErrorCode.UPSTREAM_ERROR, "北向资金数据暂不可用（东财通道异常），请稍后重试。",
-                         data={"items": [], "days": days})
+        logger.warning("北向资金取数失败（%s）：%s（%s）", mode, type(exc).__name__, exc)
+        hint = ("北向成交总额数据暂不可用（东财通道异常），请稍后重试。"
+                if mode == "turnover" else "北向历史净买额数据暂不可用，请稍后重试。")
+        return api_error(ErrorCode.UPSTREAM_ERROR, hint, data={"items": [], "days": days, "metric": mode})
     return ok({
         **payload,
         "as_of": utils.now_text(),

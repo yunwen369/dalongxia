@@ -23,6 +23,7 @@ from fastapi import APIRouter, Body, Query
 
 from backend.app import config
 from backend.app.datasource import utils
+from backend.app.datasource import fund_manager
 from backend.app.core import cache, user_prefs
 from backend.app.core.errors import pack_success, ErrorCode, NonRetryableError, api_error, ok, bad_request
 from backend.app.datasource import fund as fund_provider
@@ -241,6 +242,33 @@ def fund_info(code: str = Query(..., description="6 位基金代码")) -> Dict[s
     data = result["data"]
     return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "",
                         data.get("end_date"), "档案快照", False)
+
+
+@router.get("/manager")
+def fund_manager_profile(code: str = Query(..., description="6 位基金代码")) -> Dict[str, Any]:
+    """基金经理画像（第十轮 P2 新增）：履历 / 在管列表 / 管理规模。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: 统一返回结构；未命中经理时 data.found=False + 中文原因（非错误）。
+    """
+    symbol = (code or "").strip()
+    if not symbol:
+        return bad_request("code 参数不可为空")
+    result = _run("fund:manager:all", 86400, fund_manager.load_all)
+    if result["error"]:
+        return api_error(ErrorCode.UPSTREAM_ERROR, "基金经理数据暂不可用，请稍后重试。",
+                         data={"code": symbol})
+    try:
+        payload = fund_manager.get_manager(symbol, result["data"] or [])
+    except Exception as exc:  # noqa: BLE001 - 聚合异常按上游错误返回
+        logger.warning("经理画像聚合失败 %s: %s", symbol, type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, "经理画像解析失败，请稍后重试。",
+                         data={"code": symbol})
+    return pack_success(payload, payload.get("source") or "东财基金经理",
+                        payload.get("caliber") or "", payload.get("as_of"), "档案快照", False)
 
 
 @router.get("/performance")

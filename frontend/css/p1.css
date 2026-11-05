@@ -586,3 +586,26 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ---------- 经理画像：在管基金区 ---------- */
+.mg-sub {
+  margin: 14px 0 6px;
+  font-size: var(--fs-aux);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* ---------- 北向成交总额卡（R3 新口径） ---------- */
+.north-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.north-kv {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}

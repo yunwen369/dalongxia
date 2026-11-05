@@ -341,3 +341,157 @@ def get_lhb_broker(day: str = "", limit: int = 50) -> Dict[str, Any]:
                    "个股数为当日上榜买入/卖出只数）",
     }
 
+
+
+# =============================================================
+# R3（第十轮）：北向新披露口径 —— 沪深股通成交总额 / 笔数 / 前十活跃
+# =============================================================
+
+_EM_DC_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+
+# 东财 mutual_type 编码：001 沪股通 / 003 深股通 / 005 北向合计
+#                     002 港股通(沪) / 004 港股通(深) / 006 南向合计
+_NORTH_TYPES = {"001": "沪股通", "003": "深股通", "005": "北向合计"}
+
+
+def _em_dc(report: str, filter_text: str = "", sort: str = "TRADE_DATE", size: int = 60,
+           page: int = 1) -> List[Dict[str, Any]]:
+    """调用东财 datacenter 通用报表接口（纯 HTTP，绕开 push2 限制）。
+
+    Args:
+        report: 报表名，如 RPT_MUTUAL_DEAL_HISTORY。
+        filter_text: filter 表达式。
+        sort: 排序列（默认按交易日倒序）。
+        size: 每页条数。
+        page: 页码。
+
+    Returns:
+        List[Dict[str, Any]]: 数据行；接口无数据返回 []。
+
+    Raises:
+        ValueError: HTTP 失败或返回体不可解析。
+    """
+    params = {
+        "reportName": report,
+        "columns": "ALL",
+        "pageNumber": page,
+        "pageSize": size,
+        "source": "WEB",
+        "client": "WEB",
+    }
+    if filter_text:
+        params["filter"] = filter_text
+    if sort:
+        params["sortColumns"] = sort
+        params["sortTypes"] = "-1"
+    body = utils.http_get_json(_EM_DC_URL, params=params, referer="https://data.eastmoney.com/", timeout=15)
+    if not isinstance(body, dict):
+        return []
+    result = body.get("result") or {}
+    return result.get("data") or []
+
+
+def get_northbound_turnover(days: int = 20) -> Dict[str, Any]:
+    """北向新披露口径（R3）：沪深股通**成交总额 / 成交笔数 / 前十活跃证券**。
+
+    口径说明（2026-11-06 实测，DS-R10-v2.1 §12）
+    --------------------------------------------
+    - 2024-08-19 起交易所不再披露北向「净买额」，改为收市后披露成交总额与笔数；
+    - 数据源：东财 datacenter `RPT_MUTUAL_DEAL_HISTORY`（成交额/笔数，单位百万元）与
+      `RPT_MUTUAL_TOP10DEAL`（前十大活跃证券，成交额单位元）；
+    - 不显示净买额新数据；历史净买额序列仍由 `get_northbound` 提供（至 2024-08-16）。
+
+    Args:
+        days: 近 N 个交易日（默认 20）。
+
+    Returns:
+        dict: `{latest, latest_label, turnover:{total, hu, shen, deals_total},
+               items:[{date,total,hu,shen,deals}], top:[{rank,code,name,deal_amt,pct}],
+               source, caliber, as_of, market_status, is_realtime}`。
+
+    Raises:
+        ValueError: 报表无数据（源站异常）。
+    """
+    limit = max(1, min(days, 60)) * 6
+    rows = _em_dc("RPT_MUTUAL_DEAL_HISTORY", size=limit)
+    if not rows:
+        raise ValueError("北向成交报表返回空表")
+
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        mutual = str(row.get("MUTUAL_TYPE") or "")
+        if mutual not in _NORTH_TYPES:
+            continue
+        day = str(row.get("TRADE_DATE") or "")[:10]
+        if not day:
+            continue
+        slot = by_date.setdefault(day, {})
+        deal = _num(row.get("DEAL_AMT"))          # 百万元
+        deals = _num(row.get("DEAL_NUM"))         # 笔
+        slot[mutual] = {
+            "deal_amt": round(deal / 100.0, 2) if deal is not None else None,  # → 亿元
+            "deals": int(deals) if deals is not None else None,
+        }
+
+    dates = sorted(by_date.keys(), reverse=True)[:limit // 6]
+    if not dates:
+        raise ValueError("北向成交报表无有效记录")
+    latest = dates[0]
+
+    items: List[Dict[str, Any]] = []
+    for day in sorted(dates):
+        slot = by_date.get(day) or {}
+        total = slot.get("005") or {}
+        hu = slot.get("001") or {}
+        shen = slot.get("003") or {}
+        items.append({
+            "date": day,
+            "total": total.get("deal_amt"),
+            "hu": hu.get("deal_amt"),
+            "shen": shen.get("deal_amt"),
+            "deals": total.get("deals"),
+        })
+
+    latest_slot = by_date.get(latest) or {}
+    turnover = {
+        "total": (latest_slot.get("005") or {}).get("deal_amt"),
+        "hu": (latest_slot.get("001") or {}).get("deal_amt"),
+        "shen": (latest_slot.get("003") or {}).get("deal_amt"),
+        "deals_total": (latest_slot.get("005") or {}).get("deals"),
+    }
+
+    # 前十活跃证券：北向只取 001（沪股通）+ 003（深股通），按成交额合并排序取前 10
+    top_rows = _em_dc("RPT_MUTUAL_TOP10DEAL", filter_text=f"(TRADE_DATE='{latest}')", size=60)
+    merged: List[Dict[str, Any]] = []
+    for row in top_rows:
+        if str(row.get("MUTUAL_TYPE") or "") not in ("001", "003"):
+            continue
+        amount = _num(row.get("DEAL_AMT"))       # 元
+        if amount is None:
+            continue
+        merged.append({
+            "code": str(row.get("SECURITY_CODE") or ""),
+            "name": str(row.get("SECURITY_NAME") or ""),
+            "deal_amt": round(amount / 1e8, 2),  # → 亿元
+            "pct": _num(row.get("CHANGE_RATE")),
+            "close": _num(row.get("CLOSE_PRICE")),
+        })
+    merged.sort(key=lambda item: item["deal_amt"], reverse=True)
+    top = []
+    for index, item in enumerate(merged[:10], start=1):
+        item["rank"] = index
+        top.append(item)
+
+    return {
+        "metric": "turnover",
+        "latest": latest,
+        "latest_label": "沪深股通成交总额 · 交易所 T+0 收市后披露",
+        "turnover": turnover,
+        "items": items,
+        "top": top,
+        "source": "东财 datacenter / RPT_MUTUAL_DEAL_HISTORY + RPT_MUTUAL_TOP10DEAL",
+        "caliber": "成交总额=买入+卖出成交金额（交易所收市后披露）；2024-08-19 起无净买额披露",
+        "as_of": latest,
+        "market_status": "收市后披露",
+        "is_realtime": False,
+    }

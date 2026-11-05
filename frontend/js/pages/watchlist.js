@@ -622,6 +622,18 @@
       if (data.note) {
         body.appendChild(el("div", "pg-card-sub", data.note));
       }
+      // R3：新披露口径（成交总额）与历史净买额共用一张卡，按 metric 切换画法与图例
+      var isTurnover = data.metric === "turnover";
+      if (isTurnover) {
+        var head = el("div", "north-head");
+        var kv = data.turnover || {};
+        head.appendChild(el("div", "north-kv",
+          "今日成交总额 " + (kv.total === null || kv.total === undefined ? "无数据" : fmt(kv.total, 2) + " 亿") +
+          "（沪 " + (kv.hu === null || kv.hu === undefined ? "—" : fmt(kv.hu, 2)) +
+          " / 深 " + (kv.shen === null || kv.shen === undefined ? "—" : fmt(kv.shen, 2)) + "）"));
+        head.appendChild(el("span", "pill ai", data.latest_label || "沪深股通成交总额 · 交易所 T+0 收市后披露"));
+        body.appendChild(head);
+      }
       var node = el("div", "pg-chart");
       node.style.height = "300px";
       body.appendChild(node);
@@ -638,15 +650,45 @@
           },
           yAxis: {
             type: "value",
+            name: isTurnover ? "亿元" : "亿元",
+            nameTextStyle: { color: theme.text },
             axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border } }
           },
           series: [{
             type: "bar",
+            name: isTurnover ? "成交总额" : "净买额",
             data: items.map(function (item) {
+              if (isTurnover) {
+                return { value: item.total, itemStyle: { color: theme.accent || COLOR_UP } };
+              }
               return { value: item.net, itemStyle: { color: item.net >= 0 ? COLOR_UP : COLOR_DOWN } };
             })
           }]
         });
+      }
+      if (isTurnover) {
+        body.appendChild(el("p", "pg-hint",
+          "口径：2024-08-19 起交易所不再披露北向净买额，改为收市后披露成交总额与笔数；本图右侧为当前披露口径，历史净买额序列见 metric=legacy_net。"));
+        var top = data.top || [];
+        if (top.length) {
+          body.appendChild(el("div", "mg-sub", "前十活跃证券（按成交额）"));
+          var table = el("table", "pg-table");
+          var headRow = el("tr");
+          ["#", "证券", "成交额(亿)", "涨跌幅"].forEach(function (text) { headRow.appendChild(el("th", "", text)); });
+          table.appendChild(headRow);
+          top.forEach(function (row) {
+            var tr = el("tr");
+            tr.setAttribute("data-ctx", "stock");
+            tr.setAttribute("data-symbol", row.code || "");
+            tr.setAttribute("data-name", row.name || "");
+            tr.appendChild(el("td", "", String(row.rank || "")));
+            tr.appendChild(el("td", "", (row.name || "") + " " + (row.code || "")));
+            tr.appendChild(el("td", "", row.deal_amt === null || row.deal_amt === undefined ? "无数据" : fmt(row.deal_amt, 2)));
+            tr.appendChild(el("td", row.pct > 0 ? "up" : (row.pct < 0 ? "down" : ""), row.pct === null || row.pct === undefined ? "无数据" : (row.pct > 0 ? "+" : "") + fmt(row.pct, 2) + "%"));
+            table.appendChild(tr);
+          });
+          body.appendChild(table);
+        }
       }
       body.setAttribute("data-state", "default");
     }).catch(function (error) {

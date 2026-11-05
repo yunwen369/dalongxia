@@ -227,6 +227,23 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+def _portfolio_snapshot_loop() -> None:
+    """持仓快照调度（R13）：每 30 分钟检查「工作日 + 15:05 后 + 当日缺档」，满足才写。
+
+    独立线程运行，异常只记日志，绝不影响主服务与请求链路。
+    """
+    from backend.app.datasource import portfolio_trend
+
+    while True:
+        try:
+            result = portfolio_trend.ensure_today()
+            if result.get("written"):
+                logger.info("持仓快照已写入：%s", result.get("date"))
+        except Exception as exc:  # noqa: BLE001 - 快照失败不影响主服务
+            logger.info("持仓快照调度异常：%s", type(exc).__name__)
+        time.sleep(1800)
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用。
 
@@ -273,6 +290,14 @@ def create_app() -> FastAPI:
     # 第七轮波次 5：多因子筛选器（M9，快照+手动刷新）+ 提醒与预警（M6，仅应用内）
     application.include_router(screener.router)
     application.include_router(alerts.router)
+
+    # 第十轮 P2 · R13：持仓快照调度（后台线程，与打包形态无关）
+    @application.on_event("startup")
+    def _start_portfolio_snapshot() -> None:
+        """启动持仓快照调度线程（幂等：重复触发只会多一个守护线程）。"""
+        threading.Thread(
+            target=_portfolio_snapshot_loop, daemon=True, name="portfolio-snapshot"
+        ).start()
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(
