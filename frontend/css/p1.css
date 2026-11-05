@@ -444,3 +444,36 @@
   color: var(--text-muted);
   line-height: 1.6;
 }
+
+/* ---------- 全局右键菜单（GL-03） ---------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 156px;
+  max-width: 240px;
+  padding: 4px;
+  background: var(--bg-widget);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ctx-item:hover,
+.ctx-item:focus-visible {
+  background: var(--bg-hover);
+  color: var(--accent);
+  outline: none;
+}

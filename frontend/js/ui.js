@@ -142,7 +142,15 @@
       { id: "view:portfolio", group: "palette.views", label: t("nav.portfolio"), run: function () { location.hash = "#/portfolio"; } },
       { id: "view:yjb", group: "palette.views", label: t("nav.yjb"), run: function () { location.hash = "#/yjb"; } },
       { id: "view:connectors", group: "palette.views", label: t("nav.connectors"), run: function () { location.hash = "#/connectors"; } },
-      { id: "view:settings", group: "palette.views", label: t("nav.settings"), run: function () { location.hash = "#/settings"; } }
+      { id: "view:settings", group: "palette.views", label: t("nav.sysSettings"), run: function () { location.hash = "#/settings"; } },
+      // 第十轮 P1 新 IA：7 个新页直达（GL-01）
+      { id: "view:today", group: "palette.views", label: t("nav.today"), run: function () { location.hash = "#/today"; } },
+      { id: "view:market", group: "palette.views", label: t("nav.marketOverview"), run: function () { location.hash = "#/market"; } },
+      { id: "view:fin", group: "palette.views", label: t("nav.finSummary"), run: function () { location.hash = "#/fin"; } },
+      { id: "view:ann", group: "palette.views", label: t("nav.annLib"), run: function () { location.hash = "#/ann"; } },
+      { id: "view:mgr", group: "palette.views", label: t("nav.mgr"), run: function () { location.hash = "#/mgr"; } },
+      { id: "view:tools", group: "palette.views", label: t("nav.tools"), run: function () { location.hash = "#/tools"; } },
+      { id: "view:cand", group: "palette.views", label: t("nav.cand"), run: function () { location.hash = "#/cand"; } }
     ];
   }
 
@@ -181,6 +189,137 @@
    * @param {string} keyword 顶栏搜索框关键词
    * @returns {Array} 命令列表（关键词为空时返回空数组）
    */
+  // ---------- 跨实体检索（GL-01）：板块本地索引 + 股票/基金远程联想 ----------
+  var sectorIndex = null;
+  var sectorIndexAt = 0;
+
+  /** 板块名录索引（10 分钟缓存；失败不阻塞面板，返回空表）。 */
+  function ensureSectorIndex(callback) {
+    if (sectorIndex && Date.now() - sectorIndexAt < 600000) {
+      callback(sectorIndex);
+      return;
+    }
+    Promise.all([
+      fetch("/api/sector/industry", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; }),
+      fetch("/api/sector/concept", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; })
+    ]).then(function (res) {
+      var list = [];
+      [res[0], res[1]].forEach(function (body, idx) {
+        var items = (body && body.data && (body.data.items || body.data.list)) || [];
+        items.forEach(function (item) {
+          if (item && item.name) {
+            list.push({ name: item.name, kind: idx === 0 ? "industry" : "concept" });
+          }
+        });
+      });
+      sectorIndex = list;
+      sectorIndexAt = Date.now();
+      callback(list);
+    }).catch(function () { callback([]); });
+  }
+
+  /** 匹配分：完全相等 100 / 前缀 80 / 包含 60，用于「精确名称优先」排序。 */
+  function matchScore(label, query) {
+    var text = String(label || "").toLowerCase();
+    var q = String(query || "").toLowerCase();
+    if (!q) {
+      return 0;
+    }
+    if (text === q) {
+      return 100;
+    }
+    if (text.indexOf(q) === 0) {
+      return 80;
+    }
+    if (text.indexOf(q) >= 0) {
+      return 60;
+    }
+    return 0;
+  }
+
+  /** 按关键词生成跨实体命令：页面直达 + 板块 + 股票 + 基金。 */
+  function entityCommands(keyword, callback) {
+    /** 排序后回调：精确匹配优先，同分按 页面 > 股票 > 板块 > 基金。 */
+    function finish(list) {
+      list.forEach(function (item) {
+        item._score = matchScore(item.label, keyword);
+      });
+      list.sort(function (a, b) {
+        return (b._score - a._score) || ((b._type || 0) - (a._type || 0));
+      });
+      callback(list);
+    }
+    var query = (keyword || "").trim();
+    if (query.length < 1) {
+      callback([]);
+      return;
+    }
+    var lower = query.toLowerCase();
+    var out = [];
+    viewCommands().forEach(function (cmd) {
+      if (cmd.label.toLowerCase().indexOf(lower) >= 0) {
+        cmd._type = 4;
+        out.push(cmd);
+      }
+    });
+    ensureSectorIndex(function (list) {
+      list.filter(function (item) { return item.name.indexOf(query) >= 0; })
+        .slice(0, 4)
+        .forEach(function (item) {
+          out.push({
+            id: "sector:" + item.kind + ":" + item.name,
+            group: "palette.sectors",
+            label: item.name,
+            _type: 2,
+            /** 板块详情联动选中（B1：搜「白酒」落板块页并选中）。 */
+            run: function () {
+              location.hash = "#/sector-val?board=" + encodeURIComponent(item.name) + "&market=a";
+            }
+          });
+        });
+      Promise.all([
+        fetch("/api/market/search?limit=6&q=" + encodeURIComponent(query), { cache: "no-store" })
+          .then(function (r) { return r.json(); }).catch(function () { return null; }),
+        fetch("/api/fund/search?limit=5&q=" + encodeURIComponent(query), { cache: "no-store" })
+          .then(function (r) { return r.json(); }).catch(function () { return null; })
+      ]).then(function (res) {
+        var stocks = (res[0] && res[0].data && (res[0].data.items || res[0].data.list)) || [];
+        stocks.slice(0, 6).forEach(function (item) {
+          var symbol = item.symbol || item.code || "";
+          if (!symbol) {
+            return;
+          }
+          out.push({
+            id: "stock:" + symbol,
+            group: "palette.stocks",
+            label: (item.name || "") + " " + symbol,
+            _type: 3,
+            run: function () {
+              location.hash = "#/stock?symbol=" + encodeURIComponent(symbol) +
+                "&market=" + encodeURIComponent(item.market || "a");
+            }
+          });
+        });
+        var funds = (res[1] && res[1].data && (res[1].data.items || res[1].data.list)) || [];
+        funds.slice(0, 5).forEach(function (item) {
+          if (!item || !item.code) {
+            return;
+          }
+          out.push({
+            id: "fund:" + item.code,
+            group: "palette.funds",
+            label: (item.name || "") + " " + item.code,
+            _type: 1,
+            run: function () {
+              location.hash = "#/fund?code=" + encodeURIComponent(item.code);
+            }
+          });
+        });
+        finish(out);
+      }).catch(function () { finish(out); });
+    });
+  }
+
   function searchCommand(keyword) {
     var query = (keyword || "").trim();
     if (!query) {
@@ -260,7 +399,7 @@
   }
 
   var paletteNode = null;
-  var paletteState = { items: [], index: 0 };
+  var paletteState = { items: [], dynamic: [], index: 0 };
 
   /** 渲染候选列表。
    * @param {*} input 输入框节点
@@ -273,7 +412,8 @@
     var keyword = (input || "").trim().toLowerCase();
     var list = paletteNode.querySelector(".ui-palette-list");
     list.innerHTML = "";
-    var filtered = paletteState.items.filter(function (item) {
+    var all = paletteState.items.concat(paletteState.dynamic || []);
+    var filtered = all.filter(function (item) {
       return !keyword || (item.label + " " + item.group).toLowerCase().indexOf(keyword) >= 0;
     });
     if (!filtered.length) {
@@ -326,17 +466,34 @@
     if (keyword) {
       input.value = keyword;
     }
-    paletteState.items = viewCommands().concat(actionCommands()).concat(searchCommand(keyword));
+    paletteState.items = viewCommands().concat(actionCommands());
+    paletteState.dynamic = [];
     paletteState.index = 0;
     renderPaletteList(input.value);
+    if (keyword) {
+      refreshEntities();
+    }
     widgetCommands(function (commands) {
       paletteState.items = paletteState.items.concat(commands);
       renderPaletteList(input.value);
     });
 
+    var entityTimer = null;
+    /** 输入即本地过滤；320ms 后补远程实体结果（避免逐字打满接口）。 */
+    function refreshEntities() {
+      window.clearTimeout(entityTimer);
+      entityTimer = window.setTimeout(function () {
+        entityCommands(input.value, function (commands) {
+          paletteState.dynamic = commands;
+          paletteState.index = 0;
+          renderPaletteList(input.value);
+        });
+      }, 320);
+    }
     input.addEventListener("input", function () {
       paletteState.index = 0;
       renderPaletteList(input.value);
+      refreshEntities();
     });
     input.addEventListener("keydown", function (event) {
       var filtered = paletteNode && paletteNode._filtered ? paletteNode._filtered : [];

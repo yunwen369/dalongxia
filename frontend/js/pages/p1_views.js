@@ -65,10 +65,10 @@
     if (!node) {
       return;
     }
-    var pulse = buildCard("td-pulse", "市场脉搏", "pg-col-6", "sentiment/market · market/index");
-    var feed = buildCard("td-feed", "与你有关 · 要闻", "pg-col-6", "news/flash");
-    var sector = buildCard("td-sector", "板块领涨 / 领跌", "pg-col-6", "sector/industry");
-    var discipline = buildCard("td-discipline", "投资纪律检查", "pg-col-6", "本地规则引擎 · 八原则");
+    var pulse = buildCard("td-pulse", "市场脉搏", "pg-col-6", "/api/sentiment/market · 指数与涨跌家数");
+    var feed = buildCard("td-feed", "与你有关 · 要闻", "pg-col-6", "/api/news/flash · 财联社快讯");
+    var sector = buildCard("td-sector", "板块领涨 / 领跌", "pg-col-6", "/api/sector/industry · 行业快照");
+    var discipline = buildCard("td-discipline", "投资纪律检查", "pg-col-6", "本地规则引擎 · 八原则阈值");
     [pulse, feed, sector, discipline].forEach(function (card) {
       node.appendChild(card.card);
       setLoading(card.body);
@@ -249,8 +249,8 @@
     if (!node) {
       return;
     }
-    var indexCard = buildCard("mk-index", "核心指数", "pg-col-12", "market/index");
-    var chartCard = buildCard("mk-chart", "指数走势", "pg-col-12", "market/index-kline · 日线");
+    var indexCard = buildCard("mk-index", "核心指数", "pg-col-12", "/api/market/index");
+    var chartCard = buildCard("mk-chart", "指数走势", "pg-col-12", "/api/market/index-kline · 日线");
     node.appendChild(indexCard.card);
     node.appendChild(chartCard.card);
     setLoading(indexCard.body);
@@ -349,8 +349,8 @@
       return;
     }
     var query = (params && params.q) || "";
-    var searchCard = buildCard("fr-search", "财报检索", "pg-col-12", "stock/financial-report · 三市场");
-    var summaryCard = buildCard("fr-summary", "中文摘要", "pg-col-12", "ai/summary · P4 流水线");
+    var searchCard = buildCard("fr-search", "财报检索", "pg-col-12", "/api/stock/financial-report · 三市场");
+    var summaryCard = buildCard("fr-summary", "中文摘要", "pg-col-12", "/api/ai/summary · P4 流水线");
     node.appendChild(searchCard.card);
     node.appendChild(summaryCard.card);
     buildSearchBar(searchCard, query, function (value, done) {
@@ -363,7 +363,9 @@
     if (query) {
       runFinSearch(searchCard, summaryCard, query);
     } else {
-      setEmpty(searchCard.body, "输入股票代码或简称后回车检索（例：600519 / 宁德时代）", null);
+      // 注意：此处不能用 setEmpty 覆盖 body —— 会把上方的检索条一并清掉（P1 动态验收逮到的缺陷）。
+      searchCard.body.appendChild(el("p", "pg-hint", "输入股票代码或简称后回车检索（例：600519 / 宁德时代）"));
+      searchCard.body.setAttribute("data-state", "empty");
       renderSummaryPlaceholder(summaryCard);
     }
   }
@@ -416,7 +418,7 @@
     api("/api/news/financial-search?q=" + encodeURIComponent(value) + "&market=a&limit=20")
       .then(function (body) {
         var data = unwrap(body);
-        var items = data.items || [];
+        var items = data.items || data.list || [];  // 该端点契约字段为 list
         setBadges(searchCard.card, data.source || "巨潮/东财", data.caliber || "财报检索", false);
         holder.innerHTML = "";
         if (!items.length) {
@@ -425,13 +427,23 @@
         }
         var rows = items.slice(0, 20).map(function (item) {
           return [
-            (item.date || "").slice(0, 10),
+            String(item.pubTime || item.date || "").slice(0, 10),
             item.title || item.name || "",
             item.market_label || item.market || "",
             item.type || "定期报告"
           ];
         });
         renderTable(holder, ["披露日", "标题", "市场", "类型"], rows, null, "table-scroll");
+        Array.prototype.forEach.call(holder.querySelectorAll("tr"), function (tr, index) {
+          var item = items[index];
+          if (!item || !item.code) {
+            return;
+          }
+          tr.setAttribute("data-ctx", "stock");
+          tr.setAttribute("data-symbol", item.code);
+          tr.setAttribute("data-name", item.company || item.name || "");
+          tr.setAttribute("data-market", item.market || "a");
+        });
         holder.setAttribute("data-state", "default");
         renderSummaryPlaceholder(summaryCard, items[0]);
       })
@@ -460,7 +472,7 @@
       return;
     }
     var query = (params && params.q) || "";
-    var card = buildCard("an-search", "公告检索 · 三市场", "pg-col-12", "news/financial-search + financial-detail");
+    var card = buildCard("an-search", "公告检索 · 三市场", "pg-col-12", "/api/news/financial-search + financial-detail");
     node.appendChild(card.card);
     buildSearchBar(card, query, function (value, done) {
       var holder = el("div", "p1-result");
@@ -469,7 +481,7 @@
       api("/api/news/financial-search?q=" + encodeURIComponent(value) + "&market=a&limit=30")
         .then(function (body) {
           var data = unwrap(body);
-          var items = data.items || [];
+          var items = data.items || data.list || [];  // 该端点契约字段为 list
           setBadges(card.card, data.source || "巨潮/东财", data.caliber || "公告检索", false);
           holder.innerHTML = "";
           if (!items.length) {
@@ -485,9 +497,12 @@
           table.appendChild(head);
           items.slice(0, 30).forEach(function (item) {
             var tr = el("tr");
-            tr.appendChild(el("td", "", (item.date || "").slice(0, 10)));
+            tr.appendChild(el("td", "", String(item.pubTime || item.date || "").slice(0, 10)));
             tr.appendChild(el("td", "", item.title || ""));
             tr.appendChild(el("td", "", item.market_label || item.market || ""));
+            tr.setAttribute("data-ctx", "news");
+            tr.setAttribute("data-title", item.title || "");
+            tr.setAttribute("data-url", item.docUrl || "");
             var td = el("td");
             var view = el("button", "pg-btn pg-btn-sm", "看正文");
             view.type = "button";
@@ -507,11 +522,15 @@
           done();
         });
     });
-    if (query) {
-      setEmpty(card.body, "按回车重新检索", null);
-    } else {
-      setEmpty(card.body, "输入代码或简称检索公告；正文经东财 art_code 链取回（A 股）", null);
-    }
+    // 注意：此处不能用 setEmpty 覆盖 body —— 会把上方的检索条一并清掉（P1 动态验收逮到的缺陷）。
+    card.body.appendChild(el(
+      "p",
+      "pg-hint",
+      query
+        ? "按回车或点「检索」重新查询；正文经东财 art_code 链取回（A 股）"
+        : "输入代码或简称检索公告；正文经东财 art_code 链取回（A 股）"
+    ));
+    card.body.setAttribute("data-state", "empty");
   }
 
   /** 公告正文：分页拼接，>6000 字截断标注（AN-01 口径）。 */
@@ -565,7 +584,7 @@
       return;
     }
     var code = (params && params.code) || state.fundCode || "017811";
-    var card = buildCard("mg-profile", "基金经理画像", "pg-col-12", "fund/info · 经理与在管");
+    var card = buildCard("mg-profile", "基金经理画像", "pg-col-12", "/api/fund/info · 经理与在管");
     node.appendChild(card.card);
     buildSearchBar(card, code, function (value, done) {
       history.replaceState(null, "", "#/mgr?code=" + encodeURIComponent(value));
@@ -586,6 +605,9 @@
         holder.innerHTML = "";
         var manager = data.manager || data.fund_manager || "";
         var grid = el("div", "mg-grid");
+        grid.setAttribute("data-ctx", "fund");
+        grid.setAttribute("data-code", code);
+        grid.setAttribute("data-name", data.name || "");
         [
           ["基金", (data.name || "无数据") + (data.code ? " " + data.code : "")],
           ["基金经理", manager || "无数据"],
@@ -658,7 +680,7 @@
     if (!node) {
       return;
     }
-    var card = buildCard("cd-list", "候选池", "pg-col-12", "fund/candidates · 全市场快照筛选");
+    var card = buildCard("cd-list", "候选池", "pg-col-12", "/api/fund/candidates · 全市场快照筛选");
     node.appendChild(card.card);
     setLoading(card.body);
     api("/api/fund/candidates?limit=200")
@@ -686,6 +708,17 @@
             location.hash = "#/stock?symbol=" + encodeURIComponent(item.code);
           }
         }, "table-scroll");
+        // GL-03：候选行右键 → 标的菜单（显式声明，避免兜底推断误判）
+        Array.prototype.forEach.call(card.body.querySelectorAll("tr"), function (tr, index) {
+          var item = items[index];
+          if (!item || !item.code) {
+            return;
+          }
+          tr.setAttribute("data-ctx", "stock");
+          tr.setAttribute("data-symbol", item.code);
+          tr.setAttribute("data-name", item.name || "");
+          tr.setAttribute("data-market", item.market || "a");
+        });
         card.body.setAttribute("data-state", "default");
       })
       .catch(function (err) {

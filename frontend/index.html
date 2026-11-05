@@ -43,6 +43,8 @@
   <script src="js/pages/watchlist.js" defer></script>
   <script src="js/pages/screener.js" defer></script>
   <script src="js/pages/alerts.js" defer></script>
+  <script src="js/core/tree.js" defer></script>
+  <script src="js/core/ctxmenu.js" defer></script>
   <script src="js/pages/p1_views.js" defer></script>
   <script src="js/pages/init.js" defer></script>
   <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
@@ -116,11 +118,11 @@
             <summary class="sb-group-h" data-i18n="grp.market">行情市场</summary>
             <ul class="sidebar-list">
               <li class="sidebar-item" data-action="view" data-view="market" data-view-target="market" data-i18n="nav.marketOverview">市场概览</li>
-              <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macro">宏观数据</li>
+              <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macroData">宏观数据</li>
               <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectorsMap">板块云图</li>
               <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorDetail">板块详情</li>
               <li class="sidebar-item" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.moneyFlow">资金流向</li>
-              <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fund">基金详情</li>
+              <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fundDetail">基金详情</li>
               <li class="sidebar-item" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合诊断</li>
             </ul>
           </details>
@@ -129,8 +131,8 @@
           <details class="sb-group" data-group="research" open>
             <summary class="sb-group-h" data-i18n="grp.research">投研分析</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股研究</li>
-              <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">新闻情绪</li>
+              <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stockResearch">个股研究</li>
+              <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.newsSenti">新闻情绪</li>
               <li class="sidebar-item" data-action="view" data-view="fin" data-view-target="fin" data-i18n="nav.finSummary">财报摘要</li>
               <li class="sidebar-item" data-action="view" data-view="ann" data-view-target="ann" data-i18n="nav.annLib">公告库·正文</li>
               <li class="sidebar-item" data-action="view" data-view="tools" data-view-target="tools" data-i18n="nav.tools">工具</li>
@@ -154,7 +156,7 @@
           <details class="sb-group" data-group="sys" open>
             <summary class="sb-group-h" data-i18n="grp.sys">系统</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.settings">系统设置</li>
+              <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.sysSettings">系统设置</li>
               <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">连接器</li>
               <li class="sidebar-item" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
             </ul>
