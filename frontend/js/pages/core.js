@@ -493,7 +493,12 @@
     } else if (name === "stock") {
       P.renderStock(parsed.params);
     } else if (name === "sector-val") {
-      P.renderSectorVal(parsed.params);
+      // P2：板块详情（SD-01~07）；旧估值页实现保留在 sectorval.js，作为单板块估值的内嵌能力
+      if (typeof P.renderSectorDetail === "function") {
+        P.renderSectorDetail(parsed.params);
+      } else {
+        P.renderSectorVal(parsed.params);
+      }
     } else if (name === "news") {
       P.renderNews(parsed.params);
     } else if (name === "fund") {
