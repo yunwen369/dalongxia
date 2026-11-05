@@ -457,6 +457,17 @@
     });
   }
 
+  /** R18：检索进行中禁用按钮并注明原因，防止重复提交被静默忽略。 */
+  function fsSetBusy(busy) {
+    var btn = document.getElementById("fs-search-btn");
+    if (!btn) {
+      return;
+    }
+    btn.disabled = Boolean(busy);
+    btn.textContent = busy ? t("fs.searching") : t("fs.search");
+    btn.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
   /** 拉取财报/公告结果（reset=true 重新检索，false 追加下一页）。
    * @param {boolean} reset 是否重置分页与已累积结果
    */
@@ -474,6 +485,7 @@
     }
     var seq = ++fsState.seq;
     fsState.loading = true;
+    fsSetBusy(true);
     if (reset) {
       fsSetState("loading");
     }
@@ -488,6 +500,7 @@
         return;  // 过期响应丢弃
       }
       fsState.loading = false;
+      fsSetBusy(false);
       var rows = (data && data.list) || [];
       fsState.total = (data && data.total) || 0;
       fsState.rows = fsState.rows.concat(rows);
@@ -497,6 +510,7 @@
       }
       if (!rows.length && !fsState.rows.length) {
         fsState.loading = false;
+        fsSetBusy(false);
         fsSetState("empty", (data && data.caliber) || "");
         return;
       }
@@ -507,6 +521,7 @@
         return;
       }
       fsState.loading = false;
+      fsSetBusy(false);
       fsSetState("error", (error && error.message) || "", function () {
         loadFinancialSearch(true);
       });
@@ -525,6 +540,7 @@
   P.fsMarketLabel = fsMarketLabel;
   P.fsOpenDetail = fsOpenDetail;
   P.fsRenderRows = fsRenderRows;
+  P.fsSetBusy = fsSetBusy;
   P.fsSetCount = fsSetCount;
   P.fsSetState = fsSetState;
   P.fsState = fsState;
