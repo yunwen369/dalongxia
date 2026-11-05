@@ -33,18 +33,20 @@ from ui_clickthrough import CDP, eval_js, page_ws  # noqa: E402  复用极简 CD
 
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
-# (页面标识, hash, 人类可读名, 断言选择器, 期望最小卡片数)
+# (页面标识, hash, 人类可读名, 断言选择器, 期望最小卡片数, 附加断言 JS 表达式或 None)
 PAGES = [
     ("today", "#/today", "今日研判", "#page-today .pg-card", 4),
     ("workspace", "#/dashboard", "自定义工作区", "#page-dashboard", 1),
     ("market", "#/market", "市场概览", "#page-market .pg-card", 2),
     ("macro", "#/macro", "宏观数据", "#page-macro", 1),
     ("sectors", "#/sectors", "板块云图", "#page-sectors", 1),
-    ("sector", "#/sector-val", "板块详情", "#page-sector-val", 1),
+    ("sector", "#/sector-val", "板块详情", "#page-sector-val .pg-card", 6,
+     "document.querySelectorAll('#page-sector-val .sd-head-cell').length >= 5 && !!document.querySelector('#page-sector-val canvas')"),
     ("money", "#/lhb", "资金流向", "#page-lhb", 1),
     ("fund", "#/fund", "基金详情", "#page-fund", 1),
     ("combo", "#/fund-combo", "基金组合诊断", "#page-fund-combo .page-toolbar", 0),
-    ("stock", "#/stock", "个股研究", "#page-stock", 1),
+    ("stock", "#/stock", "个股研究", "#page-stock .pg-card", 11,
+     "document.querySelectorAll('#ST-12 .st-detail-cell').length === 22"),
     ("news", "#/news", "新闻情绪", "#page-news", 1),
     ("fin", "#/fin", "财报摘要", "#page-fin .pg-card", 2),
     ("ann", "#/ann", "公告库·正文", "#page-ann .pg-card", 1),
@@ -253,7 +255,9 @@ def main() -> int:
     time.sleep(6)
 
     records = []
-    for key, hash_, label, selector, min_cards in PAGES:
+    for item in PAGES:
+        key, hash_, label, selector, min_cards = item[:5]
+        extra_check = item[5] if len(item) > 5 else None
         eval_js(cdp, "location.hash='%s'" % hash_)
         time.sleep(1.2)
         # 等页面自身四态稳定（不再有 loading），再截图；否则会拍到骨架屏（P1 首轮验收踩过）
@@ -277,6 +281,9 @@ def main() -> int:
         png = os.path.join(shots, "%s.png" % key)
         time.sleep(0.8)  # 等渲染管线刷新，避免截到上一帧（骨架屏）
         ok_shot = shot(cdp, png)
+        extra_ok = True
+        if extra_check:
+            extra_ok = bool(eval_js(cdp, "(function(){ try { return !!(" + extra_check + "); } catch(e) { return false; } })()"))
         ok = (
             probe["pageId"] is not None
             and probe["cards"] >= min_cards
@@ -284,6 +291,7 @@ def main() -> int:
             and probe["textLen"] > 20
             and not probe["errs"]
             and ok_shot
+            and extra_ok
         )
         records.append({
             "page": key, "label": label, "hash": hash_,
@@ -292,6 +300,7 @@ def main() -> int:
             "textHead": probe["textHead"], "selectorHits": found,
             "errors": probe["errs"], "consoleErrors": probe["cerr"],
             "canvas": probe["hasCanvas"], "screenshot": ok_shot,
+            "extraCheck": bool(extra_ok) if extra_check else None,
             "pass": ok,
         })
         print(("[PASS] " if ok else "[FAIL] ") + f"{label:<12} cards={probe['cards']} states={probe['states']} err={len(probe['errs'])}")

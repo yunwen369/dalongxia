@@ -117,6 +117,14 @@
       history.replaceState(null, "", "#/sector-val?board=" + encodeURIComponent(value));
       renderSectorDetail({ board: value });
     };
+    // 聚焦即全选：预填的是当前板块名，用户直接输入应替换而非拼接（P2 验收发现）
+    input.addEventListener("focus", function () {
+      input.select();
+    });
+    // 聚焦即全选：预填的是当前板块名，用户直接输入应替换而非拼接（P2 验收发现）
+    input.addEventListener("focus", function () {
+      input.select();
+    });
     go.addEventListener("click", apply);
     input.addEventListener("keydown", function (event) {
       if (event.key === "Enter") {
@@ -181,6 +189,7 @@
         ["今日涨幅", (row.pct > 0 ? "+" : "") + num(row.pct, 2) + "%", pctClass(row.pct)],
         ["成交额", num(row.amount || (Number(row.inflow) || 0) + (Number(row.outflow) || 0), 2) + " 亿", ""],
         ["主力净额", (row.net_inflow > 0 ? "+" : "") + num(row.net_inflow, 2) + " 亿", pctClass(row.net_inflow)],
+        ["净额口径", row.flow_source || "同花顺", ""],
         // cons 端点固定返回前 100 只（接口上限），故如实标注取样口径，不冒充全量
         ["成分涨跌", "涨 " + up + " / 跌 " + down + (items.length ? "（取样 " + items.length + " 只）" : ""), ""],
         ["拥挤度", num(crowd.score, 1) + (crowd.level ? "（" + crowd.level + "）" : ""), Number(crowd.score) >= 80 ? "down" : ""]
@@ -355,6 +364,20 @@
         card.body.innerHTML = "";
         if (!row) {
           setEmpty(card.body, "该板块无四档资金数据（概念板块暂不覆盖）", function () { loadFlow(card, board); });
+          return;
+        }
+        var hasTiers = row.super_big !== null && row.super_big !== undefined;
+        if (!hasTiers) {
+          // 90 行业里仅部分板块做了成分股四档聚合（flow_source 标明），
+          // 未聚合板块只有同花顺口径的主力净额，不能画 0 值条冒充「无资金进出」。
+          var onlyNet = el("div", "sd-flow-net");
+          onlyNet.appendChild(el("span", "", "主力净额（" + (row.flow_source || "同花顺") + " 口径）"));
+          onlyNet.appendChild(el("b", pctClass(row.net_inflow), (row.net_inflow > 0 ? "+" : "") + num(row.net_inflow, 2) + " 亿"));
+          card.body.appendChild(onlyNet);
+          card.body.appendChild(el("p", "pg-hint",
+            "该板块尚未做成分股四档聚合（当前 90 个行业中 14 个已聚合），故只展示主力净额；" +
+            "四档明细见「资金流向」页或已聚合板块（如光伏设备）。"));
+          card.body.setAttribute("data-state", "default");
           return;
         }
         var tiers = [

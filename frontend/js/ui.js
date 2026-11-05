@@ -417,7 +417,11 @@
       return !keyword || (item.label + " " + item.group).toLowerCase().indexOf(keyword) >= 0;
     });
     if (!filtered.length) {
-      list.appendChild(el("div", "ui-palette-empty", t("palette.noResult")));
+      // 远程实体（板块/股票/基金）检索是异步的：加载中给出「搜索中…」，
+      // 否则用户输入「白酒」时会看到一个空白面板，误以为无结果。
+      var text = paletteState.loading ? "搜索中…" : t("palette.noResult");
+      list.appendChild(el("div", "ui-palette-empty", text));
+      paletteNode._filtered = [];
       return;
     }
     paletteState.index = Math.min(paletteState.index, filtered.length - 1);
@@ -483,7 +487,10 @@
     function refreshEntities() {
       window.clearTimeout(entityTimer);
       entityTimer = window.setTimeout(function () {
+        paletteState.loading = true;
+        renderPaletteList(input.value);
         entityCommands(input.value, function (commands) {
+          paletteState.loading = false;
           paletteState.dynamic = commands;
           paletteState.index = 0;
           renderPaletteList(input.value);

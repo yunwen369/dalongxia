@@ -110,8 +110,13 @@ def main() -> int:
       i.dispatchEvent(new Event('input', {bubbles: true}));
       return true;
     })()""")
-    time.sleep(1.2)
-    hits = eval_js(cdp, "document.querySelectorAll('.ui-palette [data-cmd], .ui-palette-item, .ui-palette li').length")
+    # 远程实体联想是异步的（320ms 防抖 + 网络），轮询等待命中而不是固定 sleep
+    hits = 0
+    for _ in range(16):
+        time.sleep(0.5)
+        hits = eval_js(cdp, "document.querySelectorAll('.ui-palette-item').length")
+        if hits:
+            break
     shot(cdp, os.path.join(out, "GL01_cmdk_search.png"))
     key(cdp, key_name="Escape", code="Escape", vk=27)
     time.sleep(0.6)
