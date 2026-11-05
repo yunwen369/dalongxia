@@ -841,3 +841,41 @@
   #page-sector-val > .pg-card.g-7,
   #page-sector-val > .pg-card.g-5 { grid-column: span 12; }
 }
+
+/* 个股行情明细 22 字段网格（ST-02，第十轮 P2） */
+.st-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 1280px) {
+  .st-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.st-detail-cell {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.st-detail-k {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-detail-v {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

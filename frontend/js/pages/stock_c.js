@@ -481,6 +481,9 @@
     paintProfile(payload.profile, payload.holders, payload.summary);
     paintFinancial({ summary: payload.summary, trend: payload.trend });
     paintHolders(payload.holders);
+    if (typeof P.paintStockDetail === "function") {
+      P.paintStockDetail(payload);  // ST-02 行情明细 22 字段（P2）
+    }
   }
 
   // ---- 导出到 window.Pages（供兄弟模块与 init 使用） ----
