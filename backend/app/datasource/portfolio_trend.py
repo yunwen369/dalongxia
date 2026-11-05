@@ -134,7 +134,7 @@ def load_trend(days: int = 90) -> Dict[str, Any]:
         if not isinstance(record, dict) or not record.get("date"):
             continue
         items.append(record)
-    return {
+    result: Dict[str, Any] = {
         "items": items,
         "count": len(items),
         "from": items[0]["date"] if items else None,
@@ -144,3 +144,9 @@ def load_trend(days: int = 90) -> Dict[str, Any]:
         "market_status": "本地快照",
         "is_realtime": False,
     }
+    if not items:
+        # 目录已建但尚无快照（新装 / 首次运行）时也必须给引导，
+        # 否则前端只剩空列表（P2 契约用例发现：原实现仅目录不存在才给 hint）
+        result["hint"] = "尚无快照：服务需在交易日 15:05 后运行一次才会产生首个数据点"
+    return result
+
