@@ -41,7 +41,15 @@
     alerts: t("nav.alerts"),
     yjb: t("nav.yjbHoldings"),
     connectors: t("nav.connectors"),
-    settings: t("nav.settings")
+    settings: t("nav.settings"),
+    // 第十轮 P1 新 IA
+    today: "今日研判",
+    market: "市场概览",
+    fin: "财报摘要",
+    ann: "公告库 · 正文",
+    mgr: "经理画像",
+    tools: "工具",
+    cand: "候选池"
   };
 
   let toastTimer = null;

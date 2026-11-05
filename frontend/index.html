@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="css/pages.css">
   <!-- 阶段 6：仪表板与全局浮层样式 -->
   <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/p1.css">
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
   <!-- 阶段 6：国际化与本地化（最先加载，供后续脚本取词） -->
   <script src="js/i18n.js" defer></script>
@@ -21,7 +22,29 @@
   <script src="js/market.js" defer></script>
   <script src="js/app.js" defer></script>
   <!-- 阶段 5.1：#/sectors、#/stock、#/sector-val 三视图与 hash 路由 -->
-  <script src="js/pages.js" defer></script>
+  <script src="js/pages/core.js" defer></script>
+  <script src="js/pages/sectors.js" defer></script>
+  <script src="js/pages/stock_a.js" defer></script>
+  <script src="js/pages/stock_b.js" defer></script>
+  <script src="js/pages/stock_c.js" defer></script>
+  <script src="js/pages/combo.js" defer></script>
+  <script src="js/pages/crowding.js" defer></script>
+  <script src="js/pages/sectorval.js" defer></script>
+  <script src="js/pages/fins.js" defer></script>
+  <script src="js/pages/news.js" defer></script>
+  <script src="js/pages/fund.js" defer></script>
+  <script src="js/pages/portfolio.js" defer></script>
+  <script src="js/pages/connectors.js" defer></script>
+  <script src="js/pages/yjb.js" defer></script>
+  <script src="js/pages/charting.js" defer></script>
+  <script src="js/pages/settings.js" defer></script>
+  <script src="js/pages/macro.js" defer></script>
+  <script src="js/pages/valuation.js" defer></script>
+  <script src="js/pages/watchlist.js" defer></script>
+  <script src="js/pages/screener.js" defer></script>
+  <script src="js/pages/alerts.js" defer></script>
+  <script src="js/pages/p1_views.js" defer></script>
+  <script src="js/pages/init.js" defer></script>
   <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
   <script src="js/copilot.js" defer></script>
   <!-- 阶段 6：全局交互（命令面板/模态框）与组件化仪表板 -->
@@ -71,76 +94,73 @@
 
     <div class="body">
       <!-- ② 可折叠仪表板侧栏：宽 236px -->
-      <aside class="sidebar" role="complementary" aria-label="仪表板侧栏">
-        <div class="sidebar-title" data-i18n="page.dashboard">仪表板</div>
-        <div class="sidebar-heading" data-i18n="sidebar.myDashboards">我的仪表板</div>
-        <!-- R3-02：分组树由 dashboard.js 动态渲染（含重命名/复制/分组/删除后的即时刷新） -->
-        <ul class="sidebar-list" id="sidebar-dashboards"></ul>
-        <ul class="sidebar-list">
-          <!-- R6-08 / F6-02：删除侧栏「新建仪表板」—— 新建入口收敛为工具栏「+ 新建」与画布右键菜单，
-               避免同一操作在侧栏/工具栏/右键三处重复。管理页与组件库为独立路由，保留唯一入口。 -->
-          <!-- DS-01/DS-02：管理页与组件库页改为独立路由（可直达 URL），不再是页内工具栏/抽屉独占 -->
-          <li class="sidebar-item" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
-          <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <!-- R6-13 / F6-13：侧栏按一级分组呈现二级入口，组名与顶栏一一对应 -->
-        <!-- 第七轮目录重排：按「工作流阶段」三级归置，一组一件事，组内不再混装 -->
-        <div class="sidebar-heading" data-i18n="nav.marketTrend">市场 · 大势</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectors">板块行情</li>
-          <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macro">宏观与周期</li>
-          <li class="sidebar-item" data-action="view" data-view="valuation" data-view-target="valuation" data-i18n="nav.valuation">估值分位</li>
-          <li class="sidebar-item" data-action="view" data-view="crowding" data-view-target="crowding" data-i18n="nav.crowding">板块拥挤度</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.marketStock">市场 · 个股</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股详情</li>
-          <li class="sidebar-item" data-action="view" data-view="charting" data-view-target="charting" data-i18n="nav.charting">图表分析</li>
-          <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorVal">板块估值</li>
-          <!-- 第七轮 M9：全市场筛选器（本地快照条件查询） -->
-          <li class="sidebar-item" data-action="view" data-view="screener" data-view-target="screener" data-i18n="nav.screener">筛选器</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.watchlist">自选股</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">我的自选</li>
-        </ul>
-        <!-- W-03：自选分组树（市场分组 + 数量徽章），由 pages.js 按 /api/watchlist 计数动态渲染 -->
-        <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.newsGroup">资讯</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">资讯流</li>
-          <li class="sidebar-item" id="side-financial-search" data-action="fs" data-i18n="fs.entry.title">财报 / 公告搜索</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.money">资金</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.lhb">龙虎榜</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.portfolioGroup">组合</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.portfolio">持仓</li>
-          <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fund">场外基金</li>
-          <!-- 第七轮 M5：基金组合（诊断 + 评估），合规：只做结构诊断不荐基 -->
-          <li class="sidebar-item" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.yjb">养基宝</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">账户与持仓</li>
-        </ul>
-        <div class="sidebar-divider"></div>
-        <div class="sidebar-heading" data-i18n="nav.system">系统</div>
-        <ul class="sidebar-list">
-          <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">数据连接器</li>
-          <!-- 第七轮 M6：提醒中心（顶栏铃铛也可进入，侧栏补常驻入口） -->
-          <li class="sidebar-item" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
-          <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.settings">设置</li>
-        </ul>
+      <aside class="sidebar" role="complementary" aria-label="主导航">
+        <div class="sb-search">
+          <input id="sb-search" type="search" placeholder="搜索页面 / 功能…" autocomplete="off" aria-label="搜索页面">
+        </div>
+        <nav class="sb-tree" id="sb-tree" aria-label="页面目录">
+
+          <!-- 组1 总览 -->
+          <details class="sb-group" data-group="overview" open>
+            <summary class="sb-group-h" data-i18n="grp.overview">总览</summary>
+            <ul class="sidebar-list">
+              <li class="sidebar-item" data-action="view" data-view="today" data-view-target="today" data-i18n="nav.today">今日研判</li>
+              <li class="sidebar-item" data-action="view" data-view="dashboard" data-view-target="dashboard" data-i18n="nav.workspace">自定义工作区</li>
+              <li class="sidebar-item" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
+              <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
+            </ul>
+          </details>
+
+          <!-- 组2 行情市场 -->
+          <details class="sb-group" data-group="market" open>
+            <summary class="sb-group-h" data-i18n="grp.market">行情市场</summary>
+            <ul class="sidebar-list">
+              <li class="sidebar-item" data-action="view" data-view="market" data-view-target="market" data-i18n="nav.marketOverview">市场概览</li>
+              <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macro">宏观数据</li>
+              <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectorsMap">板块云图</li>
+              <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorDetail">板块详情</li>
+              <li class="sidebar-item" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.moneyFlow">资金流向</li>
+              <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fund">基金详情</li>
+              <li class="sidebar-item" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合诊断</li>
+            </ul>
+          </details>
+
+          <!-- 组3 投研分析 -->
+          <details class="sb-group" data-group="research" open>
+            <summary class="sb-group-h" data-i18n="grp.research">投研分析</summary>
+            <ul class="sidebar-list">
+              <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stock">个股研究</li>
+              <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.news">新闻情绪</li>
+              <li class="sidebar-item" data-action="view" data-view="fin" data-view-target="fin" data-i18n="nav.finSummary">财报摘要</li>
+              <li class="sidebar-item" data-action="view" data-view="ann" data-view-target="ann" data-i18n="nav.annLib">公告库·正文</li>
+              <li class="sidebar-item" data-action="view" data-view="tools" data-view-target="tools" data-i18n="nav.tools">工具</li>
+              <li class="sidebar-item" data-action="view" data-view="cand" data-view-target="cand" data-i18n="nav.cand">候选池</li>
+            </ul>
+          </details>
+
+          <!-- 组4 我的投资 -->
+          <details class="sb-group" data-group="my" open>
+            <summary class="sb-group-h" data-i18n="grp.my">我的投资</summary>
+            <ul class="sidebar-list">
+              <li class="sidebar-item" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.myInvest">我的投资</li>
+              <li class="sidebar-item" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">自选股</li>
+              <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">养基宝</li>
+              <li class="sidebar-item" data-action="view" data-view="mgr" data-view-target="mgr" data-i18n="nav.mgr">经理画像</li>
+            </ul>
+            <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
+          </details>
+
+          <!-- 组5 系统 -->
+          <details class="sb-group" data-group="sys" open>
+            <summary class="sb-group-h" data-i18n="grp.sys">系统</summary>
+            <ul class="sidebar-list">
+              <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.settings">系统设置</li>
+              <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">连接器</li>
+              <li class="sidebar-item" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
+            </ul>
+          </details>
+
+        </nav>
       </aside>
 
       <!-- ③ 主工作区：工具栏 52px + 视图区 -->
@@ -300,6 +320,15 @@
         <section class="page-view" id="page-screener" hidden aria-label="筛选器"></section>
         <!-- 第七轮 M6：提醒中心（#/alerts） -->
         <section class="page-view" id="page-alerts" hidden aria-label="提醒中心"></section>
+
+        <!-- P1 新 IA：7 个新页容器（其余 12 页复用既有 page-view，路由层做映射） -->
+        <section class="page-view" id="page-today" hidden aria-label="今日研判"></section>
+        <section class="page-view" id="page-market" hidden aria-label="市场概览"></section>
+        <section class="page-view" id="page-fin" hidden aria-label="财报摘要"></section>
+        <section class="page-view" id="page-ann" hidden aria-label="公告库正文"></section>
+        <section class="page-view" id="page-mgr" hidden aria-label="经理画像"></section>
+        <section class="page-view" id="page-tools" hidden aria-label="工具"></section>
+        <section class="page-view" id="page-cand" hidden aria-label="候选池"></section>
       </main>
     </div>
   </div>

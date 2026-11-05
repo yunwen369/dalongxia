@@ -317,6 +317,13 @@ def main() -> int:
             return 1
         if args.installer and not make_installer(Path(args.installer_out)):
             return 1
+        # v7.7（2.8 步骤4 / P0-4）：每次部署后刷新根级《开始使用.txt》(build-time artifact)
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import gen_start_guide
+            gen_start_guide.main()
+        except Exception as exc:  # noqa: BLE001 - 指引生成失败不阻断门禁，但须醒目提示
+            print(f"[警告] 开始使用.txt 生成失败，发版前必须手工排查：{exc}")
     ok = gate(target, args.port)
     report = target / "release_gate.json"
     if report.exists():
