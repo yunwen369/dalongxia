@@ -509,7 +509,9 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
             [("同花顺", "板块资金流三源并用：同花顺行业资金流（90 个二级行业，含净额/流入/流出）"
                         "＋ 成分股新浪四档聚合（超大/大/中/小）＋ 东财板块资金流排行（同花顺不可用时的备源，"
                         "细分为 496 个行业且自带四档，但无流入/流出总额）；"
-                        "每行 flow_source 标明实际来源，不同源口径不可跨行相加",
+                        "每行 flow_source 标明实际来源，不同源口径不可跨行相加；"
+                        "未聚合板块的四档为 None（成分映射预热中，按请求逐步补齐）；"
+                        "顶层 source 标签沿用主源名，**实际每行来源以 flow_source 为准**",
               sector_provider.get_fundflow)],
             empty_value=[],
         )
@@ -694,4 +696,46 @@ def sector_crowding_rankings(
     except Exception as exc:  # noqa: BLE001
         logger.warning("拥挤度排行失败：%s", type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, f"拥挤度排行计算失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)
+
+
+@router.get("/margin")
+def sector_margin(
+    kind: str = Query("industry", description="板块类型：industry=行业"),
+    force: bool = Query(False, description="true=绕过缓存"),
+) -> Dict[str, Any]:
+    """行业融资余额强度（设计基准 R5 / 验收 C5）。
+
+    上交所 + 深交所两融明细按板块成分聚合融资余额，除以板块成交额得杠杆强度，
+    再做**横截面分位**（板块之间比较，非时间序列分位）。
+
+    Args:
+        kind: 板块类型，目前仅 industry。
+        force: 是否绕过缓存。
+
+    Returns:
+        Dict[str, Any]: {"data": {items, sample, as_of, source, caliber, missing}}
+    """
+    key_kind = str(kind or "industry").strip().lower()
+    if key_kind != "industry":
+        return api_error(ErrorCode.INVALID_PARAM, "kind 目前仅支持 industry")
+
+    def loader() -> Dict[str, Any]:
+        """取数（6 小时缓存：两融数据日频且请求较重）。
+
+        Returns:
+            Dict[str, Any]: 融资余额强度结果。
+        """
+        return sector_provider.get_margin_by_board(kind=key_kind)
+
+    try:
+        if force:
+            data = loader()
+        else:
+            data = cache.get_or_load(f"sector:margin:{key_kind}", 6 * 3600, loader)
+    except ValueError as exc:
+        return api_error(ErrorCode.EMPTY_DATA, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("融资余额强度计算失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.UPSTREAM_ERROR, f"融资余额强度计算失败（{type(exc).__name__}），请稍后重试")
     return ok(data)

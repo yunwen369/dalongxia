@@ -1391,9 +1391,10 @@ def _cons_cache_file():
     """板块成分映射落盘文件路径。
 
     Returns:
-        Path: ``<CACHE_DIR>/board_cons.json``。
+        Path: ``<DATA_DIR>/board_cons.json``（2026-11-06 从 CACHE_DIR 迁出：
+        清缓存不应连带删掉需要数十分钟预热才能重建的成分映射）。
     """
-    return config.CACHE_DIR / "board_cons.json"
+    return config.DATA_DIR / "board_cons.json"
 
 
 def _load_cons_cache() -> None:
@@ -1491,6 +1492,136 @@ def _ensure_cons_progress(
             built += 1
         except Exception as exc:  # noqa: BLE001 - 单板块失败不影响整表
             logger.info("板块成分补建跳过 %s：%s", name, type(exc).__name__)
+
+
+def get_margin_by_board(*, kind: str = "industry") -> Dict[str, Any]:
+    """行业融资余额强度（设计基准 R5 / 验收 C5）。
+
+    做法：上交所 + 深交所「两融明细」按板块成分映射聚合融资余额，
+    再除以该板块当日成交额得「杠杆强度」，最后做**横截面分位**（板块之间比）。
+
+    为什么用横截面分位而不是时序分位：
+        两融明细只有当日快照（历史需逐日回溯 250 次请求，源站不可承受），
+        无法构成时间序列 ⇒ 与 M3 其他维度（时序分位）不同质，
+        故在拥挤度里以 weight=0 的独立分项呈现，并在 note 里写明口径，
+        不混进 0–100 加权分（避免不同质数值相加）。
+
+    数据源：``stock_margin_detail_sse``（约 2000 行 / 3.6s）+ ``stock_margin_detail_szse``
+    （约 2119 行 / 0.9s），均含「融资余额」（元）。6 小时缓存。
+
+    Args:
+        kind: 目前仅 industry（概念板块无成映射时不参与）。
+
+    Returns:
+        Dict[str, Any]: `{items, sample, as_of, source, caliber, missing}`；
+        items 为 `[{board, balance_yi, amount_yi, intensity, pct}]` 按强度降序。
+    """
+    import akshare as ak
+
+    from backend.app.core import cache as _cache
+
+    def _load() -> Dict[str, Any]:
+        """拉取并聚合一版快照（供缓存 loader 调用）。
+
+        Returns:
+            Dict[str, Any]: 聚合结果。
+        """
+        balances: Dict[str, float] = {}
+        errors: List[str] = []
+        try:
+            sse = ak.stock_margin_detail_sse()
+            code_col = "标的证券代码" if "标的证券代码" in sse.columns else sse.columns[1]
+            for _, row in sse.iterrows():
+                code = str(row.get(code_col) or "").strip()
+                if len(code) != 6 or not code.isdigit():
+                    continue
+                value = row.get("融资余额")
+                if value is None:
+                    continue
+                try:
+                    balances[code] = balances.get(code, 0.0) + float(value)
+                except (TypeError, ValueError):
+                    continue
+        except Exception as exc:  # noqa: BLE001 - 单市场失败降级为部分覆盖
+            errors.append(f"上交所两融明细不可得（{type(exc).__name__}）")
+        try:
+            szse = ak.stock_margin_detail_szse()
+            code_col = "证券代码" if "证券代码" in szse.columns else szse.columns[0]
+            for _, row in szse.iterrows():
+                code = str(row.get(code_col) or "").strip()
+                if len(code) != 6 or not code.isdigit():
+                    continue
+                value = row.get("融资余额")
+                if value is None:
+                    continue
+                try:
+                    balances[code] = balances.get(code, 0.0) + float(value)
+                except (TypeError, ValueError):
+                    continue
+        except Exception as exc:  # noqa: BLE001 - 单市场失败降级为部分覆盖
+            errors.append(f"深交所两融明细不可得（{type(exc).__name__}）")
+
+        if not balances:
+            return {"items": [], "sample": 0, "missing": errors or ["两融明细不可得"]}
+
+        # 板块成交额作分母（同花顺行业资金流表自带 amount，单位亿元）
+        amounts: Dict[str, float] = {}
+        try:
+            for row in ths_http.get_industry_rows():
+                name = row.get("name")
+                if name:
+                    amounts[name] = float(_num(row.get("amount")) or 0.0)
+        except Exception:  # noqa: BLE001 - 分母不可得则只给余额绝对值
+            amounts = {}
+
+        _load_cons_cache()
+        raw: List[Dict[str, Any]] = []
+        for board_name, codes in list(_CONS_CACHE.items()):
+            total = sum(balances.get(code, 0.0) for code in codes)
+            if total <= 0:
+                continue
+            balance_yi = total / 1e8
+            amount_yi = amounts.get(board_name) or 0.0
+            raw.append({
+                "board": board_name,
+                "balance_yi": round(balance_yi, 2),
+                "amount_yi": round(amount_yi, 2),
+                "intensity": round(balance_yi / amount_yi, 4) if amount_yi > 0 else None,
+            })
+
+        # 横截面分位：强度越高 → 分位越高（无强度时退回余额绝对值分位）
+        key = "intensity" if any(x["intensity"] is not None for x in raw) else "balance_yi"
+        values = [x[key] for x in raw if x[key] is not None]
+        if values:
+            for item in raw:
+                v = item.get(key)
+                if v is None:
+                    continue
+                below = sum(1 for x in values if x <= v)
+                item["pct"] = round(below / len(values) * 100, 1)
+        raw.sort(key=lambda x: (x.get("pct") or 0), reverse=True)
+
+        return {
+            "items": raw,
+            "sample": len(balances),
+            "missing": errors,
+        }
+
+    cached = _cache.get_or_load("sector:margin_by_board", 6 * 3600, _load)
+    data = cached if isinstance(cached, dict) else {}
+    items = data.get("items") or []
+    return {
+        "items": items,
+        "sample": data.get("sample") or 0,
+        "as_of": utils.now_text(utils.bj_now()),
+        "source": "上交所/深交所两融明细（按板块成分聚合）",
+        "caliber": (
+            "融资余额=板块成分股融资余额合计（元→亿元）；强度=融资余额/板块成交额；"
+            "分位为**横截面**（板块之间比较），不是时间序列分位；"
+            "分母取同花顺行业成交额，缺失时强度为空并退回余额绝对值排序"
+        ),
+        "missing": data.get("missing") or ([] if items else ["板块成分映射未预热，无法按板块聚合"]),
+    }
 
 
 def _flow_tier(board: str, code: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1827,8 +1958,32 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
             cons_missing.append("成分股换手率不可得（样本报价不足）")
     else:
         cons_missing.append("成分映射尚未预热（服务启动后由后台线程构建，约数分钟）")
-    # ③ 行业融资余额：本机无行业口径源（融资余额仅有全市场口径），如实标注
-    cons_missing.append("行业融资余额分位未纳入（融资余额仅有全市场口径，无行业口径源）")
+    # R5（C5）：行业融资余额强度作为**独立分项**列出（weight=0，不参与加权）。
+    # 依据：两融明细只有当日快照（历史需逐日回溯 250 次请求，源站不可承受），
+    # 无法构成时间序列 ⇒ 只能做横截面分位（板块之间比较），与其他维度（时序分位）不同质，
+    # 故不混进 0–100 加权分，单独呈现并在 note 里写明口径。
+    margin_pct: Optional[float] = None
+    margin_note: str = ""
+    if kind == "industry":
+        try:
+            margin_data = get_margin_by_board(kind="industry")
+            for item in margin_data.get("items") or []:
+                if item.get("board") == board:
+                    margin_pct = item.get("pct")
+                    intensity = item.get("intensity")
+                    balance = item.get("balance_yi")
+                    margin_note = (
+                        f"横截面分位（板块之间比较，非时间序列）；"
+                        f"融资余额 {balance} 亿元 / 强度 {intensity}" if intensity is not None
+                        else f"横截面分位（按余额绝对值排序）；融资余额 {balance} 亿元"
+                    )
+                    break
+            if margin_pct is None and (margin_data.get("items") or []):
+                cons_missing.append(f"融资余额分位不可得（{board} 不在两融覆盖范围内）")
+        except Exception as exc:  # noqa: BLE001 - 单维度失败不阻塞整体
+            cons_missing.append(f"融资余额分位不可得（{type(exc).__name__}）")
+    else:
+        cons_missing.append("概念板块无融资余额分位（仅行业口径支持）")
 
     # R6（C6）：成分股相关性作为**独立分项**列出（weight=0，不参与加权）。
     # 依据：相关系数只有当期值、无历史序列 ⇒ 无法算分位，硬塞进 0–100 分会破坏同质性；
@@ -1849,6 +2004,15 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
                 "无历史分位，权重 0 不参与加权，仅供方向性参考"
             ),
         }
+    if margin_pct is not None:
+        parts["margin"] = {
+            "label": "融资余额强度(横截面)",
+            "value": margin_pct,
+            "pct": round(margin_pct, 1),
+            "weight": 0.0,
+            "unit": "分位",
+            "note": f"{margin_note}；权重 0 不参与加权",
+        }
 
     return {
         "board": board,
@@ -1868,7 +2032,7 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
             f"乖离率 {int(CROWDING_WEIGHTS['bias']*100)}% / 量能偏离 {int(CROWDING_WEIGHTS['volume_share']*100)}% / "
             f"动量 {int(CROWDING_WEIGHTS['momentum']*100)}% / 振幅 {int(CROWDING_WEIGHTS['amplitude']*100)}% / "
             f"距60日高点 {int(CROWDING_WEIGHTS['high_distance']*100)}%）；"
-            f"缺失维度不清零而是按可用权重归一；成分股相关性与换手率见 extra（仅参考，不参与加权）；{CROWDING_MISSING}"
+            f"缺失维度不清零而是按可用权重归一；成分股相关性、换手率、融资余额强度见 parts（权重 0，仅参考，不参与加权）；{CROWDING_MISSING}"
         ),
         "missing": (
             [CROWDING_MISSING]

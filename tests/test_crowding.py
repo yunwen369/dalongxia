@@ -74,9 +74,16 @@ def test_crowding_missing_disclosed(client: TestClient) -> None:
     payload = client.get("/api/sector/crowding", params={"board": "半导体"}).json()
     if payload.get("error"):
         pytest.skip("板块日线本次不可用")
+    parts = payload["data"].get("parts") or []
+    part_labels = {p.get("label", "") for p in parts}
     missing = " ".join(payload["data"].get("missing") or [])
-    for keyword in ("换手率", "融资余额", "成分股相关性"):
-        assert keyword in missing, f"缺失维度未登记：{keyword}"
+    # 换手率 / 成分股相关性 如果不在 parts 里（不可得），必须在 missing 里登记
+    for keyword, label in (("换手率", "换手率"), ("成分股相关性", "成分股相关性")):
+        if not any(label in p for p in part_labels):
+            assert keyword in missing, f"缺失维度未登记：{keyword}"
+    # 融资余额：若 parts 里没有「融资余额强度」分项，则 missing 里必须提及融资余额
+    if not any("融资余额" in p for p in part_labels):
+        assert "融资余额" in missing, "融资余额维度未登记（既不在 parts 也不在 missing）"
 
 
 def test_crowding_unknown_board_is_empty_data(client: TestClient) -> None:
@@ -84,3 +91,22 @@ def test_crowding_unknown_board_is_empty_data(client: TestClient) -> None:
     payload = client.get("/api/sector/crowding", params={"board": "不存在的板块XYZ"}).json()
     assert payload.get("error"), "不存在的板块应返回错误而不是空成功"
     assert payload.get("error_code") in ("EMPTY_DATA", "UPSTREAM_ERROR")
+
+
+def test_margin_by_board_shape(client: TestClient) -> None:
+    """R5：行业融资余额强度端点返回正确结构（含降级态）。"""
+    payload = client.get("/api/sector/margin").json()
+    assert not payload.get("error"), payload.get("error")
+    data = payload["data"]
+    assert "items" in data and isinstance(data["items"], list)
+    assert "sample" in data and isinstance(data["sample"], int)
+    assert "caliber" in data and data["caliber"]
+    # 有数据时：字段完整、分位 0–100、按强度降序
+    if data["items"]:
+        first = data["items"][0]
+        for key in ("board", "balance_yi", "pct"):
+            assert key in first, f"items 缺字段：{key}"
+        pcts = [x["pct"] for x in data["items"] if x.get("pct") is not None]
+        if pcts:
+            assert all(0 <= p <= 100 for p in pcts), "分位应在 0–100"
+            assert pcts == sorted(pcts, reverse=True), "应按分位降序"
