@@ -207,3 +207,96 @@ def test_weight_breakdown_crowd_disabled(monkeypatch):
     assert rows["F1"]["final_weight"] == pytest.approx(18.0, abs=0.01)
     assert rows["F2"]["final_weight"] == pytest.approx(15.0, abs=0.01)
     assert all(row["discount"] == 1.00 for row in data["items"])
+
+
+# ---------------------------------------------------------------
+# R10（设计基准 §8 / 验收 C10）：拥挤度折扣双因子构成（规模环比+重仓换手）
+# ---------------------------------------------------------------
+def test_r10_fund_crowding_has_five_dims(monkeypatch):
+    """自身拥挤度五维：波动/动量/回撤分位 + 规模环比/重仓换手绝对映射，权重和=1。"""
+    fake_nav = {"items": [{"date": f"2026-01-{i:02d}", "nav": 1.0 + (i % 20) * 0.01}
+                          for i in range(1, 30)] * 10}
+    monkeypatch.setattr(fund_module, "get_nav", lambda code, page=1, size=30: fake_nav)
+    monkeypatch.setattr(fund_module, "get_profile_basis",
+                        lambda code: {"scale_mom_pct": 15.0, "scale_series": []})
+    monkeypatch.setattr(fund_combo.tencent, "get_quote",
+                        lambda symbol, market: {"turnover": 2.0})
+    fc = fund_combo.get_fund_crowding("F1")
+    if not fc.get("available"):
+        pytest.skip(f"净值构造样本不足（{fc.get('caliber')}）")
+    weights = {p["label"]: p for p in fc["parts"]}
+    labels = [p["label"] for p in fc["parts"]]
+    assert "规模环比增速" in labels and "重仓股合计换手率" in labels
+    assert abs(sum(p["weight"] for p in fc["parts"]) - 1.0) < 1e-9
+    dc = fc["discount_components"]
+    assert dc["scale_momentum"]["available"] is True
+    assert dc["scale_momentum"]["value"] == 15.0
+    # 环比 +15% → 映射分 50（/30 线性截断）
+    assert dc["scale_momentum"]["pct"] == 50.0
+    assert fc["caliber"].count("五维") >= 1
+
+
+def test_r10_scale_outflow_maps_zero(monkeypatch):
+    """环比为负（资金流出）→ 映射 0 分，不视为拥挤；正流入 ≥+30% → 100 分封顶。"""
+    fake_nav = {"items": [{"date": f"2026-01-{i:02d}", "nav": 1.0 + (i % 20) * 0.01}
+                          for i in range(1, 30)] * 10}
+    monkeypatch.setattr(fund_module, "get_nav", lambda code, page=1, size=30: fake_nav)
+    monkeypatch.setattr(fund_combo.tencent, "get_quote",
+                        lambda symbol, market: {"turnover": 1.0})
+    for mom, expect in ((-52.98, 0.0), (45.0, 100.0)):
+        monkeypatch.setattr(fund_module, "get_profile_basis",
+                            lambda code, m=mom: {"scale_mom_pct": m, "scale_series": []})
+        fc = fund_combo.get_fund_crowding("F1")
+        if not fc.get("available"):
+            pytest.skip("构造样本不足")
+        assert fc["discount_components"]["scale_momentum"]["pct"] == expect
+
+
+def test_r10_scale_missing_not_silently_zero(monkeypatch):
+    """规模序列缺失（QDII）→ available=False + missing 点名，绝不冒充 0 分。"""
+    fake_nav = {"items": [{"date": f"2026-01-{i:02d}", "nav": 1.0 + (i % 20) * 0.01}
+                          for i in range(1, 30)] * 10}
+    monkeypatch.setattr(fund_module, "get_nav", lambda code, page=1, size=30: fake_nav)
+    monkeypatch.setattr(fund_module, "get_profile_basis",
+                        lambda code: {"scale_mom_pct": None, "scale_series": []})
+    monkeypatch.setattr(fund_combo.tencent, "get_quote",
+                        lambda symbol, market: {"turnover": 1.0})
+    fc = fund_combo.get_fund_crowding("968061")
+    dc = (fc.get("discount_components") or {}).get("scale_momentum") or {}
+    assert dc.get("available") is False
+    assert any("规模环比" in note for note in fc.get("missing") or []), fc.get("missing")
+
+
+def test_r10_weight_breakdown_exposes_components(monkeypatch):
+    """C10：weight 明细逐只透出 discount_components（规模环比+重仓换手两项）。"""
+    base = {
+        "items": [{"code": "F1", "name": "基金一"}, {"code": "F2", "name": "基金二"}],
+        "weights": [{"code": "F1", "weight": 18.0}, {"code": "F2", "weight": 15.0}],
+        "missing": [], "disclaimer": "非投资建议",
+    }
+    monkeypatch.setattr(fund_combo, "evaluate", lambda codes, profile: base)
+    # F1 走「自身」口径；F2 自身不可得 → 回退行业代理，构成列应为 None
+    monkeypatch.setattr(
+        fund_combo, "get_fund_crowding",
+        lambda code: {
+            "available": code == "F1", "score": 72.0 if code == "F1" else None,
+            "discount_components": ({"scale_momentum": {"value": 5.0, "pct": 16.7, "available": True, "note": None},
+                                     "holding_turnover": {"value": 3.4, "pct": 34.0, "available": True, "note": "样本 10 只重仓股"}}
+                                    if code == "F1" else None),
+            "caliber": "净值样本不足" if code != "F1" else "",
+        })
+    monkeypatch.setattr(fund_combo, "_ths_boards", lambda: ["半导体", "白酒"])
+    monkeypatch.setattr(fund_module, "get_holding",
+                        lambda code: {"items": [{"code": "688012"}]})
+    monkeypatch.setattr(portfolio_module, "_industry_of",
+                        lambda symbol, market: "电子设备-半导体-集成电路")
+    monkeypatch.setattr(sector, "get_crowding", lambda board: {"score": 88.0})
+    data = fund_combo.weight_breakdown(["F1", "F2"], "balanced", crowd_discount=True)
+    rows = {row["code"]: row for row in data["items"]}
+    # 自身口径：双因子构成齐全（C10 断言）
+    dc1 = rows["F1"]["discount_components"]
+    assert dc1 and dc1["scale_momentum"]["available"] and dc1["holding_turnover"]["available"]
+    # 代理口径：构成列为 None 且 note 声明辅助口径（行业代理保留为辅助项）
+    assert rows["F2"]["crowding_source"] == "重仓行业代理"
+    assert rows["F2"]["discount_components"] is None
+    assert "辅助" in (rows["F2"]["note"] or "")

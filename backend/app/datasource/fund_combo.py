@@ -16,7 +16,10 @@
 - **风格稳定性不可用**：需 8 个季度持仓做重合度，公开接口无历史持仓 →
   该维度固定给中位分 50，并在 `missing` 点名（R8 已根治：`fund.get_style_history`
   取东财季度持仓算重仓行业漂移度，<4 期返回 accumulating 进度态）
-- **拥挤度降权未接入**：需「基金→重仓行业→行业拥挤度」三级映射，成本高，留待 M5b
+- **拥挤度降权（R10 已接入）**：M14 折扣=基金**自身**五维拥挤度（波动率/动量/回撤分位
+  × 0.24 + 规模环比/重仓换手绝对映射 × 0.14，规模环比复用 R7 `get_profile_basis`
+  季度净资产序列）；自身不可得时回退第一大重仓行业代理（crowding_source 标注 + note
+  声明辅助口径）；weight 明细逐只透出 `discount_components` 双因子构成（C10）
 
 权重算法（不用均值-方差，理由见设计基准）：w ∝ (1/σ) × score^0.5，
 再按「权益上限 / 单只 ≤20% / 现金 ≥20%」迭代裁剪。选它是因为 σ 与 score 都相对稳定，
@@ -916,10 +919,24 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
     p_mom = _rank(mom_hist, mom_now, True)
     p_dd = _rank(dd_hist, dd_now, True)
 
-    # R10 新增：重仓股合计换手率（前十大重仓当日换手率均值）。
-    # 只有当期值、无历史序列可算分位 ⇒ 用绝对水平映射（0%→0 分，10% 及以上→100 分），
-    # 与「规模环比增速」共同构成 M14 要求的「基金自身维度」；规模增速因数据源不可得
-    # 在 missing 里如实登记（不编造），详见 caliber。
+    # R10 新增①：规模环比增速（天天基金季度净资产序列，R7 get_profile_basis 铺路）。
+    # 环比为正=资金快速流入（申赎拥挤）；绝对水平映射：环比 ≤0 →0 分，≥+30%→100 分，
+    # 线性中间。QDII 等无披露序列记 None 不参与加权（如实，不冒充）。
+    scale_mom: Optional[float] = None
+    scale_note = ""
+    try:
+        profile_basis = fund_provider.get_profile_basis(code)
+        scale_mom = profile_basis.get("scale_mom_pct")
+        if scale_mom is None:
+            scale_note = "无季度规模序列（QDII/新基金常见）"
+    except Exception as exc:  # noqa: BLE001 - 档案失败不影响其余维度
+        scale_note = f"规模档案不可得（{type(exc).__name__}）"
+    p_scale = None
+    if scale_mom is not None:
+        p_scale = round(min(100.0, max(0.0, scale_mom / 30.0 * 100.0)), 1)
+
+    # R10 新增②：重仓股合计换手率（前十大重仓当日换手率均值）。
+    # 只有当期值、无历史序列可算分位 ⇒ 用绝对水平映射（0%→0 分，10% 及以上→100 分）。
     holding_turnover: Optional[float] = None
     turnover_note = ""
     try:
@@ -947,15 +964,22 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
     if holding_turnover is not None:
         p_turnover = round(min(100.0, max(0.0, holding_turnover * 10)), 1)
 
+    # R10：五维（净值三维分位 0.24×3 + 自身双因子 0.14×2，权重和=1）
     parts = {
         "volatility": {"label": "近60日波动率(年化)", "value": round(vol_now * 100, 2),
-                       "pct": p_vol, "weight": 0.28, "unit": "%"},
+                       "pct": p_vol, "weight": 0.24, "unit": "%"},
         "momentum": {"label": "近20日动量", "value": round((mom_now or 0) * 100, 2),
-                     "pct": p_mom, "weight": 0.28, "unit": "%"},
+                     "pct": p_mom, "weight": 0.24, "unit": "%"},
         "max_drawdown": {"label": "近60日最大回撤", "value": round((dd_now or 0) * 100, 2),
-                         "pct": p_dd, "weight": 0.28, "unit": "%"},
+                         "pct": p_dd, "weight": 0.24, "unit": "%"},
+        # R10 双因子①：规模环比增速（资金流入代理）
+        "scale_momentum": {"label": "规模环比增速", "value": scale_mom,
+                           "pct": p_scale, "weight": 0.14, "unit": "%",
+                           "note": ("绝对水平映射（环比 ≤0→0 分 / ≥+30%→100 分，"
+                                    "正环比=资金快速流入=申赎拥挤）；" + (scale_note or "来源=天天基金季度净资产"))},
+        # R10 双因子②：重仓股合计换手率
         "holding_turnover": {"label": "重仓股合计换手率", "value": round((holding_turnover or 0), 2),
-                             "pct": p_turnover, "weight": 0.16, "unit": "%",
+                             "pct": p_turnover, "weight": 0.14, "unit": "%",
                              "note": ("绝对水平映射（0%→0 分 / ≥10%→100 分）；" + (turnover_note or "无样本"))},
     }
 
@@ -973,7 +997,7 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
         return {
             "code": code, "score": None, "available": False, "level": "不可得",
             "parts": [], "sample_days": len(rows),
-            "caliber": "三维分位均不可用，无法计算自身拥挤度，未折扣",
+            "caliber": "五维均不可用，无法计算自身拥挤度，未折扣",
             "as_of": utils.now_text(utils.bj_now()),
             "missing": missing_parts,
         }
@@ -988,11 +1012,20 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
     return {
         "code": code, "score": score, "available": True, "level": level, "advice": advice,
         "parts": list(parts.values()), "sample_days": len(rows),
+        # R10 / C10：折扣构成两列（规模环比 + 重仓换手）显式透出，供 weight 明细表渲染
+        "discount_components": {
+            "scale_momentum": {"value": scale_mom, "pct": p_scale,
+                               "available": scale_mom is not None, "note": scale_note or None},
+            "holding_turnover": {"value": round(holding_turnover, 2) if holding_turnover is not None else None,
+                                 "pct": p_turnover, "available": holding_turnover is not None,
+                                 "note": turnover_note or None},
+        },
         "caliber": (
-            f"基金自身拥挤度=四维加权（波动率 {int(parts['volatility']['weight']*100)}% / "
+            f"基金自身拥挤度=五维加权（波动率 {int(parts['volatility']['weight']*100)}% / "
             f"动量 {int(parts['momentum']['weight']*100)}% / 最大回撤 {int(parts['max_drawdown']['weight']*100)}% / "
-            f"重仓股换手率 {int(parts['holding_turnover']['weight']*100)}%）；前三项为自身近 {len(rows)} 个交易日净值的分位，"
-            "换手率为绝对水平映射（无历史序列可算分位）；规模环比增速暂不可得（见 missing）；"
+            f"规模环比 {int(parts['scale_momentum']['weight']*100)}% / 重仓换手 {int(parts['holding_turnover']['weight']*100)}%）；"
+            f"前三项为自身近 {len(rows)} 个交易日净值的分位；规模环比（R7 季度净资产序列）与"
+            "重仓换手均为绝对水平映射（无历史序列可算分位）；"
             "只陈述自身交易结构位置，不构成买卖建议"
         ),
         "as_of": utils.now_text(utils.bj_now()),
@@ -1000,7 +1033,8 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
             ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else [])
             + ([] if holding_turnover is not None
                else ["重仓股换手率不可得（重仓股报价缺失或源站异常）"])
-            + ["规模环比增速未纳入：单只基金历史规模无稳定接口（akshare 仅市场级汇总），待接 f10 规模档案页"]
+            + ([] if scale_mom is not None
+               else [f"规模环比增速不可得（{scale_note or '无季度规模序列'}）"])
         ),
     }
 
@@ -1080,6 +1114,9 @@ def weight_breakdown(
         score: Optional[float] = None
         crowd_source = "自身"
         note = ""
+        # R10 / C10：折扣构成两列（规模环比 + 重仓换手），仅「自身」口径可得时透出；
+        # 行业代理回退口径下两列为 None 并在 tooltip/note 声明。
+        discount_components: Optional[Dict[str, Any]] = None
         if crowd_discount and base_weight > 0:
             # M14 补齐：优先取基金**自身拥挤度**（净值历史算）；不可得再回退重仓行业代理
             try:
@@ -1087,6 +1124,7 @@ def weight_breakdown(
                 if fc.get("available") and fc.get("score") is not None:
                     score = fc["score"]
                     crowd_source = "自身"
+                    discount_components = fc.get("discount_components")
                 else:
                     # 回退到第一大重仓股所属行业的同花顺板块分数（原代理口径）
                     holding = fund_provider.get_holding(code)
@@ -1109,6 +1147,8 @@ def weight_breakdown(
                 note = f"拥挤度取数失败（{type(exc).__name__}），未折扣"
         factor, factor_label = _discount_of(score) if crowd_discount else (1.00, "未启用拥挤度降权")
         applied = float(factor or 1.0)
+        if crowd_source == "重仓行业代理" and not note:
+            note = "折扣基于第一大重仓股所属行业拥挤度（辅助口径，非基金自身维度）"
         rows.append({
             "code": code,
             "name": item.get("name") or code,
@@ -1116,6 +1156,8 @@ def weight_breakdown(
             "board": board,
             "crowding": round(score, 1) if score is not None else None,
             "crowding_source": crowd_source,
+            # R10 / C10：折扣构成两列（规模环比 + 重仓换手），代理口径下为 None
+            "discount_components": discount_components,
             "discount": applied,
             "discount_label": factor_label,
             "final_weight": round(base_weight * applied, 4),
@@ -1166,9 +1208,10 @@ def weight_breakdown(
             "最终权重 = 基础权重（逆波动率 × 得分）× 拥挤度折扣因子；"
             "折扣档：<60 ×1.00 / 60–79 ×0.85 / 80–100 ×0.60；"
             "折后基金部分内部归一化到原基础权重合计，再按单只上限裁剪，余额留现金；"
-            "拥挤度优先取基金**自身拥挤度**（M14 补齐：近60日波动率/近20日动量/近60日最大回撤"
-            "三维分位等权，源=自身净值历史），自身不可得时回退到「第一大重仓股所属行业」的"
-            "同花顺板块分数（crowding_source 字段逐只标注）；"
+            "拥挤度优先取基金**自身拥挤度**（R10：波动率/动量/最大回撤 0.24×3 + "
+            "规模环比/重仓换手 0.14×2 五维加权），discount_components 逐只透出双因子构成；"
+            "自身不可得时回退到「第一大重仓股所属行业」的同花顺板块分数（辅助口径，"
+            "crowding_source 字段逐只标注且 note 声明，双因子构成列为空）；"
             "折扣是风险控制手段，不是收益预期"
         ),
         "disclaimer": base.get("disclaimer"),

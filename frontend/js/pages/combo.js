@@ -198,6 +198,25 @@
         { key: "board", title: t("combo.weight.col.board"), render: function (row) { return row.board || t("value.none"); } },
         { key: "crowding", title: t("combo.weight.col.crowd"), num: true, render: function (row) { return row.crowding === null ? t("value.none") : fmt(row.crowding, 1); } },
         { key: "crowding_source", title: t("combo.weight.col.crowdsrc"), render: function (row) { return row.crowding_source || t("value.none"); } },
+        // R10 / C10：折扣构成两列（规模环比 + 重仓换手）；代理口径或数据缺失显示 —
+        { key: "dc_scale", title: t("combo.weight.col.dcScale"), num: true, render: function (row) {
+            var c = (row.discount_components || {}).scale_momentum || {};
+            var node = (c.available && c.value !== null && c.value !== undefined)
+              ? el("span", c.value > 0 ? "up" : "down", fmt(c.value, 1) + "%")
+              : el("span", "", t("value.none"));
+            node.title = t("combo.weight.dcScaleTip", { pct: (c.pct === null || c.pct === undefined) ? "—" : c.pct })
+              + (c.note ? "；" + c.note : "");
+            return node;
+          } },
+        { key: "dc_turnover", title: t("combo.weight.col.dcTurnover"), num: true, render: function (row) {
+            var c = (row.discount_components || {}).holding_turnover || {};
+            var node = (c.available && c.value !== null && c.value !== undefined)
+              ? el("span", "flat", fmt(c.value, 2) + "%")
+              : el("span", "", t("value.none"));
+            node.title = t("combo.weight.dcTurnoverTip", { pct: (c.pct === null || c.pct === undefined) ? "—" : c.pct })
+              + (c.note ? "；" + c.note : "");
+            return node;
+          } },
         { key: "discount", title: t("combo.weight.col.discount"), num: true, render: function (row) {
             return el("span", row.discount < 0.999 ? "down" : "flat", "×" + fmt(row.discount, 2));
           } },
