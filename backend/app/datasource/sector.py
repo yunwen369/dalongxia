@@ -594,11 +594,33 @@ def _kline_ths(kind: str, board: str, period: str, *, fill_today: bool = True) -
         )
         model_source = "同花顺"
     else:
+        # R11 双链路（概念日 K）：腾讯概念榜为主源，失败退同花顺概念指数线（885xxx）。
+        # 腾讯 newfqkline 偶发空返回/超时（即「接口不稳定」原始症状）；同花顺 885 线
+        # 覆盖 294 个成熟概念（新股概念两源都无 60 日历史，属数据积累期，另计 failed）。
         code = _tencent_board_code(board, "concept")
-        if not code:
-            raise ValueError(f"腾讯概念榜无此板块：{board}")
-        rows = tencent_board.get_board_kline(code, period=period_key, limit=320)
+        rows: List[Dict[str, Any]] = []
         model_source = "腾讯"
+        tx_error: Optional[Exception] = None
+        if code:
+            try:
+                rows = tencent_board.get_board_kline(code, period=period_key, limit=320) or []
+            except Exception as exc:  # noqa: BLE001 - 主源失败转备源，不在此抛出
+                tx_error = exc
+        if not rows:
+            index_codes = ths_http.get_concept_index_codes()
+            ths_code = index_codes.get(board)
+            if ths_code:
+                try:
+                    rows = ths_http.get_board_kline(
+                        ths_code, period=period_key, fill_today=False
+                    ) or []
+                    if rows:
+                        model_source = "同花顺概念指数(备)"
+                except Exception as exc:  # noqa: BLE001 - 备源失败按主源错误归因
+                    logger.info("概念 K 线备源也失败 %s：%s", board, type(exc).__name__)
+        if not rows:
+            reason = f"（主源异常 {type(tx_error).__name__}）" if tx_error else ""
+            raise ValueError(f"腾讯概念榜无此板块或两源 K 线均为空：{board}{reason}")
     if not rows:
         raise ValueError(f"{model_source}板块 K 线为空：{board}")
     # 周/月线由源站直接给出（同花顺 11/21、腾讯 week/month），无需再聚合

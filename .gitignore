@@ -65,6 +65,8 @@ data/exports/
 data/board_cons.json
 # 第十轮 R13：持仓逐日收益快照（每日收盘后落库的用户本地数据，随日期累积，不入库）
 data/portfolio_snapshots/
+# 第十轮 R11/C11：概念排行每日抽检日志（本地取证数据，随交易日累积，不入库）
+data/concept_spotcheck.jsonl
 # RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
 data/audit/
 data/*.db

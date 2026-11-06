@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import json
+import codecs
 import logging
 import re
 import threading
@@ -475,6 +476,45 @@ def get_concept_codes() -> Dict[str, str]:
         logger.info("同花顺概念名录抓取中断：%s", type(exc).__name__)
     if mapping:
         _refresh_code_cache("concept", mapping)
+    return mapping
+
+
+def get_concept_index_codes() -> Dict[str, str]:
+    """取「同花顺概念名 → 概念**指数**代码(885xxx)」映射（R11 概念 K 线备源，缓存 1 小时）。
+
+    ``/gn/`` 概览页内嵌 ``<input id="gnSection" value='{...}'>`` JSON：按序号索引，
+    每项含 ``platecode``（885xxx 概念指数代码）与 ``platename``（unicode 转义概念名）。
+    注意与 ``get_concept_codes()`` 的区别：后者给「概念详情页代码(3xxxxx)」用于
+    取成分股，本函数给「概念指数代码(885xxx)」用于取概念指数日 K（含成交额），
+    两者代码族不同、不可互换。
+
+    Returns:
+        Dict[str, str]: 概念名 → 885xxx 指数代码；页面结构变化时返回空字典（不抛）。
+    """
+    cached = _CODE_CACHE.get("concept_index")
+    if cached and time.time() - _CODE_CACHE_TS.get("concept_index", 0) < _CODE_TTL:
+        return cached
+    mapping: Dict[str, str] = {}
+    try:
+        html = _get_text(f"{config.THS_QUOTE_BASE}/gn/")
+        match = re.search(r"gnSection\"?\s+value='(\{.*?\})'>", html, re.S)
+        if match:
+            segment = match.group(1)
+            for code, raw_name in re.findall(
+                r'"platecode":"(\d+)","platename":"((?:[^"\\]|\\.)*)"', segment
+            ):
+                try:
+                    name = codecs.decode(raw_name, "unicode_escape")
+                except Exception:  # noqa: BLE001 - 个别转义异常跳过该条
+                    continue
+                name = name.strip()
+                if name and code.startswith("88") and name not in mapping:
+                    mapping[name] = code
+    except Exception as exc:  # noqa: BLE001 - 备源名录尽力而为，不阻断主流程
+        logger.info("同花顺概念指数名录解析失败：%s", type(exc).__name__)
+    if mapping:
+        _refresh_code_cache("concept_index", mapping)
+        logger.info("同花顺概念指数名录已更新：%d 项", len(mapping))
     return mapping
 
 

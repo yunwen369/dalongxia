@@ -26,7 +26,7 @@ from backend.app.core import cache
 from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import sector as sector_provider
-from backend.app.datasource import utils
+from backend.app.datasource import sector_health, utils
 
 logger = logging.getLogger(__name__)
 
@@ -606,14 +606,17 @@ def sector_trend(
 @router.get("/crowding")
 def sector_crowding(
     board: str = Query(..., description="板块名，如「半导体」"),
+    kind: str = Query("industry", description="industry=行业 / concept=概念（R11 扩参，排行点击概念板块需同口径单查）"),
     force: bool = Query(False, description="true=绕过缓存"),
 ) -> Dict[str, Any]:
-    """板块拥挤度（第七轮 M3）：四维分位加权 0–100 分，>60 提示 / >80 复核。
+    """板块拥挤度（第七轮 M3）：多维分位加权 0–100 分，>60 提示 / >80 复核。
 
     只陈述交易结构位置，不给买卖指令；缺失维度在 `missing` 里逐条写明（不编造）。
 
     Args:
         board: 板块名。
+        kind: industry / concept（R11：概念排行点击后的单查与排行同链路，
+            默认 industry 保持向后兼容）。
         force: 是否绕过缓存。
 
     Returns:
@@ -622,6 +625,9 @@ def sector_crowding(
     name = str(board or "").strip()
     if not name:
         return api_error(ErrorCode.INVALID_PARAM, "请提供板块名（board），如「半导体」")
+    key_kind = str(kind or "industry").strip().lower()
+    if key_kind not in ("industry", "concept"):
+        return api_error(ErrorCode.INVALID_PARAM, "kind 仅支持 industry（行业）/ concept（概念）")
 
     def loader() -> Dict[str, Any]:
         """取数并打分（1 小时缓存：日频数据，无需更短）。
@@ -629,13 +635,13 @@ def sector_crowding(
         Returns:
             Dict[str, Any]: 拥挤度结果。
         """
-        return sector_provider.get_crowding(name)
+        return sector_provider.get_crowding(name, kind=key_kind)
 
     try:
         if force:
             data = loader()
         else:
-            data = cache.get_or_load(f"sector:crowding:{name}", 3600, loader)
+            data = cache.get_or_load(f"sector:crowding:{key_kind}:{name}", 3600, loader)
     except ValueError as exc:
         return api_error(ErrorCode.EMPTY_DATA, str(exc))
     except Exception as exc:  # noqa: BLE001 - 上游异常转可读错误
@@ -743,4 +749,35 @@ def sector_margin(
     except Exception as exc:  # noqa: BLE001
         logger.warning("融资余额强度计算失败：%s", type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, f"融资余额强度计算失败（{type(exc).__name__}），请稍后重试")
+    return ok(data)
+
+
+@router.get("/concept/health")
+def sector_concept_health(
+    days: int = Query(10, ge=1, le=60, description="读取最近 N 条抽检记录"),
+    kind: str = Query("concept", description="concept / industry"),
+) -> Dict[str, Any]:
+    """概念排行健康抽检日志（设计基准 R11 / 验收 C11）。
+
+    返回按日落档的完整率记录（新→旧），并给出「连续 N 日 ≥98%」判据
+    streak_days_ok / all_pass，作为 C11「定时抽检日志」的直接取证入口。
+    抽检由后台调度线程在交易日 15:35 后自动执行（见 main._concept_spotcheck_loop），
+    本接口只读日志文件，不触发扫描。
+
+    Args:
+        days: 读取最近 N 条。
+        kind: 抽检口径（concept 为 C11 主判据）。
+
+    Returns:
+        Dict[str, Any]: {"data": {items, count, streak_days_ok, streak_required,
+        latest_pass, all_pass, threshold_pct, source, caliber, as_of}}
+    """
+    key_kind = str(kind or "concept").strip().lower()
+    if key_kind not in ("concept", "industry"):
+        return api_error(ErrorCode.INVALID_PARAM, "kind 仅支持 concept（概念）/ industry（行业）")
+    try:
+        data = sector_health.load_records(days=days, kind=key_kind)
+    except Exception as exc:  # noqa: BLE001 - 日志读取失败转内部错误，不掩盖
+        logger.warning("概念排行抽检日志读取失败：%s", type(exc).__name__)
+        return api_error(ErrorCode.INTERNAL_ERROR, f"抽检日志读取失败（{type(exc).__name__}）")
     return ok(data)

@@ -140,6 +140,8 @@
         list.appendChild(option);
       });
       hint.textContent = "行业 " + BOARD_CACHE.industry.length + " · 概念 " + BOARD_CACHE.concept.length;
+      // R11：名录就绪后按板块实际口径重载拥挤度（首帧可能按默认 industry 查询）
+      loadCrowding(crowd, board);
     });
 
     // ---- 卡片骨架 ----
@@ -313,8 +315,21 @@
   // =============================================================
   // SD-07 拥挤度分解
   // =============================================================
+  /** 反查板块口径（R11）：概念/行业。BOARD_CACHE 按名录打 kind，
+   * 命中概念名录则按 concept 单查，否则按 industry（向后兼容默认）。
+   * @param {string} board 板块名
+   * @returns {string} industry / concept
+   */
+  function resolveBoardKind(board) {
+    if (!board || !BOARD_CACHE.loaded) {
+      return "industry";
+    }
+    var hit = BOARD_CACHE.concept.filter(function (x) { return x.name === board; })[0];
+    return hit ? "concept" : "industry";
+  }
+
   function loadCrowding(card, board) {
-    api("/api/sector/crowding", { board: board })
+    api("/api/sector/crowding", { board: board, kind: resolveBoardKind(board) })
       .then(function (body) {
         var data = unwrap(body);
         setBadges(card.card, data.source || "同花顺", data.caliber || "六维加权", false);

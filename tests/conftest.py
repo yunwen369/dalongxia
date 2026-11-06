@@ -91,6 +91,9 @@ def isolate_process_state(monkeypatch, tmp_path):
     # 第七轮波次 5：筛选器快照与提醒文件同样隔离（绝不写真实 data/）
     monkeypatch.setattr(screener_module, "SNAPSHOT_FILE", data_dir / "screener_snapshot.json")
     monkeypatch.setattr(alerts_module, "ALERTS_FILE", data_dir / "alerts.json")
+    # 第十轮 R11/C11：概念排行抽检日志同样隔离（用例不得写真实 concept_spotcheck.jsonl）
+    from backend.app.datasource import sector_health as sector_health_module
+    monkeypatch.setattr(sector_health_module, "SPOTCHECK_FILE", data_dir / "concept_spotcheck.jsonl")
     # 提醒评估节流是进程级状态，跨用例会互相污染（60s 窗口内第二个用例被跳过）
     alerts_module.reset_eval_state()
 

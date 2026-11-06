@@ -245,6 +245,25 @@ def _portfolio_snapshot_loop() -> None:
         time.sleep(1800)
 
 
+def _concept_spotcheck_loop() -> None:
+    """概念排行抽检调度（R11 / C11）：每 30 分钟检查「工作日 + 15:35 后 + 当日缺档」。
+
+    满足条件时全量扫描概念排行（约 40–90 秒，与排行缓存同口径），
+    完整率结果按日落 data/concept_spotcheck.jsonl，供 /api/sector/concept/health
+    取证「连续 3 日 ≥98%」。独立守护线程，异常只记日志不影响主服务。
+    """
+    from backend.app.datasource import sector_health
+
+    while True:
+        try:
+            result = sector_health.ensure_today()
+            if result.get("written"):
+                logger.info("概念排行抽检已落档：%s", result.get("date"))
+        except Exception as exc:  # noqa: BLE001 - 抽检失败不影响主服务
+            logger.info("概念排行抽检调度异常：%s", type(exc).__name__)
+        time.sleep(1800)
+
+
 def _fundflow_warm_loop() -> None:
     """板块四档预热（R5）：启动后台逐板块构建成分映射并聚合四档。
 
@@ -322,6 +341,14 @@ def create_app() -> FastAPI:
         """启动持仓快照调度线程（幂等：重复触发只会多一个守护线程）。"""
         threading.Thread(
             target=_portfolio_snapshot_loop, daemon=True, name="portfolio-snapshot"
+        ).start()
+
+    # 第十轮 P3 · R11/C11：概念排行每日抽检（工作日 15:35 后自动一次，落 jsonl 取证）
+    @application.on_event("startup")
+    def _start_concept_spotcheck() -> None:
+        """启动概念排行抽检调度线程（守护线程，异常不影响主服务）。"""
+        threading.Thread(
+            target=_concept_spotcheck_loop, daemon=True, name="concept-spotcheck"
         ).start()
 
     # 第十轮 P3：板块四档预热（**默认关闭**，需显式 OPENBB_FUNDFLOW_WARM=1）

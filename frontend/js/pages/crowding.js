@@ -139,7 +139,7 @@
       state.sectors.crowdBoard = board;
       result.innerHTML = "";
       result.appendChild(el("div", "pg-state", t("state.loading")));
-      api("/api/sector/crowding", { board: board }).then(function (data) {
+      api("/api/sector/crowding", { board: board, kind: state.crowdingKind || "industry" }).then(function (data) {
         var card = document.getElementById("M3-01");
         P.setBadges(card, "同花顺行业日线", data.caliber);
         result.innerHTML = "";
