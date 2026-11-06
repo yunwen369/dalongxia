@@ -1359,6 +1359,14 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
         if not fallback_rows:
             raise
         return fallback_rows
+    # 同花顺反爬时可能返回空表或仅 1–2 条（非异常、非空），此时切东财备源。
+    # 阈值 45：正常 90 条，限流时通常 < 10 条；45 既能挡住限流降级，又不误伤正常数据。
+    if len(rows) < 45:
+        logger.warning("同花顺行业资金流仅返回 %d 条（<45，疑似反爬降级），切换东财备源", len(rows))
+        fallback_rows, _source = _fundflow_em_fallback()
+        if len(fallback_rows) >= len(rows):
+            return fallback_rows
+        logger.warning("东财备源仅 %d 条，少于同花顺 %d 条，退回同花顺数据", len(fallback_rows), len(rows))
     # 四档依赖成分映射；未预热完时按时间预算补 1–2 个板块，
     # 使「首次使用也能逐步补齐」，而不是永久空白（预算内补不完由后台线程继续）。
     _ensure_cons_progress(rows, budget_seconds=6.0, max_boards=2)
