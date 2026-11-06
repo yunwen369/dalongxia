@@ -237,9 +237,32 @@
   function paintFundComboCandidates(host) {
     host.innerHTML = "";
     host.appendChild(el("div", "pg-state", t("combo.candidates.loading")));
-    api("/api/fund/candidates", { limit: 200 }).then(function (data) {
+    loadCandidates(host, "fund_friendly");
+  }
+
+  /** 按模板加载候选池（R9：基金友好 / 红利低波 可切换）。
+   *
+   * @param {HTMLElement} host 容器
+   * @param {string} tplKey 模板键
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function loadCandidates(host, tplKey) {
+    api("/api/fund/candidates", { limit: 200, template: tplKey }).then(function (data) {
       host.innerHTML = "";
       var tpl = data.template || {};
+      // R9：模板切换条（命中口径随模板变化，条件表与结果表同源刷新）
+      var barRow = el("div", "page-toolbar");
+      barRow.appendChild(el("span", "", t("combo.candidates.tplSwitch")));
+      (data.templates || [{ key: "fund_friendly", label: tpl.label || "基金友好" }]).forEach(function (opt) {
+        var btn = el("button", "btn small" + (opt.key === tpl.key ? " active" : ""), opt.label);
+        btn.addEventListener("click", function () {
+          if (opt.key !== tpl.key) {
+            loadCandidates(host, opt.key);
+          }
+        });
+        barRow.appendChild(btn);
+      });
+      host.appendChild(barRow);
       var condCard = el("div", "pg-card");
       condCard.appendChild(el("div", "pg-card-title", t("combo.candidates.condTitle")));
       var condScroll = el("div", "table-scroll");
@@ -273,6 +296,7 @@
           } },
         { key: "board", title: t("scr.col.board") },
         { key: "pe", title: "PE", num: true, render: function (row) { return fmt(row.pe, 2); } },
+        { key: "pb", title: "PB", num: true, render: function (row) { return fmt(row.pb, 2); } },
         { key: "roe3y_min", title: "ROE3年最弱", num: true, render: function (row) { return fmt(row.roe3y_min, 2); } },
         { key: "gross", title: t("scr.col.gross"), num: true, render: function (row) { return fmt(row.gross, 2); } },
         { key: "debt_ratio", title: t("scr.col.debt"), num: true, render: function (row) { return fmt(row.debt_ratio, 2); } },

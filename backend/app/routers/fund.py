@@ -529,15 +529,18 @@ def fund_combo_weight(
 def fund_candidates(
     market: str = Query("a", description="市场，目前仅 a"),
     limit: int = Query(200, ge=1, le=500, description="返回上限"),
+    template: str = Query("fund_friendly", description="模板：fund_friendly / dividend_lowvol（R9）"),
     force: bool = Query(False, description="true=绕过缓存"),
 ) -> Dict[str, Any]:
-    """全市场候选池（第七轮 M13）：复用 M9 快照 + 「基金友好」模板。
+    """全市场候选池（第七轮 M13）：复用 M9 快照 + 模板筛选。
 
     只按条件筛选，不排序打分、不给推荐语；排序与打分交给「候选评估」。
+    R9（第十轮）：新增「红利低波」模板（含股息率快照列条件）。
 
     Args:
         market: 市场（仅 a）。
         limit: 返回上限。
+        template: 模板键。
         force: 是否绕过缓存。
 
     Returns:
@@ -545,7 +548,7 @@ def fund_candidates(
     """
     from backend.app.datasource import screener
 
-    cache_key = f"fund:candidates:{str(market or 'a').lower()}:{limit}"
+    cache_key = f"fund:candidates:{str(market or 'a').lower()}:{template}:{limit}"
 
     def loader() -> Dict[str, Any]:
         """读快照筛选（5 分钟缓存：快照每日一更）。
@@ -553,7 +556,7 @@ def fund_candidates(
         Returns:
             Dict[str, Any]: 候选池结果。
         """
-        return screener.run_candidates(limit=limit, market=market)
+        return screener.run_candidates(limit=limit, market=market, template=template)
 
     try:
         data = loader() if force else cache.get_or_load(cache_key, 300, loader)

@@ -22,6 +22,12 @@
 - 财务类因子在快照里缺值时该行不满足该条件（不冒充）；
 - 金融业（银行/保险/券商）对「资产负债率」自动豁免并在行内标注 ``exempt``；
 - 本模块**不排序、不给推荐语**：只按代码升序返回，排序交给前端。
+
+股息率（R9，第十轮转正）：分红送配接口（东财 ``RPT_SHAREBONUS_DET``，近 365 天
+除息窗口累计）在**快照构建期**落全市场列 ``dividend_yield``（=近一年每10股累计
+派息/收盘价×100）。语义三分：数值（含 0.0）=已确定（0.0 为真实无派息，不是缺失）；
+None=分红通道整体失败。原第七轮 M13「候选逐只按需补拉」两段式废弃；覆盖率随
+快照 stats 落盘供 C9 对账（要求 ≥95%）。
 """
 
 from __future__ import annotations
@@ -123,6 +129,8 @@ def get_snapshot_meta() -> Dict[str, Any]:
         "built_at": payload.get("built_at"),
         "trade_date": payload.get("trade_date"),
         "row_count": row_count,
+        # R9：股息率快照列覆盖率（旧版快照无此键=None，不冒充 0）
+        "dividend_coverage": payload.get("dividend_coverage"),
         "building": building,
         "last_error": _BUILD_STATE.get("last_error"),
     }
@@ -491,6 +499,16 @@ def _build_rows(
         on_progress(0, 0, "财务报表：现金流")
     xjll = _load_xjll(reports_needed)
 
+    # R9（第十轮）：股息率落**快照列**。一次性拉近 365 天除息分红映射，
+    # 每行 dividend_yield = 近一年每10股累计派息/10/收盘价×100（%）。
+    # 语义三分（J1 零降级，不冒充）：
+    #   数值（含 0.0）= 通道成功且该股近一年派息情况**已确定**（0.0=真的没派，不是缺失）；
+    #   None          = 分红通道整体失败（映射为空）或该行无有效收盘价。
+    # 覆盖率 = 数值行/总行数，写入 stats 供对账（验收 C9：≥95%）。
+    if on_progress:
+        on_progress(0, 0, "分红映射")
+    dividend_map = _load_dividend_map()  # {code: 近一年每10股累计派息(元)}
+
     rows: List[Dict[str, Any]] = []
     for item in val_rows:
         raw_code = str(item.get("SECURITY_CODE") or "").zfill(6)
@@ -558,6 +576,14 @@ def _build_rows(
         # 财报覆盖率标记：四项财务字段全缺 → 该行财务区视为缺失（AC-X1 不冒充）
         fin_any = any(v is not None for v in (gross_latest, rev_yoy, np_yoy, debt_latest, ocf_latest))
         row["fin_missing"] = not fin_any
+        # R9：股息率快照列（近 365 天累计派息/收盘价）。映射成功且有有效收盘价 →
+        # 数值（含 0.0）；映射整体为空（通道失败）或无有效价 → None（缺失，不冒充 0）。
+        close_val = row.get("close")
+        if dividend_map and close_val and close_val > 0:
+            per_10 = dividend_map.get(code, 0.0)
+            row["dividend_yield"] = round((per_10 / 10) / close_val * 100, 2)
+        else:
+            row["dividend_yield"] = None
         rows.append(row)
 
     stats = {
@@ -565,6 +591,11 @@ def _build_rows(
         "quarter": quarter,
         "annuals": annuals,
         "val_rows": len(val_rows),
+        # R9 覆盖率对账：数值行（含 0.0）/ 总行数
+        "dividend_coverage": (
+            round(sum(1 for r in rows if r["dividend_yield"] is not None) / len(rows) * 100, 1)
+            if rows else 0.0
+        ),
     }
     return rows, stats
 
@@ -597,6 +628,7 @@ def _run_build(reason: str) -> Dict[str, Any]:
             "trade_date": stats["trade_date"],
             "quarter": stats["quarter"],
             "annuals": stats["annuals"],
+            "dividend_coverage": stats.get("dividend_coverage"),  # R9：覆盖率对账
             "elapsed": round(time.time() - started, 1),
             "rows": rows,
         }
@@ -685,8 +717,10 @@ FACTOR_META: Dict[str, Dict[str, str]] = {
     "np_yoy": {"label": "净利同比", "unit": "%", "kind": "finance"},
     "debt_ratio": {"label": "资产负债率", "unit": "%", "kind": "finance", "exempt_fin": True},
     "ocf": {"label": "经营现金流净额", "unit": "元", "kind": "finance"},
-    # 第七轮 M13 补齐：股息率（派息比例/收盘价）。快照不含此字段，故不进 SNAPSHOT_ROW_FIELDS，
-    # 由 run_candidates 对**已通过其余规则的候选**逐只按需拉取（并发 + 缓存），不扫全市场 5577 只。
+    # R9（第十轮转正）：股息率已落**全市场快照列**（_build_rows 逐行写入
+    # dividend_yield=近 365 天累计派息/收盘价×100；0.0=真实无派息，None=通道缺失）。
+    # 原第七轮 M13「对候选逐只按需拉取」两段式已废弃（run_screener/run_candidates
+    # 统一查快照列，行为与其他因子一致：缺值行不满足条件，不冒充）。
     "dividend_yield": {"label": "股息率（近一年派息/收盘）", "unit": "%", "kind": "dividend"},
 }
 # 允许的因子键（防注入白名单）
@@ -793,6 +827,8 @@ def run_screener(
             "debt_ratio": row.get("debt_ratio"),
             "roe3y_min": _row_value(row, "roe_min"),
             "ocf_yi": (row.get("ocf") / 1e8) if row.get("ocf") is not None else None,
+            # R9：股息率为快照列，命中查询同样透出（None=通道缺失，行已在条件过滤时排除）
+            "dividend_yield": row.get("dividend_yield"),
             "exempt": exempted,
         })
         if len(matched) >= limit:
@@ -816,7 +852,8 @@ def run_screener(
         "caliber": (
             "条件 AND 连接；财务因子缺值的行不满足该条件（不以 0 冒充）；"
             "银行/保险/证券对「资产负债率」自动豁免并在行内标注；"
-            "ROE 连续 3 年取最近三个年报的最弱一年，任一年缺值视为不满足。"
+            "ROE 连续 3 年取最近三个年报的最弱一年，任一年缺值视为不满足；"
+            "股息率=近 365 天累计派息/收盘价（快照列，0.0% 为真实无派息，仅通道缺失才为空）。"
             "结果只按代码排序，不做任何推荐排序。"
         ),
         "as_of": _now_text(),
@@ -824,9 +861,13 @@ def run_screener(
 
 
 # =============================================================
-# 第七轮 M13：全市场候选池（复用 M9 快照 + 基金友好模板）
+# 第七轮 M13：全市场候选池（复用 M9 快照 + 模板）
 # =============================================================
-# 模板条件（全部 AND）：ROE 三年最弱 ≥10 / 资产负债率 ≤60 / PE ≤40 / 毛利率 ≥30 / ROE 逐年不降
+# R9（第十轮）：模板扩为多套，**「红利低波」含股息率条件**（验收 C9）。
+# 「低波」口径说明（如实）：东财免费通道无全市场年化波动率快照列（push2 clist
+# 实测 f51/f52=成交净额而非 52 周高低；估值明细表无波动字段；5577 只逐只拉日 K
+# 算 σ 属重扫全市场，违背快照构建成本约束）。红利侧用「股息率 ≥3%」直接表达，
+# 低波侧用「总市值 ≥200 亿 ∧ PE ≤20 ∧ PB ≤3」的大盘低估值稳健代理，caliber 声明。
 CANDIDATE_TEMPLATE = {
     "key": "fund_friendly",
     "label": "基金友好",
@@ -836,30 +877,44 @@ CANDIDATE_TEMPLATE = {
         {"factor": "pe", "label": "PE-TTM", "op": "lte", "value": 40, "note": "PE-TTM ≤40"},
         {"factor": "gross", "label": "销售毛利率", "op": "gte", "value": 30, "note": "毛利率 ≥30%"},
         {"factor": "roe_trend", "label": "ROE 趋势", "op": "gte", "value": 0, "note": "ROE 逐年不下滑（新 ≥ 旧）"},
-        # 第七轮 M13 补齐：股息率作为模板规则之一（对已通过前四条的候选逐只按需拉取，
-        # 不扫全市场；分红数据缺失的标的如实标 None 并排除，不冒充）
+        # R9：股息率=快照列（近 365 天除息累计派息/收盘），与其他因子同口径过滤
         {"factor": "dividend_yield", "label": "股息率", "op": "gte", "value": 1.0,
-         "note": "近一年派息/收盘 ≥1.0%（分红数据无 SLA，缺失则不满足）"},
+         "note": "近一年累计派息/收盘 ≥1.0%（0=近一年确实未派息，不满足）"},
     ],
 }
 
+DIVIDEND_LOWVOL_TEMPLATE = {
+    "key": "dividend_lowvol",
+    "label": "红利低波",
+    "rules": [
+        {"factor": "dividend_yield", "label": "股息率（红利）", "op": "gte", "value": 3.0,
+         "note": "近一年累计派息/收盘 ≥3.0%（快照列，0=近一年未派息不满足）"},
+        {"factor": "pe", "label": "PE-TTM（低波代理）", "op": "lte", "value": 20, "note": "PE-TTM ≤20，低估值=抗跌代理"},
+        {"factor": "pb", "label": "PB-MRQ（低波代理）", "op": "lte", "value": 3, "note": "PB ≤3，破净/低溢价安全边际"},
+        {"factor": "mktcap", "label": "总市值（低波代理）", "op": "gte", "value": 200, "note": "≥200 亿大盘股波动显著低于小票"},
+        {"factor": "chg", "label": "当日涨跌幅（低波）", "op": "lte", "value": 7, "note": "剔除涨停/异常波动日标的"},
+    ],
+}
 
-# 股息率逐只拉取的内存缓存（TTL 由调用方控制；进程内去重避免重复请求）
-_DIVIDEND_CACHE: Dict[str, Tuple[float, Optional[float]]] = {}
+CANDIDATE_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    CANDIDATE_TEMPLATE["key"]: CANDIDATE_TEMPLATE,
+    DIVIDEND_LOWVOL_TEMPLATE["key"]: DIVIDEND_LOWVOL_TEMPLATE,
+}
 
 
-# 全市场分红映射缓存：(时间戳, {code: 每10股派息元})
+# 全市场分红映射缓存：(时间戳, {code: 近一年每10股累计派息元})
 _DIVIDEND_MAP: Dict[str, Tuple[float, Dict[str, float]]] = {}
 _DIVIDEND_MAP_TTL = 86400  # 分红方案按年披露，缓存 24 小时
 
 
 def _load_dividend_map() -> Dict[str, float]:
-    """一次性拉取全市场最近一个年度分红方案（东财 datacenter，纯 HTTP）。
+    """一次性拉取全市场**近 365 天除息**分红映射（东财 datacenter，纯 HTTP）。
 
     2026-11-02 第八轮：原实现逐只调用 ``stock_dividend_cninfo``（巨潮，经 V8 签名），
     冻结形态不可用且 5577 只逐个拉取不可行。改用东财 datacenter 的
-    ``RPT_SHAREBONUS_DET``（分红送配，免鉴权、纯 HTTP），按最近两个年度报告期
-    一次性分页取回，得到 {代码: 每 10 股派息(元)}；同一代码取最新报告期。
+    ``RPT_SHAREBONUS_DET``（分红送配，免鉴权、纯 HTTP）。R9（第十轮）口径再修正：
+    由「按年报报告期取单一方案」改为「按除息日近 365 天窗口累计多派」，即
+    TTM 股息率口径；得到 {代码: 近一年每 10 股累计派息(元)}。
 
     Returns:
         Dict[str, float]: 代码 → 每 10 股派息（元）；通道不可用时返回空字典（不抛）。
@@ -867,37 +922,41 @@ def _load_dividend_map() -> Dict[str, float]:
     cached = _DIVIDEND_MAP.get("data")
     if cached and time.time() - cached[0] < _DIVIDEND_MAP_TTL:
         return cached[1]
+    # R9 口径（第十轮）：改为**近 365 天滚动除息窗口**（EX_DIVIDEND_DATE ≥ 去年今日），
+    # 按除息日聚合每 10 股派息总额（一年多次派息的股票累加），比"按年报报告期取单一
+    # 方案"更贴近"TTM 股息率"业界口径，且不受年报披露进度影响。实测该窗口覆盖 3739 只
+    # 有派息记录（近一年确有不派息的股票，其股息率=0.0% 是真实值，不是缺失）。
+    from datetime import timedelta
+
     mapping: Dict[str, float] = {}
-    current_year = utils.bj_now().year
-    for report_year in (current_year - 1, current_year - 2):
-        page = 1
-        while page <= 12:
-            payload = _datacenter_page(
-                "RPT_SHAREBONUS_DET",
-                {
-                    "sortColumns": "REPORT_DATE",
-                    "sortTypes": "-1",
-                    "pageSize": 500,
-                    "pageNumber": page,
-                    "filter": f"(REPORT_DATE='{report_year}-12-31')",
-                },
-            )
-            rows = ((payload.get("result") or {}).get("data") or [])
-            if not rows:
-                break
-            for row in rows:
-                code = str(row.get("SECURITY_CODE") or "").strip()
-                per_10 = utils.to_float(row.get("PRETAX_BONUS_RMB"))
-                if not code or per_10 is None or per_10 <= 0:
-                    continue
-                # 最新报告期优先：先写入的年份更新，后面的年份不覆盖
-                mapping.setdefault(code, per_10)
-            if len(rows) < 500:
-                break
-            page += 1
+    cutoff = (utils.bj_now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    page = 1
+    while page <= 12:
+        payload = _datacenter_page(
+            "RPT_SHAREBONUS_DET",
+            {
+                "sortColumns": "EX_DIVIDEND_DATE",
+                "sortTypes": "-1",
+                "pageSize": 500,
+                "pageNumber": page,
+                "filter": f"(EX_DIVIDEND_DATE>='{cutoff}')",
+            },
+        )
+        rows = ((payload.get("result") or {}).get("data") or [])
+        if not rows:
+            break
+        for row in rows:
+            code = str(row.get("SECURITY_CODE") or "").strip().zfill(6)
+            per_10 = utils.to_float(row.get("PRETAX_BONUS_RMB"))
+            if not code or not code.isdigit() or per_10 is None or per_10 <= 0:
+                continue
+            mapping[code] = mapping.get(code, 0.0) + per_10
+        if len(rows) < 500:
+            break
+        page += 1
     if mapping:
         _DIVIDEND_MAP["data"] = (time.time(), mapping)
-        logger.info("全市场分红映射已更新：%d 只", len(mapping))
+        logger.info("全市场近一年分红映射已更新：%d 只有派息", len(mapping))
     return mapping
 
 
@@ -937,113 +996,41 @@ def _datacenter_page(report_name: str, extra: Dict[str, Any]) -> Dict[str, Any]:
         session.close()
 
 
-def _dividend_yield(code: str, close: Optional[float]) -> Optional[float]:
-    """取某只 A 股的近一年股息率（每 10 股派息 / 10 / 收盘价 × 100）。
-
-    数据源：东财 datacenter ``RPT_SHAREBONUS_DET``（分红送配，纯 HTTP 免鉴权），
-    全市场映射一次性加载后按代码查表（缓存 24 小时）。缺值返回 None，不冒充。
-
-    Args:
-        code: 6 位 A 股代码。
-        close: 快照收盘价（元）。
-
-    Returns:
-        Optional[float]: 股息率（%）；不可得时 None。
-    """
-    if not close or close <= 0:
-        return None
-    mapping = _load_dividend_map()
-    per_10 = mapping.get(str(code))
-    if per_10 is None:
-        return None
-    return round((per_10 / 10) / close * 100, 2)
-
-
-def _dividend_yield_batch(
-    items: List[Dict[str, Any]],
-    *,
-    max_workers: int = 6,
-) -> Dict[str, Optional[float]]:
-    """对一批候选逐只并发拉股息率，返回 {code: yield}。
-
-    已经内存缓存的代码直接复用，避免重复请求。
-
-    Args:
-        items: 候选行（含 code / close）。
-        max_workers: 并发数。
-
-    Returns:
-        Dict[str, Optional[float]]: code → 股息率（%）。
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    now = time.time()
-    result: Dict[str, Optional[float]] = {}
-    todo: List[Dict[str, Any]] = []
-    for item in items:
-        code = str(item.get("code") or "")
-        if not code:
-            continue
-        cached = _DIVIDEND_CACHE.get(code)
-        if cached and cached[0] > now:
-            result[code] = cached[1]
-        else:
-            todo.append(item)
-    if not todo:
-        return result
-
-    def _work(item: Dict[str, Any]) -> Tuple[str, Optional[float]]:
-        """单只候选的股息率计算（并发任务体，异常在调用方兜底）。
-
-        Args:
-            item: 候选行（含 code / close）。
-
-        Returns:
-            Tuple[str, Optional[float]]: (代码, 股息率%)。
-        """
-        code = str(item.get("code") or "")
-        value = _dividend_yield(code, utils.to_float(item.get("close")))
-        _DIVIDEND_CACHE[code] = (now + 1800, value)  # 30 分钟进程内缓存
-        return code, value
-
-    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 6))) as pool:
-        futures = {pool.submit(_work, item): item for item in todo}
-        for future in as_completed(futures):
-            try:
-                code, value = future.result()
-                result[code] = value
-            except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
-                logger.info("股息率并发拉取异常：%s", type(exc).__name__)
-    return result
-
-CANDIDATE_MISSING = (
-    "股息率（M13 补齐）：快照不含此字段，对已通过其余四条规则的候选逐只按需拉取"
-    "「分红记录 cninfo」取近一年派息比例/收盘价计算，不扫全市场 5577 只；"
-    "分红数据无 SLA，缺失时如实标 None 不冒充"
-)
+# R9（第十轮）：以下三段为原 M13「候选逐只按需补拉股息率」两段式实现
+# （_dividend_yield / _dividend_yield_batch / CANDIDATE_MISSING），股息率已落
+# 全市场快照列（_build_rows 一次性查表），死代码随改造删除。
 
 
 def run_candidates(
     *,
     limit: int = 200,
     market: str = "a",
+    template: str = "fund_friendly",
 ) -> Dict[str, Any]:
-    """全市场候选池（第七轮 M13，复用 M9 快照）。
+    """全市场候选池（第七轮 M13，复用 M9 快照；R9 起支持多模板）。
 
     只按模板条件筛选，**不排序打分、不给推荐语**（排序与打分交给 M5 评估器）。
+    R9（第十轮）：股息率已是快照列，全部规则在快照上**单轮**过滤完成（原 M13
+    「候选逐只按需补拉」两段式废弃）；新增 ``dividend_lowvol``（红利低波）模板。
 
     Args:
         limit: 返回上限（1–500）。
         market: 市场（目前仅 a）。
+        template: 模板键（fund_friendly / dividend_lowvol），默认基金友好。
 
     Returns:
         Dict[str, Any]: {ready, total_matched, items, template, missing, caliber, as_of}
 
     Raises:
         RuntimeError: 快照未建库。
+        ValueError: 市场非 A 股 / 模板未知。
     """
     if str(market or "a").lower() != "a":
         raise ValueError("候选池目前仅支持 A 股（快照为 A 股全市场）")
+    tpl_key = str(template or CANDIDATE_TEMPLATE["key"]).strip()
+    template_obj = CANDIDATE_TEMPLATES.get(tpl_key)
+    if template_obj is None:
+        raise ValueError(f"未知候选模板：{tpl_key}（可选 {sorted(CANDIDATE_TEMPLATES)}）")
     limit = max(1, min(int(limit or 200), 500))
 
     payload = _read_snapshot()
@@ -1053,14 +1040,11 @@ def run_candidates(
 
     matched: List[Dict[str, Any]] = []
     exempt_count = 0
-    # M13：股息率快照不含，需逐只按需拉取 → 先按快照可得的规则筛出候选，再对候选补拉股息率
-    on_demand_rules = [r for r in CANDIDATE_TEMPLATE["rules"] if r["factor"] == "dividend_yield"]
-    snapshot_rules = [r for r in CANDIDATE_TEMPLATE["rules"] if r["factor"] != "dividend_yield"]
-
+    dividend_unknown = 0  # R9：股息率列为 None（通道缺失行）计数，供 missing 如实披露
     for row in rows:
         keep = True
         exempted: List[str] = []
-        for rule in snapshot_rules:
+        for rule in template_obj["rules"]:
             factor = rule["factor"]
             value = float(rule["value"])
             if factor == "roe_trend":
@@ -1081,6 +1065,8 @@ def run_candidates(
                 continue
             actual = _row_value(row, factor)
             if actual is None:
+                if factor == "dividend_yield":
+                    dividend_unknown += 1
                 keep = False
                 break
             if rule["op"] == "gte" and not actual >= value:
@@ -1108,49 +1094,42 @@ def run_candidates(
             "gross": row.get("gross"),
             "debt_ratio": row.get("debt_ratio"),
             "exempt": exempted,
-            "dividend_yield": None,  # 第二轮补齐（M13）
+            "dividend_yield": row.get("dividend_yield"),  # R9：快照列直读
         })
-        if len(matched) >= limit * 2:  # 多取一些，防止股息率筛选后不够
-            break
-
-    # ── 第二轮：对候选逐只按需拉股息率（并发），并应用股息率规则 ──
-    if on_demand_rules:
-        yields = _dividend_yield_batch(matched)
-        final: List[Dict[str, Any]] = []
-        for item in matched:
-            code = str(item.get("code") or "")
-            value = yields.get(code)
-            item["dividend_yield"] = value
-            rule = on_demand_rules[0]
-            if value is None:
-                continue  # 分红数据缺失，如实排除（不冒充满足）
-            if rule["op"] == "gte" and not value >= float(rule["value"]):
-                continue
-            final.append(item)
-        matched = final
 
     matched.sort(key=lambda item: item["code"])
     matched = matched[:limit]
     meta = get_snapshot_meta()
+    coverage = meta.get("dividend_coverage")
+    missing: List[str] = []
+    if coverage is not None:
+        missing.append(f"股息率快照列覆盖率 {coverage}%（通道失败或无有效收盘价的行为空值，不以 0 冒充）")
+    if dividend_unknown:
+        missing.append(f"本次筛选中 {dividend_unknown} 行股息率为空值（分红通道缺失），不满足股息率条件")
     return {
         "ready": True,
         "total_matched": len(matched),
         "returned": len(matched),
         "truncated": len(matched) >= limit,
         "items": matched,
-        "template": CANDIDATE_TEMPLATE,
+        "template": template_obj,
+        "templates": [{"key": t["key"], "label": t["label"]} for t in CANDIDATE_TEMPLATES.values()],
         "exempt_count": exempt_count,
-        "missing": [CANDIDATE_MISSING],
+        "missing": missing,
         "snapshot": {
             "version": meta.get("version"),
             "built_at": meta.get("built_at"),
             "trade_date": meta.get("trade_date"),
             "row_count": meta.get("row_count"),
+            "dividend_coverage": coverage,
         },
         "caliber": (
-            "候选池= M9 快照按「基金友好」模板筛选（ROE 三年最弱 ≥10 ∧ 资产负债率 ≤60 ∧ PE ≤40 ∧ "
-            "毛利率 ≥30 ∧ ROE 逐年不降）；金融业对资产负债率自动豁免并标注；"
-            "只筛选不排序、不打分、不给推荐语；排序与打分请在「基金组合 → 候选评估」里做"
+            ("候选池= M9 快照按「基金友好」模板筛选（ROE 三年最弱 ≥10 ∧ 资产负债率 ≤60 ∧ PE ≤40 ∧ "
+             "毛利率 ≥30 ∧ ROE 逐年不降 ∧ 股息率 ≥1%）；金融业对资产负债率自动豁免并标注"
+             if tpl_key == "fund_friendly" else
+             "候选池= M9 快照按「红利低波」模板筛选（股息率 ≥3% ∧ PE ≤20 ∧ PB ≤3 ∧ 总市值 ≥200 亿 ∧ "
+             "当日涨跌幅 ≤7）；「低波」= 大盘低估值稳健代理（免费通道无全市场年化波动率快照列，如实声明）")
+            + "；只筛选不排序、不打分、不给推荐语；排序与打分请在「基金组合 → 候选评估」里做"
         ),
         "as_of": utils.now_text(utils.bj_now()),
     }

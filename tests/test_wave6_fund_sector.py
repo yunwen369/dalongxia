@@ -68,26 +68,26 @@ def snapshot_file(tmp_path, monkeypatch):
     path = tmp_path / "data" / "screener_snapshot.json"
     monkeypatch.setattr(screener, "SNAPSHOT_FILE", path)
     rows = [
-        # 满足：ROE 三年上升、毛利率 75、PE 18、负债率 20
+        # 满足：ROE 三年上升、毛利率 75、PE 18、负债率 20；R9：股息率为快照列
         {"code": "600519", "name": "贵州茅台", "board": "白酒", "close": 1392.0, "chg": 1.0,
          "mktcap": 1.7e12, "pe": 18.0, "pb": 6.0, "ps": 10.0, "pcf": 14.0,
          "roe_years": [34.2, 32.5, 30.1], "gross": 75.0, "rev_yoy": 10.0, "np_yoy": 9.0,
-         "debt_ratio": 20.0, "ocf": 9.0e10, "fin_missing": False},
+         "debt_ratio": 20.0, "ocf": 9.0e10, "fin_missing": False, "dividend_yield": 1.9},
         # ROE 逐年下滑（新 20 < 旧 25）→ 不满足「逐年不降」
         {"code": "000002", "name": "万科A", "board": "房地产开发", "close": 8.0, "chg": 0.0,
          "mktcap": 9.0e10, "pe": 12.0, "pb": 0.4, "ps": 1.0, "pcf": 5.0,
          "roe_years": [20.0, 25.0, 28.0], "gross": 40.0, "rev_yoy": -5.0, "np_yoy": -8.0,
-         "debt_ratio": 75.0, "ocf": 1.0e9, "fin_missing": False},
-        # 缺财务
+         "debt_ratio": 75.0, "ocf": 1.0e9, "fin_missing": False, "dividend_yield": 0.0},
+        # 缺财务 + 股息率通道缺失（None，不冒充 0）
         {"code": "688981", "name": "中芯国际", "board": "半导体", "close": 88.0, "chg": -1.0,
          "mktcap": 7.0e11, "pe": 120.0, "pb": 3.0, "ps": 9.0, "pcf": 40.0,
          "roe_years": [None, None, None], "gross": None, "rev_yoy": None, "np_yoy": None,
-         "debt_ratio": None, "ocf": None, "fin_missing": True},
+         "debt_ratio": None, "ocf": None, "fin_missing": True, "dividend_yield": None},
         # 银行：负债率 92 但金融业豁免，其余满足
         {"code": "601398", "name": "工商银行", "board": "银行", "close": 6.1, "chg": 0.2,
          "mktcap": 2.1e12, "pe": 6.0, "pb": 0.6, "ps": 2.0, "pcf": 3.0,
          "roe_years": [11.5, 11.0, 10.6], "gross": 45.0, "rev_yoy": 3.0, "np_yoy": 2.0,
-         "debt_ratio": 92.0, "ocf": 3.0e11, "fin_missing": False},
+         "debt_ratio": 92.0, "ocf": 3.0e11, "fin_missing": False, "dividend_yield": 5.2},
     ]
     payload = {
         "version": "20261031231009",

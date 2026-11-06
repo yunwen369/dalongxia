@@ -202,7 +202,8 @@
 
     // ---------- 第七轮 M13 全市场候选池 ----------
     "combo.candidates.tab": "全市场候选池",
-    "combo.candidates.loading": "正在按「基金友好」模板筛选 M9 快照…",
+    "combo.candidates.loading": "正在按预设模板筛选 M9 全市场快照…",
+    "combo.candidates.tplSwitch": "筛选模板：",
     "combo.candidates.condTitle": "筛选条件（预设模板，只筛选不排序）",
     "combo.candidates.col.factor": "因子",
     "combo.candidates.col.op": "条件",

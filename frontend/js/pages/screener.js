@@ -36,7 +36,8 @@
     ["rev_yoy", "营收同比", "%", "finance"],
     ["np_yoy", "净利同比", "%", "finance"],
     ["debt_ratio", "资产负债率", "%", "finance"],
-    ["ocf_yi", "经营现金流净额", "亿元", "finance"]
+    ["ocf_yi", "经营现金流净额", "亿元", "finance"],
+    ["dividend_yield", "股息率（近一年）", "%", "dividend"]
   ];
   // 结果表列（后端 items 字段 → 列定义；红涨绿跌走 pctClass）
   var SCREENER_COLS = [
@@ -58,6 +59,11 @@
     { key: "np_yoy", title: "净利同比", num: true, render: function (row) { return fmt(row.np_yoy, 2); } },
     { key: "debt_ratio", title: "资产负债率", num: true, render: function (row) { return fmt(row.debt_ratio, 2); } },
     { key: "ocf_yi", title: "经营现金流(亿)", num: true, render: function (row) { return fmt(row.ocf_yi, 2); } },
+    // R9：股息率=快照列。0.00%=近一年真实未派息；—=分红通道缺失（语义区分，不冒充）
+    { key: "dividend_yield", title: t("scr.col.dividend"), num: true, render: function (row) {
+        return row.dividend_yield === null || row.dividend_yield === undefined
+          ? "—" : fmt(row.dividend_yield, 2) + "%";
+      } },
     { key: "exempt", title: "豁免", render: function (row) {
         return (row.exempt && row.exempt.length) ? t("scr.exemptYes") : "";
       } }
