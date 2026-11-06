@@ -458,6 +458,11 @@ def sector_cons(
     if result.get("error"):
         return failure_pack(result, {"items": [], "board": board, "market": public_market})
     data = result["data"] or {}
+    # 无论是否命中 API 缓存，都把成分代码列表同步到 _CONS_CACHE
+    # （供 R5 融资余额聚合、拥挤度成分股维度复用，避免重复翻页）
+    items = data.get("items") or []
+    if items and selected == "cn":
+        sector_provider._remember_cons(board, items)
     as_of, status, is_realtime = _status_now()
     return pack_success(
         {

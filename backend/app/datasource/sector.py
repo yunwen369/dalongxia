@@ -1140,7 +1140,25 @@ def get_cons_ths(board: str) -> Dict[str, Any]:
     Returns:
         dict: {board, items, source_hint}
     """
-    return {"board": board, "items": _sort_cons(_cons_ths(board)), "source_hint": None}
+    result = {"board": board, "items": _sort_cons(_cons_ths(board)), "source_hint": None}
+    _remember_cons(board, result["items"])
+    return result
+
+
+def _remember_cons(board: str, items: List[Dict[str, Any]]) -> None:
+    """把成分股代码列表写入 ``_CONS_CACHE``（供 R5/拥挤度等聚合维度复用）。
+
+    Args:
+        board: 板块名。
+        items: 成分股记录列表（含 ``code`` 字段）。
+    """
+    codes = [str(item.get("code")) for item in items if item.get("code")]
+    if not codes:
+        return
+    _load_cons_cache()
+    if _CONS_CACHE.get(board) != codes:
+        _CONS_CACHE[board] = codes
+        _save_cons_cache()
 
 
 def _sort_cons(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1165,7 +1183,9 @@ def get_cons_sina(board: str) -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     _ensure_board_known(board)
-    return {"board": board, "items": _sort_cons(_cons_sina(board)), "source_hint": "新浪"}
+    items = _sort_cons(_cons_sina(board))
+    _remember_cons(board, items)
+    return {"board": board, "items": items, "source_hint": "新浪"}
 
 
 def get_cons_sw(board: str) -> Dict[str, Any]:
@@ -1178,7 +1198,9 @@ def get_cons_sw(board: str) -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     _ensure_board_known(board)
-    return {"board": board, "items": _sort_cons(_cons_sw(board)), "source_hint": "申万"}
+    items = _sort_cons(_cons_sw(board))
+    _remember_cons(board, items)
+    return {"board": board, "items": items, "source_hint": "申万"}
 
 
 def get_cons_em(board: str) -> Dict[str, Any]:
@@ -1191,7 +1213,9 @@ def get_cons_em(board: str) -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     _ensure_board_known(board)
-    return {"board": board, "items": _sort_cons(_cons_em(board)), "source_hint": "东财"}
+    items = _sort_cons(_cons_em(board))
+    _remember_cons(board, items)
+    return {"board": board, "items": items, "source_hint": "东财"}
 
 
 # 板块成分「不存在/暂无」冷却表（R2-10）：与 P1-03 同策略——先做本地存在性闸门，
@@ -1383,6 +1407,7 @@ _FLOW_TIER_TTL = 600  # 四档 10 分钟刷新
 # 板块成分映射：{板块名: [6 位代码]}（落盘缓存 7 天，构建慢）
 _CONS_CACHE: Dict[str, List[str]] = {}
 _CONS_CACHE_LOADED = False
+_CONS_CACHE_MTIME: float = 0.0
 _CONS_CACHE_LOCK = threading.Lock()
 _TIER_WARMING: set[str] = set()
 
@@ -1398,22 +1423,31 @@ def _cons_cache_file():
 
 
 def _load_cons_cache() -> None:
-    """从磁盘载入板块成分映射（进程内只载一次；文件缺失或损坏时保持为空）。"""
-    global _CONS_CACHE_LOADED
-    if _CONS_CACHE_LOADED:
-        return
+    """从磁盘载入板块成分映射（进程内缓存；文件有更新时重载）。
+
+    守卫逻辑：首次加载后记录文件 mtime；后续调用若文件 mtime 未变则跳过，
+    若文件已更新（其他请求写入了新成分）则重新加载并合并到内存缓存
+    （不覆盖内存中已有的、可能更新的板块）。
+    """
+    global _CONS_CACHE_LOADED, _CONS_CACHE_MTIME
+    path = _cons_cache_file()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else 0.0
+    except OSError:
+        mtime = 0.0
     with _CONS_CACHE_LOCK:
-        if _CONS_CACHE_LOADED:
+        if _CONS_CACHE_LOADED and mtime <= _CONS_CACHE_MTIME:
             return
         _CONS_CACHE_LOADED = True
-        path = _cons_cache_file()
+        _CONS_CACHE_MTIME = mtime
+        if mtime == 0.0:
+            return
         try:
-            if path.is_file():
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    for key, value in payload.items():
-                        if isinstance(value, list):
-                            _CONS_CACHE[key] = [str(code) for code in value]
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                for key, value in payload.items():
+                    if isinstance(value, list) and key not in _CONS_CACHE:
+                        _CONS_CACHE[key] = [str(code) for code in value]
                 logger.info("板块成分映射已载入：%d 个板块", len(_CONS_CACHE))
         except Exception as exc:  # noqa: BLE001 - 缓存损坏不影响主流程
             logger.warning("板块成分映射载入失败：%s", type(exc).__name__)
@@ -1424,7 +1458,7 @@ def _save_cons_cache() -> None:
     try:
         from backend.app.core import atomic
 
-        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         atomic.atomic_write_json(_cons_cache_file(), _CONS_CACHE, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001 - 写盘失败不影响内存缓存
         logger.warning("板块成分映射写盘失败：%s", type(exc).__name__)

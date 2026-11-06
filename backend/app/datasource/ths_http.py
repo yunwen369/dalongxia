@@ -53,10 +53,14 @@ logger = logging.getLogger(__name__)
 # 为纯静态 JSON 无此限制，保持低延迟。
 _POLITE_DELAY = {"q": 1.1, "d": 0.1}
 # 401/403 处理：同花顺反爬是**按 IP 的短时封禁**（实测约 30–60 秒），
-# 单请求逐个退避会拖成几十秒且拖慢整批预热。改为「全局冷却」：
-# 一旦命中 401/403，整个进程对该域名暂停 _COOLDOWN 秒后重试一次；
-# 仍失败才判定通道异常（交由上层降级链）。
-_COOLDOWN = 12.0
+# 单请求逐个退避会拖成几十秒且拖慢整批预热。改为「全局冷却 + 指数退避」：
+# 一旦命中 401/403，整个进程对该域名暂停 ``_COOLDOWN`` 秒，后续每次失败
+# 冷却时间翻倍（上限 ``_COOLDOWN_MAX``），最多重试 ``_MAX_ATTEMPTS`` 次；
+# 仍失败才判定通道异常（交由上层降级链）。2026-11-06 实测封禁可达 60s+，
+# 原 12s×1 次不够，改为 15→30→60s 三次退避。
+_COOLDOWN = 15.0
+_COOLDOWN_MAX = 60.0
+_MAX_ATTEMPTS = 3
 _COOLDOWN_UNTIL: Dict[str, float] = {}
 # 周期 → 同花顺 K 线路径段（01=日 11=周 21=月）
 _PERIOD_PATH = {"daily": "01", "weekly": "11", "monthly": "21"}
@@ -121,7 +125,8 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
     if cool_until > time.time():
         time.sleep(cool_until - time.time())
     last_error = ""
-    for attempt in range(2):
+    cooldown = _COOLDOWN
+    for attempt in range(_MAX_ATTEMPTS):
         _throttle(host_key)
         session = netfix.make_session()
         try:
@@ -129,9 +134,12 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
             if response.status_code in (401, 403):
                 last_error = f"HTTP {response.status_code}（反爬拦截）"
                 with _THROTTLE_LOCK:
-                    _COOLDOWN_UNTIL[host_key] = time.time() + _COOLDOWN
-                if attempt == 0:
-                    time.sleep(_COOLDOWN)
+                    _COOLDOWN_UNTIL[host_key] = time.time() + cooldown
+                logger.warning("同花顺 %s 第 %d/%d 次命中反爬（%s），冷却 %.0fs 后重试",
+                               host_key, attempt + 1, _MAX_ATTEMPTS, last_error, cooldown)
+                if attempt < _MAX_ATTEMPTS - 1:
+                    time.sleep(cooldown)
+                    cooldown = min(cooldown * 2, _COOLDOWN_MAX)
                 continue
             response.raise_for_status()
             response.encoding = encoding
@@ -143,7 +151,7 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
             last_error = f"{name}"
         finally:
             session.close()
-    raise NonRetryableError(f"同花顺请求失败：{last_error or '未知原因'}")
+    raise NonRetryableError(f"同花顺请求失败：{last_error or '未知原因'}（已重试 {_MAX_ATTEMPTS} 次）")
 
 
 def _text_of(cell_html: str) -> str:
