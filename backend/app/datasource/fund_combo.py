@@ -14,7 +14,8 @@
   （规模<2亿 / 成立<3年 / 小型且急缩的清盘风险）在 evaluate 实装，被排除者并入
   items 且 exclusion.status=excluded（不静默删），数据缺失记 unknown 不默认放行
 - **风格稳定性不可用**：需 8 个季度持仓做重合度，公开接口无历史持仓 →
-  该维度固定给中位分 50，并在 `missing` 点名（R8 待补）
+  该维度固定给中位分 50，并在 `missing` 点名（R8 已根治：`fund.get_style_history`
+  取东财季度持仓算重仓行业漂移度，<4 期返回 accumulating 进度态）
 - **拥挤度降权未接入**：需「基金→重仓行业→行业拥挤度」三级映射，成本高，留待 M5b
 
 权重算法（不用均值-方差，理由见设计基准）：w ∝ (1/σ) × score^0.5，
@@ -405,6 +406,23 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
         fee = fee_map.get(code)
         if fee is None:
             missing.append(f"{code}（费率不可用）")
+        # R8 风格稳定性真实分：不再固定 50（假分=变相降级）。
+        # 取东财季度持仓算重仓行业漂移度；<4 期返回 accumulating 进度态（不打分），
+        # 数据不可得记 unavailable。style_evidence 透出推导明细供界面展示。
+        try:
+            style = fund_provider.get_style_history(code)
+        except Exception as exc:  # noqa: BLE001 - 风格通道失败按不可用处理
+            logger.info("风格稳定性取数失败 %s：%s", code, type(exc).__name__)
+            style = {"status": "unavailable", "style_score": None, "periods_used": 0,
+                     "caliber": f"风格稳定性取数失败（{type(exc).__name__}）", "missing": []}
+        style_status = style.get("status")
+        style_score = style.get("style_score")
+        if style_status == "accumulating":
+            missing.append(
+                f"{code}（风格稳定性数据积累中，已披露 {style.get('periods_used', 0)}/4 期，暂不打分）"
+            )
+        elif style_status == "unavailable":
+            missing.append(f"{code}（风格稳定性数据不可用，该维度不参与打分）")
         if nav_items:
             nav_map[code] = {str(row.get("date")): float(row["nav"])
                              for row in nav_items if row.get("nav")}
@@ -415,7 +433,14 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
             "series": stats.get("nav_series") or [],
             "rank_pct": rank,
             "fee": fee,
-            "style_score": 50.0,  # 风格稳定性数据不可得，固定中位（见 missing）
+            "style_score": style_score,
+            "style_status": style_status,
+            "style_evidence": {
+                "status": style_status,
+                "periods_used": style.get("periods_used"),
+                "avg_drift_pct": style.get("avg_drift_pct"),
+                "industry_series": style.get("industry_series") or [],
+            },
             "exclusion": exclusion,
         })
 
@@ -509,7 +534,8 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
              if use_absolute else
              "六维打分=池内 min-max 归一后加权；") +
             "（夏普25/卡玛25/回撤20/排名分位15/风格10/费率5），"
-            "风格稳定性因无历史持仓数据固定给 50；"
+            "风格稳定性=季度持仓重仓行业漂移度（0%→100分，50%→0分，需≥4期披露，"
+            "不足显示积累进度不冒充50分）；"
             "权重=逆波动率×得分^0.5，再按权益上限/单只上限/现金下限迭代裁剪；"
             "相关性用净值日收益的皮尔逊系数（共同交易日≥60）；"
             f"硬性排除三条（规模<{EXCLUDE_MIN_SCALE_YI}亿 / 成立<{EXCLUDE_MIN_AGE_YEARS}年 / "

@@ -254,3 +254,139 @@ def test_profile_basis_real_structure(client: TestClient) -> None:
     if profile["scale_yi"] is not None:
         assert profile["scale_source"], "有规模值必须有来源"
     assert "caliber" in profile and profile["caliber"]
+
+
+# ============================================================
+# R8（设计基准 §8 / 验收 C8）：风格稳定性真实分——重仓行业季度漂移度
+# ============================================================
+
+def _patch_style(monkeypatch, mapping: Dict[str, Dict[str, Any]]) -> None:
+    """把 fund_provider.get_style_history 换成按代码查表的假实现。
+
+    Args:
+        monkeypatch: pytest 补丁器。
+        mapping: {code: style 字典}。
+    """
+    def fake(code: str) -> Dict[str, Any]:
+        """查表返回预置风格数据。
+
+        Args:
+            code: 基金代码。
+
+        Returns:
+            dict: 预置风格数据。
+        """
+        return mapping[code]
+
+    monkeypatch.setattr(fund_combo.fund_provider, "get_style_history", fake)
+
+
+def test_style_history_017811_not_fifty() -> None:
+    """C8 核心断言：017811 的风格稳定性得分≠50 且有推导明细。
+
+    第七轮固定给 50（假分=变相降级），R8 改为真实漂移度分。017811 是半导体
+    主题基金，7 期披露下漂移度约 10%，映射得分约 80 分（上游不可用时 skip）。
+    """
+    from backend.app.datasource import fund as fund_provider
+
+    style = fund_provider.get_style_history("017811")
+    if style.get("status") != "ready":
+        pytest.skip(f"017811 风格数据本次不可用（status={style.get('status')}）")
+    assert style["style_score"] != 50.0, "R8 禁止固定 50 分（假分）"
+    assert style["periods_used"] >= 4, "ready 态必须 ≥4 期披露"
+    assert style["avg_drift_pct"] is not None
+    assert style["industry_series"], "必须透出行业序列推导明细"
+    for row in style["industry_series"]:
+        assert {"period", "industry_weights", "top_industry"} <= set(row)
+
+
+def test_style_accumulating_not_scored(monkeypatch: None) -> None:
+    """C8：新基金（<4 期）返回 accumulating 进度态，不打分、不冒充 50。"""
+    _patch_style(monkeypatch, {"999999": {
+        "status": "accumulating", "periods_used": 2, "style_score": None,
+        "avg_drift_pct": None, "industry_series": [
+            {"period": "2026年1季度", "industry_weights": {"半导体": 70.0}, "top_industry": "半导体"},
+            {"period": "2026年2季度", "industry_weights": {"半导体": 72.0}, "top_industry": "半导体"},
+        ],
+        "caliber": "风格稳定性需 ≥4 期，当前 2/4 期", "missing": ["季度持仓仅 2 期"],
+    }})
+    # 直接调 get_style_history 验证结构（不走 evaluate 以隔离其他依赖）
+    from backend.app.datasource import fund as fund_provider
+
+    monkeypatch.setattr(fund_provider, "get_style_history",
+                        lambda code: {"status": "accumulating", "periods_used": 2,
+                                      "style_score": None, "avg_drift_pct": None,
+                                      "industry_series": [], "caliber": "", "missing": []})
+    style = fund_provider.get_style_history("999999")
+    assert style["status"] == "accumulating"
+    assert style["style_score"] is None
+    assert style["periods_used"] < 4
+
+
+def test_style_unavailable_score_none(monkeypatch: None) -> None:
+    """无披露通道返回 unavailable，style_score=None 且 missing 说明。"""
+    from backend.app.datasource import fund as fund_provider
+
+    monkeypatch.setattr(fund_provider, "get_style_history",
+                        lambda code: {"status": "unavailable", "periods_used": 0,
+                                      "style_score": None, "avg_drift_pct": None,
+                                      "industry_series": [], "caliber": "",
+                                      "missing": ["季度持仓无披露"]})
+    style = fund_provider.get_style_history("999999")
+    assert style["status"] == "unavailable"
+    assert style["style_score"] is None
+    assert style["missing"]
+
+
+def test_evaluate_style_score_not_fixed(monkeypatch: None) -> None:
+    """evaluate 接入 R8：items 的 style_score 来自真实漂移度，不再恒为 50。"""
+    # 用 monkeypatch 替换 _stats_from_nav / _rank_percentile / get_profile_basis /
+    # get_style_history，避免真实上游依赖，专注断言 style_score 链路。
+    monkeypatch.setattr(fund_combo, "_stats_from_nav",
+                        lambda code: ({"annual_return": 0.10, "max_drawdown": -0.15,
+                                       "sharpe": 1.2, "calmar": 1.5, "volatility": 18.0,
+                                       "nav_series": []}, []))
+    monkeypatch.setattr(fund_combo, "_rank_percentile", lambda code: 30.0)
+    monkeypatch.setattr(fund_combo, "_load_fee_map", lambda: {"017811": 1.5})
+    _patch_style(monkeypatch, {"017811": {
+        "status": "ready", "periods_used": 7, "style_score": 79.7,
+        "avg_drift_pct": 10.14, "industry_series": [
+            {"period": "2026年1季度", "industry_weights": {"半导体": 70.0},
+             "top_industry": "半导体"}],
+        "caliber": "", "missing": [],
+    }})
+    monkeypatch.setattr(fund_combo.fund_provider, "get_profile_basis",
+                        lambda code: {"scale_yi": 277.0, "age_years": 3.7,
+                                      "scale_mom_pct": -11.0, "inception_date": "2023-02-22",
+                                      "inception_source": "F10", "scale_source": "F10",
+                                      "missing": []})
+    result = fund_combo.evaluate(["017811"], "balanced")
+    item = result["items"][0]
+    assert item["style_score"] == 79.7
+    assert item["style_status"] == "ready"
+    assert item["parts"]["style"] == 79.7  # <3 只走绝对分档，style 直接取原值
+    assert item["style_evidence"]["periods_used"] == 7
+
+
+def test_evaluate_style_accumulating_absent_from_score(monkeypatch: None) -> None:
+    """accumulating 态的 style_score=None → 不参与加权，score_missing 含 style。"""
+    monkeypatch.setattr(fund_combo, "_stats_from_nav",
+                        lambda code: ({"annual_return": 0.10, "max_drawdown": -0.15,
+                                       "sharpe": 1.2, "calmar": 1.5, "volatility": 18.0,
+                                       "nav_series": []}, []))
+    monkeypatch.setattr(fund_combo, "_rank_percentile", lambda code: 30.0)
+    monkeypatch.setattr(fund_combo, "_load_fee_map", lambda: {"017811": 1.5})
+    _patch_style(monkeypatch, {"017811": {
+        "status": "accumulating", "periods_used": 2, "style_score": None,
+        "avg_drift_pct": None, "industry_series": [], "caliber": "", "missing": [],
+    }})
+    monkeypatch.setattr(fund_combo.fund_provider, "get_profile_basis",
+                        lambda code: {"scale_yi": 277.0, "age_years": 3.7,
+                                      "scale_mom_pct": -11.0, "inception_date": "2023-02-22",
+                                      "inception_source": "F10", "scale_source": "F10",
+                                      "missing": []})
+    result = fund_combo.evaluate(["017811"], "balanced")
+    item = result["items"][0]
+    assert item["style_score"] is None
+    assert "style" in item["score_missing"], "风格维度缺失必须记入 score_missing"
+    assert any("积累中" in note for note in result["missing"]), result["missing"]

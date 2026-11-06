@@ -1203,6 +1203,146 @@ def get_profile_basis(code: str) -> Dict[str, Any]:
     return _cache.get_or_load(f"fund:profile_basis:{code}", 24 * 3600, _load)
 
 
+# R8 风格稳定性：重仓行业季度漂移度所需的行业→代码映射（进程内缓存 24h）
+# 东财 `stock_individual_info_em` 返回的「行业」字段是证监会一级行业，跨基金复用。
+_INDUSTRY_CACHE: Dict[str, Optional[str]] = {}
+_INDUSTRY_TS = 0.0
+_INDUSTRY_TTL = 24 * 3600
+
+
+def _stock_industry(stock_code: str) -> Optional[str]:
+    """个股所属行业（东财个股概况「行业」字段，进程内缓存 24h）。
+
+    Args:
+        stock_code: 6 位 A 股代码。
+
+    Returns:
+        Optional[str]: 行业名称（如「半导体」）；取不到返回 None。
+    """
+    global _INDUSTRY_TS
+    now = time.time()
+    if now - _INDUSTRY_TS > _INDUSTRY_TTL:
+        _INDUSTRY_CACHE.clear()
+        _INDUSTRY_TS = now
+    cached = _INDUSTRY_CACHE.get(stock_code)
+    if cached is not None or stock_code in _INDUSTRY_CACHE:
+        return cached
+    try:
+        frame = ak.stock_individual_info_em(symbol=stock_code)
+        industry: Optional[str] = None
+        for row in frame.to_dict("records"):
+            if str(row.get("item", "")).strip() == "行业":
+                industry = row.get("value") or None
+                break
+    except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
+        logger.info("个股行业不可得 %s：%s", stock_code, type(exc).__name__)
+        industry = None
+    _INDUSTRY_CACHE[stock_code] = industry
+    return industry
+
+
+def get_style_history(code: str) -> Dict[str, Any]:
+    """基金风格稳定性：重仓行业季度漂移度（设计基准 §8 R8）。
+
+    第七轮遗留降级点「风格稳定性固定 50 分（假分=变相降级）」的根治：取东财
+    ``fund_portfolio_hold_em`` 近 2 年季度持仓（最多 8 期），逐期按东财「行业」
+    字段聚合占净值比例，用相邻两期的 L1 距离（行业权重变动之和，0~200%）作为
+    漂移度，均值映射到 0~100 分（漂移越小分越高）。
+
+    数据不足 4 期（新基金 / 披露不完整）时不冒充 50 分，返回 ``status="accumulating"``
+    进度态并附已积累期数；满足 4 期才给出 ``style_score`` 真实分（验收 C8 断言
+    「017811 得分≠50 且有推导明细；新基金显示积累进度」）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        Dict[str, Any]: ``{code, status, periods_used, avg_drift_pct, style_score,
+        industry_series, caliber, missing}``；status ∈ ready/accumulating/unavailable；
+        accumulating 时 ``style_score=None`` 且 ``periods_used<4``。
+        24 小时缓存（季报披露频率低，无需更短 TTL）。
+    """
+    from backend.app.core import cache as _cache
+
+    def _load() -> Dict[str, Any]:
+        """聚合近 2 年季度持仓 + 行业映射 + 漂移度（供缓存 loader 调用）。"""
+        missing: List[str] = []
+        now_year = utils.bj_now().year
+        frames = []
+        for year in (now_year, now_year - 1):
+            try:
+                frame = ak.fund_portfolio_hold_em(symbol=code, date=str(year))
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+            except Exception as exc:  # noqa: BLE001 - 某年无披露不阻断
+                logger.info("季度持仓不可得 %s/%s：%s", code, year, type(exc).__name__)
+        if not frames:
+            missing.append("季度持仓无披露（东财 fund_portfolio_hold_em 近 2 年为空）")
+            return {
+                "code": code, "status": "unavailable", "periods_used": 0,
+                "avg_drift_pct": None, "style_score": None, "industry_series": [],
+                "caliber": "风格稳定性需季度持仓披露，当前无数据", "missing": missing,
+            }
+        import pandas as pd
+
+        df = pd.concat(frames, ignore_index=True)
+        periods = sorted(df["季度"].dropna().unique().tolist())
+        # 每期取前 10 大重仓股的行业聚合（东财接口每期返回前 10 大重仓）
+        industry_series: List[Dict[str, Any]] = []
+        for period in periods:
+            sub = df[df["季度"] == period]
+            weights: Dict[str, float] = {}
+            for _, row in sub.iterrows():
+                stock = str(row.get("股票代码") or "").strip()
+                pct = _num(row.get("占净值比例"))
+                if not stock or pct is None:
+                    continue
+                industry = _stock_industry(stock) or "未知"
+                weights[industry] = weights.get(industry, 0.0) + pct
+            # 归一化到 100%（重仓股合计通常 70~95%，剩余为非重仓+现金）
+            industry_series.append({
+                "period": period,
+                "industry_weights": {k: round(v, 2) for k, v in weights.items()},
+                "top_industry": max(weights, key=weights.get) if weights else None,
+            })
+        periods_used = len(industry_series)
+        if periods_used < 4:
+            return {
+                "code": code, "status": "accumulating", "periods_used": periods_used,
+                "avg_drift_pct": None, "style_score": None,
+                "industry_series": industry_series,
+                "caliber": (
+                    f"风格稳定性需 ≥4 期季度持仓披露，当前仅 {periods_used}/4 期，"
+                    "数据积累中不打分（不冒充 50 分）"
+                ),
+                "missing": missing + [f"季度持仓仅 {periods_used} 期，不足 4 期门槛"],
+            }
+        # 相邻期 L1 漂移度（行业权重变动之和，0~200%），越小越稳定
+        drifts: List[float] = []
+        for index in range(1, len(industry_series)):
+            prev = industry_series[index - 1]["industry_weights"]
+            curr = industry_series[index]["industry_weights"]
+            all_keys = set(prev) | set(curr)
+            drift = sum(abs(prev.get(k, 0.0) - curr.get(k, 0.0)) for k in all_keys)
+            drifts.append(drift)
+        avg_drift = sum(drifts) / len(drifts) if drifts else 0.0
+        # 映射：漂移 0%→100 分，漂移 50%（重仓全换）→0 分，线性截断到 [0,100]
+        style_score = round(max(0.0, min(100.0, 100.0 - avg_drift * 2.0)), 1)
+        return {
+            "code": code, "status": "ready", "periods_used": periods_used,
+            "avg_drift_pct": round(avg_drift, 2), "style_score": style_score,
+            "industry_series": industry_series,
+            "caliber": (
+                "风格稳定性=近 2 年季度持仓的重仓行业漂移度（相邻期行业权重 L1 距离均值，"
+                "0~200%），漂移越小分越高（0%→100，50%→0）；行业口径=东财个股概况"
+                "「行业」字段；需 ≥4 期披露才打分"
+            ),
+            "missing": missing,
+        }
+
+    return _cache.get_or_load(f"fund:style_history:{code}", 24 * 3600, _load)
+
+
 def get_dividend(code: str) -> Dict[str, Any]:
     """分红记录（东财 fhsp HTML 解析）。
 
