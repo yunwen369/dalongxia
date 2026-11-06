@@ -262,13 +262,15 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """对话（OpenAI 兼容 /chat/completions，90s 超时）。
 
     Body:
-        {message} 或 {messages:[{role,content}, ...]}
+        {message} 或 {messages:[{role,content}, ...]}；
+        可选 `page` + `page_params`（R16 页面上下文：Copilot 上报当前视图名
+        与 hash 参数，后端据此注入页面真实数值到 system prompt）。
 
     Args:
         payload: 请求体（JSON 对象）。
 
     Returns:
-        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
+        dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime/context_used。
     """
     raw_messages = payload.get("messages")
     messages: List[Dict[str, str]] = []
@@ -295,6 +297,21 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             "AI 助手尚未配置：请到「设置 → AI 设置」填写 base_url、api_key、model 后再试。",
             data={"guidance": "打开设置页填写三项配置后即可对话", "configured": False},
         )
+
+    # R16 页面上下文：构造成功才注入（失败=None=与 R16 之前行为完全一致，零降级）；
+    # 放在配置检查之后——未配置直接拒绝，不应白白拉一遍页面数据源。
+    context_used = False
+    try:
+        from backend.app.datasource import page_context
+
+        summary = page_context.build_summary(
+            str(payload.get("page") or ""), payload.get("page_params") or {}
+        )
+    except Exception:  # noqa: BLE001 - 上下文注入绝不影响对话主链路
+        summary = None
+    if summary:
+        messages = [{"role": "system", "content": summary}] + messages
+        context_used = True
 
     url = ai.base_url.rstrip("/") + "/chat/completions"
     started = time.time()
@@ -342,8 +359,10 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "model": ai.model,
         "elapsed_ms": int((time.time() - started) * 1000),
         "messages": messages,
+        "context_used": context_used,
         "source": "用户配置 AI",
-        "caliber": "AI 回复仅供研究参考，不作为数据源；数据仍以行情/财务接口为准",
+        "caliber": "AI 回复仅供研究参考，不作为数据源；数据仍以行情/财务接口为准"
+                   + ("；本轮已注入当前页面真实数值上下文（R16）" if context_used else ""),
         "as_of": _now(),
         "market_status": "对话",
         "is_realtime": False,

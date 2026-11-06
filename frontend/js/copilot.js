@@ -24,6 +24,25 @@
     t("copilot.suggest4")
   ];
 
+  /** 解析当前 hash 路由，返回页面上下文（R16：Copilot 读页面）。
+   * @returns {Object} {page, page_params}；无法解析时 {page:""}
+   */
+  function currentPageContext() {
+    var raw = window.location.hash || "#/home";
+    var question = raw.indexOf("?");
+    var path = question >= 0 ? raw.slice(0, question) : raw;
+    var query = question >= 0 ? raw.slice(question + 1) : "";
+    var params = {};
+    try {
+      new URLSearchParams(query).forEach(function (value, key) {
+        params[key] = value;
+      });
+    } catch (e) {
+      params = {};
+    }
+    return { page: path.replace(/^#\/?/, "").split("/")[0] || "home", page_params: params };
+  }
+
   /** 打开设置页（AI 配置在「设置 → AI 设置」中维护）。 */
   function gotoSetting() {
     window.location.hash = "#/settings";
@@ -107,7 +126,10 @@
     fetch("/api/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: history.slice(-10) })
+      body: JSON.stringify(Object.assign(
+        { messages: history.slice(-10) },
+        currentPageContext()
+      ))
     })
       .catch(function () {
         throw new Error(t("error.network"));
