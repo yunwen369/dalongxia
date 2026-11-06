@@ -197,7 +197,7 @@
     "crowd.rank.col.board": "板块",
     "crowd.rank.col.score": "得分",
     "crowd.rank.col.level": "等级",
-    "crowd.rank.col.parts": "四维分位",
+    "crowd.rank.col.parts": "六维分位",
     "crowd.rank.failed": "未纳入的板块：{list}",
 
     // ---------- 第七轮 M13 全市场候选池 ----------
@@ -1046,7 +1046,7 @@
     "sectors.rankConceptSub": "独立第二表 · 与行业排行并列常驻",
     // 第七轮 M3：板块拥挤度
     "sectors.crowd.title": "板块拥挤度",
-    "sectors.crowd.sub": "四维分位加权 0–100 分 · >60 提示 / >80 建议复核 · 只陈述位置不给指令",
+    "sectors.crowd.sub": "六维分位加权 0–100 分 · >60 提示 / >80 建议复核 · 只陈述位置不给指令",
     "sectors.crowd.placeholder": "输入板块名，如 半导体 / 银行 / 白酒",
     "sectors.crowd.query": "查询",
     "sectors.crowd.hint": "分位窗口近 260 个交易日；缺失维度会在结果下方逐条说明",

@@ -280,7 +280,7 @@ def check_crowding(base: str, results: List[Dict[str, Any]]) -> None:
     weights = [part.get("weight") or 0 for part in parts]
     pcts = [part.get("pct") for part in parts]
     if not parts or any(value is None for value in pcts):
-        add(results, "⑪ 拥挤度加权自洽", "四维分位齐全", "存在缺失维度", "n/a", "WARN", "分位样本不足")
+        add(results, "⑪ 拥挤度加权自洽", "六维分位齐全", "存在缺失维度", "n/a", "WARN", "分位样本不足")
         return
     total_weight = sum(weights)
     recomputed = sum(p * w for p, w in zip(pcts, weights)) / total_weight
