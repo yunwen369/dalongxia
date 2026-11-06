@@ -244,6 +244,30 @@ def _portfolio_snapshot_loop() -> None:
         time.sleep(1800)
 
 
+def _fundflow_warm_loop() -> None:
+    """板块四档预热（R5）：启动后台逐板块构建成分映射并聚合四档。
+
+    同花顺成分页有 1.1s 限流且 V8 签名需串行，故单线程顺序执行；
+    实测 89 个行业约 2–3 分钟完成，完成后当日刷新只走新浪批量接口（约 3 秒）。
+    延迟 15 秒启动，避开首屏请求高峰与启动探针。
+    """
+    import time as _time
+
+    from backend.app.datasource import sector as sector_provider
+
+    _time.sleep(15)
+    try:
+        # 每批 15 个板块、批间冷却 120 秒：单次连续请求过多会被同花顺判为异常流量
+        # （实测 40 个板块后 NonRetryableError 连片出现，并连累同进程的业务请求）。
+        done = 0
+        for _ in range(6):
+            done += sector_provider.warm_fundflow_tiers(max_boards=15)
+            _time.sleep(120)
+        logger.info("板块四档预热完成：累计 %d 个板块已聚合", done)
+    except Exception as exc:  # noqa: BLE001 - 预热失败不影响主服务
+        logger.info("板块四档预热异常：%s", type(exc).__name__)
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用。
 
@@ -297,6 +321,23 @@ def create_app() -> FastAPI:
         """启动持仓快照调度线程（幂等：重复触发只会多一个守护线程）。"""
         threading.Thread(
             target=_portfolio_snapshot_loop, daemon=True, name="portfolio-snapshot"
+        ).start()
+
+    # 第十轮 P3：板块四档预热（**默认关闭**，需显式 OPENBB_FUNDFLOW_WARM=1）
+    # 原因（2026-11-06 实测）：预热会与业务请求争抢同花顺同一限流通道（1.1s + V8 串行），
+    # 全量跑一遍约 40 个板块触发 NonRetryableError，并让同时在跑的 fundflow / 排行请求
+    # 拿到「行业数量 49」的残缺表 —— 属于用后台任务换前台可用性，不可接受。
+    # 现改为按需补齐：每次 fundflow 请求内 `_ensure_cons_progress` 按 6 秒预算补 1–2 个板块，
+    # 用户实际访问的板块优先补齐；需要一次性预热时再用环境变量开启。
+    @application.on_event("startup")
+    def _start_fundflow_warm() -> None:
+        """按开关启动板块四档预热线程（默认不启动，避免抢源站限流）。"""
+        import os as _os
+
+        if _os.environ.get("OPENBB_FUNDFLOW_WARM", "").strip() != "1":
+            return
+        threading.Thread(
+            target=_fundflow_warm_loop, daemon=True, name="fundflow-warm"
         ).start()
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找

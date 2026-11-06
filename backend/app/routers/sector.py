@@ -506,9 +506,10 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
             dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
         """
         return with_fallback(
-            [("同花顺", "同花顺/行业资金流 + 成分股新浪四档聚合（超大单/大单/中单/小单）；"
-                        "已聚合板块整行取新浪口径、未聚合板块取同花顺口径，"
-                        "每行 flow_source 标明，两套口径不可跨行相加",
+            [("同花顺", "板块资金流三源并用：同花顺行业资金流（90 个二级行业，含净额/流入/流出）"
+                        "＋ 成分股新浪四档聚合（超大/大/中/小）＋ 东财板块资金流排行（同花顺不可用时的备源，"
+                        "细分为 496 个行业且自带四档，但无流入/流出总额）；"
+                        "每行 flow_source 标明实际来源，不同源口径不可跨行相加",
               sector_provider.get_fundflow)],
             empty_value=[],
         )

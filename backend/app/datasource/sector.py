@@ -1249,6 +1249,58 @@ def _ensure_board_known(board: str) -> None:
 # =============================================================
 # 四、板块资金流 / 趋势对比
 # =============================================================
+def _fundflow_em_fallback() -> Tuple[List[Dict[str, Any]], str]:
+    """同花顺资金流不可用时的备源：东财「板块资金流排行（今日·行业）」。
+
+    2026-11-06 实测（同花顺被限流期间）：496 行、自带超大单/大单/中单/小单四档，
+    单次约 0.9s，无需成分股聚合 —— 既补净额也补四档，是比「新浪成分股聚合」
+    更省事的一条链路。
+
+    口径差异（必须在 caliber 与 flow_source 里写明）：
+        - 东财给的是「主力/超大/大/中/小」净额（元），同花顺给「净流入/流入/流出」（亿元），
+          两套不可跨行相加，故本函数**只用于同花顺整表不可用时的整体切换**，不混行；
+        - 东财备源没有「流入/流出」总额，`inflow`/`outflow` 置 None，前端按「无数据」展示。
+
+    Returns:
+        Tuple[List[Dict[str, Any]], str]: (行业行列表, 数据源文案)。
+    """
+    import akshare as ak
+
+    frame = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, record in frame.iterrows():
+        name = str(record.get("名称") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        def _yi(key: str) -> Optional[float]:
+            """元 → 亿元（东财给原始元）。"""
+            value = record.get(key)
+            if value is None or (isinstance(value, float) and value != value):
+                return None
+            try:
+                return round(float(value) / 1e8, 2)
+            except (TypeError, ValueError):
+                return None
+
+        rows.append({
+            "name": name,
+            "pct": _round(_num(record.get("今日涨跌幅")), 2),
+            "net_inflow": _yi("今日主力净流入-净额"),
+            "inflow": None,
+            "outflow": None,
+            "flow_source": "东财（板块资金流排行·今日）",
+            "super_big": _yi("今日超大单净流入-净额"),
+            "big": _yi("今日大单净流入-净额"),
+            "medium": _yi("今日中单净流入-净额"),
+            "small": _yi("今日小单净流入-净额"),
+            "covered": None,
+        })
+    return rows, "东财（同花顺不可用时备源）"
+
+
 def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     """板块资金流向（同花顺行业资金流 + 新浪个股四档聚合）。
 
@@ -1275,7 +1327,14 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     if market in ("hk", "us"):
         return []
     ensure_enabled()
-    rows = ths_http.get_industry_flow_rows()
+    try:
+        rows = ths_http.get_industry_flow_rows()
+    except Exception as exc:  # noqa: BLE001 - 同花顺限流/改版时切东财备源，避免整表空
+        logger.info("同花顺行业资金流不可用（%s），切换东财备源", type(exc).__name__)
+        fallback_rows, _source = _fundflow_em_fallback()
+        if not fallback_rows:
+            raise
+        return fallback_rows
     # 四档依赖成分映射；未预热完时按时间预算补 1–2 个板块，
     # 使「首次使用也能逐步补齐」，而不是永久空白（预算内补不完由后台线程继续）。
     _ensure_cons_progress(rows, budget_seconds=6.0, max_boards=2)
@@ -1370,12 +1429,13 @@ def _save_cons_cache() -> None:
         logger.warning("板块成分映射写盘失败：%s", type(exc).__name__)
 
 
-def get_board_constituents(board: str, *, kind: str = "industry") -> List[str]:
+def get_board_constituents(board: str, *, kind: str = "industry", max_pages: int = 40) -> List[str]:
     """取板块成分股代码列表（内存 + 磁盘缓存，避免重复翻页触发同花顺限流）。
 
     Args:
         board: 板块名。
         kind: industry / concept。
+        max_pages: 最多翻页数（每页约 20 只）；预热场景可调小以缩短单板块耗时。
 
     Returns:
         List[str]: 6 位代码列表。
@@ -1390,7 +1450,7 @@ def get_board_constituents(board: str, *, kind: str = "industry") -> List[str]:
     code = ths_http.get_board_code(board, kind=kind)
     if not code:
         raise ValueError(f"板块名录无此板块：{board}")
-    rows = ths_http.get_board_cons(code, kind=kind)
+    rows = ths_http.get_board_cons(code, kind=kind, max_pages=max_pages)
     codes = [row["code"] for row in rows if row.get("code")]
     if not codes:
         raise ValueError(f"板块成分为空：{board}")
@@ -1486,7 +1546,9 @@ def warm_fundflow_tiers(*, max_boards: int = 90) -> int:
         _TIER_WARMING.add(name)
         try:
             if name not in _CONS_CACHE:
-                get_board_constituents(name)
+                # 预热优先速度：12 页约 240 只，已覆盖绝大多数行业板块（半导体 182 只全覆盖）；
+                # 全量 40 页实测单板块 24s，89 个板块要 35 分钟，启动后台不划算。
+                get_board_constituents(name, max_pages=12)
             payload = _flow_tier(name, None)
             if payload:
                 done += 1
@@ -1768,6 +1830,26 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     # ③ 行业融资余额：本机无行业口径源（融资余额仅有全市场口径），如实标注
     cons_missing.append("行业融资余额分位未纳入（融资余额仅有全市场口径，无行业口径源）")
 
+    # R6（C6）：成分股相关性作为**独立分项**列出（weight=0，不参与加权）。
+    # 依据：相关系数只有当期值、无历史序列 ⇒ 无法算分位，硬塞进 0–100 分会破坏同质性；
+    # 但它对「同涨同跌是否极端」有直接指示意义，故以绝对水平映射（0→0 分，1→100 分）单列，
+    # 并在 note 里写明口径，供方向性核对（半导体分散 / 银行同质）。
+    corr_block = extra.get("correlation") or {}
+    if corr_block.get("corr") is not None:
+        corr_value = float(corr_block["corr"])
+        parts["correlation"] = {
+            "label": "成分股相关性",
+            "value": round(corr_value, 3),
+            "pct": round(max(0.0, min(1.0, corr_value)) * 100, 1),
+            "weight": 0.0,
+            "unit": "",
+            "note": (
+                f"绝对水平映射（0→0 分 / 1→100 分）；样本 "
+                f"{corr_block.get('samples') or '无数据'} 只 × {corr_block.get('window_days') or '无数据'} 日；"
+                "无历史分位，权重 0 不参与加权，仅供方向性参考"
+            ),
+        }
+
     return {
         "board": board,
         "kind": kind,
@@ -1854,25 +1936,40 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
     failed: List[str] = []
 
     def _work(board: str) -> Dict[str, Any]:
-        """单板块打分（异常向上抛，由调用方归类到 failed）。
+        """单板块打分（R11：失败重试 1 次后再归类到 failed）。
+
+        概念板块日线偶发空表/超时（源站抖动），单次失败就计入 failed 会把完整率
+        压到 90% 以下；重试一次即可覆盖绝大多数瞬时抖动，同时不做无上限重试
+        （避免个别坏板块拖住整个排行）。
 
         Args:
             board: 板块名。
 
         Returns:
             Dict[str, Any]: 单板块结果，含 board / kind / score / level / parts。
+
+        Raises:
+            Exception: 两次都失败时抛出最后一次异常。
         """
-        data = get_crowding(board, kind=key_kind, fill_today=False)
-        return {
-            "board": data["board"],
-            "kind": data.get("kind"),
-            "score": data["score"],
-            "level": data["level"],
-            "parts": [
-                {"label": part["label"], "pct": part["pct"], "value": part["value"], "unit": part["unit"]}
-                for part in data.get("parts") or []
-            ],
-        }
+        last_error: Optional[Exception] = None
+        for attempt in (1, 2):
+            try:
+                data = get_crowding(board, kind=key_kind, fill_today=False)
+                return {
+                    "board": data["board"],
+                    "kind": data.get("kind"),
+                    "score": data["score"],
+                    "level": data["level"],
+                    "parts": [
+                        {"label": part["label"], "pct": part["pct"], "value": part["value"], "unit": part["unit"]}
+                        for part in data.get("parts") or []
+                    ],
+                }
+            except Exception as exc:  # noqa: BLE001 - 记录后重试一次
+                last_error = exc
+                if attempt == 1:
+                    time.sleep(0.3)
+        raise last_error if last_error else RuntimeError(f"{board} 打分失败")
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_work, name): name for name in names}

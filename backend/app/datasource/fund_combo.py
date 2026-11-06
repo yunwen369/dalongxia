@@ -28,7 +28,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app.datasource import fund as fund_provider
-from backend.app.datasource import macro, portfolio, utils
+from backend.app.datasource import macro, portfolio, tencent, utils
 
 logger = logging.getLogger(__name__)
 
@@ -804,13 +804,47 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
     p_mom = _rank(mom_hist, mom_now, True)
     p_dd = _rank(dd_hist, dd_now, True)
 
+    # R10 新增：重仓股合计换手率（前十大重仓当日换手率均值）。
+    # 只有当期值、无历史序列可算分位 ⇒ 用绝对水平映射（0%→0 分，10% 及以上→100 分），
+    # 与「规模环比增速」共同构成 M14 要求的「基金自身维度」；规模增速因数据源不可得
+    # 在 missing 里如实登记（不编造），详见 caliber。
+    holding_turnover: Optional[float] = None
+    turnover_note = ""
+    try:
+        holding_payload = fund_provider.get_holding(code)
+        tops = (holding_payload.get("items") or [])[:10]
+        values: List[float] = []
+        for item in tops:
+            symbol = str(item.get("code") or item.get("symbol") or "")
+            if not symbol:
+                continue
+            try:
+                quote = tencent.get_quote(symbol, "a")
+            except Exception:  # noqa: BLE001 - 单只失败跳过
+                continue
+            tv = quote.get("turnover")
+            if tv is not None:
+                values.append(float(tv))
+        if values:
+            holding_turnover = sum(values) / len(values)
+            turnover_note = f"样本 {len(values)} 只重仓股"
+    except Exception as exc:  # noqa: BLE001 - 取不到不影响其余维度
+        turnover_note = f"重仓股换手率不可得（{type(exc).__name__}）"
+
+    p_turnover = None
+    if holding_turnover is not None:
+        p_turnover = round(min(100.0, max(0.0, holding_turnover * 10)), 1)
+
     parts = {
         "volatility": {"label": "近60日波动率(年化)", "value": round(vol_now * 100, 2),
-                       "pct": p_vol, "weight": 1 / 3, "unit": "%"},
+                       "pct": p_vol, "weight": 0.28, "unit": "%"},
         "momentum": {"label": "近20日动量", "value": round((mom_now or 0) * 100, 2),
-                     "pct": p_mom, "weight": 1 / 3, "unit": "%"},
+                     "pct": p_mom, "weight": 0.28, "unit": "%"},
         "max_drawdown": {"label": "近60日最大回撤", "value": round((dd_now or 0) * 100, 2),
-                         "pct": p_dd, "weight": 1 / 3, "unit": "%"},
+                         "pct": p_dd, "weight": 0.28, "unit": "%"},
+        "holding_turnover": {"label": "重仓股合计换手率", "value": round((holding_turnover or 0), 2),
+                             "pct": p_turnover, "weight": 0.16, "unit": "%",
+                             "note": ("绝对水平映射（0%→0 分 / ≥10%→100 分）；" + (turnover_note or "无样本"))},
     }
 
     missing_parts = []
@@ -843,13 +877,19 @@ def get_fund_crowding(code: str) -> Dict[str, Any]:
         "code": code, "score": score, "available": True, "level": level, "advice": advice,
         "parts": list(parts.values()), "sample_days": len(rows),
         "caliber": (
-            f"基金自身拥挤度=三维分位等权（波动率 {int(parts['volatility']['weight']*100)}% / "
-            f"动量 {int(parts['momentum']['weight']*100)}% / 最大回撤 {int(parts['max_drawdown']['weight']*100)}%），"
-            f"分位窗口=自身近 {len(rows)} 个交易日净值；"
+            f"基金自身拥挤度=四维加权（波动率 {int(parts['volatility']['weight']*100)}% / "
+            f"动量 {int(parts['momentum']['weight']*100)}% / 最大回撤 {int(parts['max_drawdown']['weight']*100)}% / "
+            f"重仓股换手率 {int(parts['holding_turnover']['weight']*100)}%）；前三项为自身近 {len(rows)} 个交易日净值的分位，"
+            "换手率为绝对水平映射（无历史序列可算分位）；规模环比增速暂不可得（见 missing）；"
             "只陈述自身交易结构位置，不构成买卖建议"
         ),
         "as_of": utils.now_text(utils.bj_now()),
-        "missing": [f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else [],
+        "missing": (
+            ([f"分位不可用：{'、'.join(missing_parts)}"] if missing_parts else [])
+            + ([] if holding_turnover is not None
+               else ["重仓股换手率不可得（重仓股报价缺失或源站异常）"])
+            + ["规模环比增速未纳入：单只基金历史规模无稳定接口（akshare 仅市场级汇总），待接 f10 规模档案页"]
+        ),
     }
 
 

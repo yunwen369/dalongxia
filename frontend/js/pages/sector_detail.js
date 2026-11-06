@@ -331,7 +331,9 @@
         parts.forEach(function (part) {
           var row = el("div", "sd-part");
           var top = el("div", "sd-part-top");
-          top.appendChild(el("span", "sd-part-label", part.label + (part.weight ? "（权重 " + Math.round(part.weight * 100) + "%）" : "")));
+          var weightText = part.weight ? "（权重 " + Math.round(part.weight * 100) + "%）"
+            : (part.weight === 0 ? "（不计权·参考）" : "");
+          top.appendChild(el("span", "sd-part-label", part.label + weightText));
           top.appendChild(el("span", "sd-part-val", num(part.value, 2) + (part.unit || "")));
           row.appendChild(top);
           var track = el("div", "sd-part-track");
@@ -341,7 +343,9 @@
           fill.className = "sd-part-fill" + (pct >= 80 ? " hot" : "");
           track.appendChild(fill);
           row.appendChild(track);
-          row.appendChild(el("div", "sd-part-pct", "分位 " + num(part.pct, 1) + "%"));
+          row.appendChild(el("div", "sd-part-pct",
+            (part.weight === 0 ? "水平映射 " : "分位 ") + num(part.pct, 1) + "%" +
+            (part.note ? " · " + part.note : "")));
           card.body.appendChild(row);
         });
         // 参考值（不参与加权）：成分股相关性/换手率只有当期值、无历史分位，故单列
