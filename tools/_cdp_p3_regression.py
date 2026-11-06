@@ -108,9 +108,16 @@ def main() -> None:
             cdp.call("Page.navigate", {"url": f"{BASE}/#/{name}"})
             wait = 8.0 if name in ("crowding", "cand", "sectors", "screener", "fund-combo", "charting") else 4.5
             time.sleep(wait)
-            # 注意：node 取值表达式必须是 JS 代码本体（不能被 json.dumps 成字符串字面量）
-            node_expr = (f'document.getElementById("{pid}")' if pid
-                         else "document.querySelector('.page-view:not([hidden])')")
+            # 结构自适应三形态：① 标准 .pg-body 页；② 自定义容器页
+            # （fund-combo=.page-toolbar、widget-library=.dash-lib-page、
+            #   settings/connectors/yjb/tools/mgr 等）；③ home=app.js 自管
+            #   #viewport（非 .page-view 体系）。任何形态都要有实际内容或状态位。
+            if name == "home":
+                node_expr = 'document.getElementById("viewport")'
+            elif pid:
+                node_expr = f'document.getElementById("{pid}")'
+            else:
+                node_expr = "document.querySelector('.page-view:not([hidden])')"
             info = eval_js(cdp, f"""(function(){{
                 var node = {node_expr};
                 if(!node) return JSON.stringify({{visible:false}});
@@ -123,22 +130,25 @@ def main() -> None:
                     if (b.getAttribute('data-state') || b.querySelector('.pg-state')) statenodes++;
                 }});
                 var cards = node.querySelectorAll('.pg-card,[data-block]').length;
+                var generic = node.querySelectorAll('.page-toolbar,.dash-lib-table,.dash-lib-page,table,.dash-widget,form,.settings-section').length;
+                var textLen = (node.innerText||'').trim().length;
                 return JSON.stringify({{visible:shown, bodies:bodies.length, rendered:rendered,
-                    statenodes:statenodes, cards:cards, hash:location.hash}});
+                    statenodes:statenodes, cards:cards, generic:generic, textLen:textLen, hash:location.hash}});
             }})()""") or {}
             ok = bool(info.get("visible")) and (
                 (info.get("rendered", 0) + info.get("statenodes", 0)) > 0 or info.get("cards", 0) > 0
-                or name in ("home", "settings", "connectors", "yjb", "tools", "mgr")
+                or info.get("generic", 0) > 0 or (info.get("textLen") or 0) > 40
             )
             report["pages"][name] = {"ok": ok, **info}
             if not ok:
                 fails.append(name)
 
         # —— 面 B：全局功能真实点击 ——
-        # b1 侧栏点击「提醒中心」（先回 home 保证 hash 变化可观测）
+        # b1 侧栏点击叶子项「自选股」（先回 home 保证 hash 变化可观测；
+        #    提醒中心在折叠树二级需展开，改用一级直达叶子验证真实鼠标点击链路）
         cdp.call("Page.navigate", {"url": BASE + "/#/home"})
         time.sleep(2.5)
-        report["interactions"]["nav_alerts_click"] = nav_click(cdp, "提醒中心")
+        report["interactions"]["nav_watchlist_click"] = nav_click(cdp, "自选股")
         time.sleep(1.5)
         # b2 ⌘K 面板（openPalette 开关式，检测 .ui-palette 出现）
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "modifiers": 2, "key": "k", "code": "KeyK", "windowsVirtualKeyCode": 75})
@@ -148,7 +158,7 @@ def main() -> None:
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         time.sleep(0.3)
         k_closed = not bool(eval_js(cdp, "!!document.querySelector('.ui-palette,.ui-palette-overlay')"))
-        report["interactions"]["cmdk"] = {"opened": k_open, "esc_closes": k_closed}
+        report["interactions"]["cmdk"] = {"ok": k_open and k_closed, "opened": k_open, "esc_closes": k_closed}
 
         # b3 拥挤度页 Tab 真实点击（行业↔概念）
         cdp.call("Page.navigate", {"url": BASE + "/#/crowding"})
@@ -197,7 +207,7 @@ def main() -> None:
         report["console_errors"] = real_errs[:30]
 
         page_fails = [k for k, v in report["pages"].items() if not v.get("ok")]
-        inter_fails = [k for k, v in report["interactions"].items() if k != "theme_toggle" and not v.get("ok")]
+        inter_fails = [k for k, v in report["interactions"].items() if not v.get("ok")]
         report["summary"] = {
             "pages_total": len(report["pages"]), "pages_fail": page_fails,
             "interactions_fail": inter_fails, "console_error_count": len(real_errs),
