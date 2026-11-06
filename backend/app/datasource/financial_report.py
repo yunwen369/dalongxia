@@ -474,6 +474,45 @@ def _em_query(
     return rows, total
 
 
+# R15 订阅流：东财公告接口 stock_list 实测支持逗号分隔多代码 OR 查询
+# （2026-11-06 探针：'600519,000650,002371' → total=4891、codes 混含三家）。
+# 一次调用覆盖一组公司的最新公告，是「订阅板块→成分股新公告并入铃铛」的
+# 关键使能（避免逐股 N 次请求轰炸源站）。分块上限 50 只/次防 URL 超长。
+_EM_MULTI_CHUNK = 50
+
+
+def em_multi_announcements(codes: List[str], *, page_size: int = 50) -> List[Dict[str, str]]:
+    """按代码批量拉 A 股最新公告（东财公告接口，逗号多代码，纯 HTTP 免鉴权）。
+
+    R15 订阅评估器专用：一次调用覆盖一组公司的最新公告，返回九字段行
+    （与检索页同源同构，含 title/company/code/pubTime/docUrl）。
+
+    Args:
+        codes: 6 位代码列表（自动去重、剔除非 6 位数字）。
+        page_size: 每块返回条数（≤50，接口硬上限）。
+
+    Returns:
+        List[Dict[str, str]]: 公告行（按源站返回序=发布时间倒序）；通道失败
+        返回已取得部分（不抛，订阅评估可容忍单轮缺数）。
+    """
+    clean: List[str] = []
+    seen: set[str] = set()
+    for raw in codes or []:
+        code = str(raw or "").strip()
+        if len(code) == 6 and code.isdigit() and code not in seen:
+            seen.add(code)
+            clean.append(code)
+    rows: List[Dict[str, str]] = []
+    for start in range(0, len(clean), _EM_MULTI_CHUNK):
+        chunk = clean[start: start + _EM_MULTI_CHUNK]
+        try:
+            part, _total = _em_query(stock_list=",".join(chunk), page=1, page_size=page_size)
+            rows.extend(part)
+        except Exception as exc:  # noqa: BLE001 - 单块失败保留其余块
+            logger.warning("批量公告拉取失败（%d 只）：%s", len(chunk), type(exc).__name__)
+    return rows
+
+
 def search_cn(*, q: str, type_value: str, since: str, page: int, page_size: int) -> Tuple[List[Dict[str, str]], int, str, str]:
     """A 股检索：巨潮主源失败自动切东财备源。
 

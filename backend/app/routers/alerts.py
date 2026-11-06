@@ -26,8 +26,8 @@ router = APIRouter(prefix="/api/alerts", tags=["提醒"])
 class AlertRuleIn(BaseModel):
     """新增规则请求体。"""
 
-    type: str = Field(..., description="price/pct_change/valuation/crowding/announcement/report_date")
-    target: str = Field(..., description="对象：股票代码、板块名或指数名")
+    type: str = Field(..., description="price/pct_change/valuation/crowding/announcement/report_date/subscription（R15 订阅流）")
+    target: str = Field(..., description="对象：股票代码、板块名或指数名；subscription 填板块名")
     op: Optional[str] = Field(None, description="gte（≥）/ lte（≤），比较类规则必填")
     value: Optional[float] = Field(None, description="数值阈值，比较类规则必填")
     note: str = Field("", description="备注")

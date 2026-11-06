@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 ALERTS_FILE = config.DATA_DIR / "alerts.json"
 
-RULE_TYPES = ("price", "pct_change", "valuation", "crowding", "announcement", "report_date")
+RULE_TYPES = ("price", "pct_change", "valuation", "crowding", "announcement", "report_date", "subscription")
 RULE_TYPE_LABELS = {
     "price": "价格触达",
     "pct_change": "涨跌幅超阈值",
@@ -36,20 +36,26 @@ RULE_TYPE_LABELS = {
     "crowding": "拥挤度越线",
     "announcement": "目标股新公告",
     "report_date": "财报披露日",
+    "subscription": "板块订阅公告",
 }
 OPERATORS = ("gte", "lte")
 MAX_RULES = 50
 MAX_EVENTS = 200  # 事件上限，超出丢最旧
 DEDUP_WINDOW = 24 * 3600.0  # 24h 去重窗口（秒）
+SUB_MAX_PER_ROUND = 5  # R15 订阅流单轮入列上限（防板块密集披露轰炸，余量下轮续推）
+
+# 事件 id 自增序号（R15）：订阅流一轮可产多条，同毫秒时间戳会撞 id
+_EVENT_SEQ = 0
+_SEQ_LOCK = threading.Lock()
 
 # 评估节流（秒）：行情 60s / 公告 10min / 宏观类 6h
 EVAL_INTERVALS = {
     "quote": 60.0,        # price / pct_change
-    "announcement": 600.0,  # announcement / report_date
+    "announcement": 600.0,  # announcement / report_date / subscription（C15 十分钟 SLA）
     "slow": 6 * 3600.0,   # valuation / crowding
 }
 _SLOW_TYPES = ("valuation", "crowding")
-_ANN_TYPES = ("announcement", "report_date")
+_ANN_TYPES = ("announcement", "report_date", "subscription")
 
 
 def _now_text() -> str:
@@ -337,7 +343,7 @@ def mark_read(event_id: Optional[str] = None) -> int:
 
 def _fire_event(payload: Dict[str, Any], rule: Dict[str, Any], message: str,
                 value: Optional[float]) -> Dict[str, Any]:
-    """写入一条事件并刷新规则的 ``last_fired``（24h 去重由调用方完成）。
+    """写入一条事件并刷新规则的 ``last_fired``（去重由调用方完成）。
 
     Args:
         payload: 全量存储结构（就地追加事件）。
@@ -348,8 +354,14 @@ def _fire_event(payload: Dict[str, Any], rule: Dict[str, Any], message: str,
     Returns:
         Dict[str, Any]: 新建的事件对象。
     """
+    global _EVENT_SEQ
+    with _SEQ_LOCK:
+        _EVENT_SEQ += 1
+        seq = _EVENT_SEQ
     event = {
-        "id": f"e_{int(_now_ts() * 1000) % 10**10}",
+        # R15：id 追加进程内自增序号——订阅流一轮可产多条事件，同一毫秒
+        # int(ts*1000) 会撞 id（实测两条 price 规则同毫秒触发 id 相同）
+        "id": f"e_{int(_now_ts() * 1000) % 10**10}_{seq}",
         "rule_id": rule.get("id"),
         "type": rule.get("type"),
         "type_label": RULE_TYPE_LABELS.get(str(rule.get("type")), str(rule.get("type"))),
@@ -384,6 +396,32 @@ def _dedup_ok(events: List[Dict[str, Any]], rule: Dict[str, Any], now_ts: float)
     rule_id = str(rule.get("id"))
     for item in events:
         if str(item.get("rule_id")) == rule_id and now_ts - float(item.get("ts") or 0) < DEDUP_WINDOW:
+            return False
+    return True
+
+
+def _sub_content_dedup(events: List[Dict[str, Any]], rule: Dict[str, Any],
+                       message: str, now_ts: float) -> bool:
+    """订阅流的内容级 24h 去重（C15）：同一条公告不重复入列，不同公告各自独立。
+
+    与 `_dedup_ok` 的规则级去重不同：订阅是「事件流」，一条规则 24h 内本应
+    产生多条不同公告事件，只能按**文案内容**去重（同一板块+同一公司+同一
+    标题视为同一条）；规则级去重会把整条订阅限死为每 24h 只出 1 条。
+
+    Args:
+        events: 历史事件列表。
+        rule: 待判规则。
+        message: 拟触发的事件文案。
+        now_ts: 当前秒级时间戳。
+
+    Returns:
+        bool: True=允许入列；False=24h 内已有同文案事件。
+    """
+    rule_id = str(rule.get("id"))
+    for item in events:
+        if (str(item.get("rule_id")) == rule_id
+                and str(item.get("message") or "") == message
+                and now_ts - float(item.get("ts") or 0) < DEDUP_WINDOW):
             return False
     return True
 
@@ -619,6 +657,61 @@ def _pub_to_ts(pub: str) -> Optional[float]:
     return None
 
 
+def _subscription_eval(payload: Dict[str, Any], rule: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """板块订阅公告评估（R15 订阅流）。
+
+    target=板块名（行业优先，概念回退）→ 取成分股代码 → 东财公告接口
+    一次多代码查询（实测逗号分隔 OR 查询可用）→ 只提醒上次基线之后发布的
+    新公告，单轮上限 ``SUB_MAX_PER_ROUND`` 条防轰炸。
+
+    首次订阅**不回放历史**：只落一条「已订阅」确认事件并把基线设到当下
+    （由调用方 _fire_event 刷 last_fired），此后各轮只推新发布——与
+    C15「订阅后新公告 10 分钟内入事件列表」语义一致。
+
+    Args:
+        payload: 全量存储结构（本评估器不读取，保留统一签名）。
+        rule: 待评估的订阅规则。
+
+    Returns:
+        List[tuple]: 命中项 ``(rule, 中文消息, None)``；无新公告为空列表。
+    """
+    from backend.app.datasource import financial_report, sector
+
+    board = str(rule["target"]).strip()
+    codes: List[str] = []
+    last_error: Optional[Exception] = None
+    for board_kind in ("industry", "concept"):
+        try:
+            codes = sector.get_board_constituents(board, kind=board_kind)
+            if codes:
+                break
+        except Exception as exc:  # noqa: BLE001 - 行业未命中继续试概念
+            last_error = exc
+    if not codes:
+        logger.info("订阅板块成分不可得 %s：%s", board, type(last_error).__name__ if last_error else "空")
+        return []
+
+    last_ts = float(rule.get("sub_baseline") or 0)
+    if last_ts <= 0:
+        # 首次订阅：确认事件 + 基线只落一次（不能用 last_fired——订阅一轮可多条，
+        # last_fired 每轮被 _fire_event 刷新会把后续轮的新公告全滤掉）
+        rule["sub_baseline"] = _now_ts()
+        return [(rule, f"已订阅「{board}」板块公告（{len(codes)} 只成分股），开始跟踪新发布", None)]
+
+    fired: List[Dict[str, Any]] = []
+    for row in financial_report.em_multi_announcements(codes):
+        pub_ts = _pub_to_ts(str(row.get("pubTime") or ""))
+        if not pub_ts or pub_ts <= last_ts:
+            continue
+        company = str(row.get("company") or row.get("code") or "")
+        title = str(row.get("title") or "")
+        # 上限不在这里截：已入列公告会被内容级去重挡回，若先截 5 条再去重，
+        # 下轮剩余公告永远推不出。候选全量返回（接口页大小天然封顶 50），
+        # 由 evaluate 循环对「去重通过」的条目限 SUB_MAX_PER_ROUND/轮。
+        fired.append((rule, f"{board} 订阅公告：{company}｜{title[:40]}", None))
+    return fired
+
+
 _EVALUATORS = {
     "price": _quote_eval,
     "pct_change": _quote_eval,
@@ -626,6 +719,7 @@ _EVALUATORS = {
     "valuation": _valuation_eval,
     "announcement": _announcement_eval,
     "report_date": _announcement_eval,
+    "subscription": _subscription_eval,
 }
 
 
@@ -641,43 +735,65 @@ def evaluate(force: bool = False) -> Dict[str, Any]:
     with _EVAL_LOCK:
         payload = _read_all()
         rules = payload.get("rules") or []
-        events = payload.get("events") or []
         now_ts = _now_ts()
         fired_total: List[Tuple[Dict[str, Any], str, Optional[float]]] = []
         evaluated_types: set[str] = set()
         skipped: Dict[str, int] = {}
+        kind_allowed: Dict[str, bool] = {}
 
         for rule in rules:
             if not rule.get("enabled", True):
                 continue
             rule_type = str(rule.get("type"))
             kind = _rule_kind(rule_type)
-            if not force and not _throttle_ok(kind):
-                skipped[kind] = skipped.get(kind, 0) + 1
-                continue
-            # 同一类别本轮只实际评估一次（同类规则共享一次节流窗口）
-            if kind in evaluated_types and not force:
-                continue
             evaluator = _EVALUATORS.get(rule_type)
             if evaluator is None:
                 continue
+            # R15 修复①（既有 M6 缺陷）：按类别节流改为「每轮取一次窗口，
+            # 窗口内评估该类别**全部**规则」。原实现同类只评第一条就 break 语义
+            # （实测两条 price 规则第二条永不取数），订阅规则会被任意在前
+            # 同类规则饿死，C15 十分钟 SLA 不成立。
+            if not force:
+                allowed = kind_allowed.get(kind)
+                if allowed is None:
+                    allowed = _throttle_ok(kind)
+                    kind_allowed[kind] = allowed
+                if not allowed:
+                    skipped[kind] = skipped.get(kind, 0) + 1
+                    continue
+            evaluated_types.add(kind)
             try:
                 fired = evaluator(payload, rule)
             except Exception as exc:  # noqa: BLE001 - 单规则失败不拖垮整轮
                 logger.info("规则评估失败 %s：%s", rule.get("id"), type(exc).__name__)
                 fired = []
+            # R15 修复②：订阅是事件流（一条规则每轮多条不同公告），24h 去重
+            # 按**文案内容**判；其余类型维持规则级去重（每 24h 一条，既有语义不变）。
+            # R15 修复③：删去循环体多余 `events.append(event)` —— `_fire_event`
+            # 内部已追加（实测事件存储非空时同 id 双写，第二轮起 2→3 条）。
+            is_stream = rule_type == "subscription"
+            stream_count = 0
             for rule_hit, message, value in fired:
-                if not _dedup_ok(events, rule_hit, now_ts):
+                dedup_ok = (
+                    _sub_content_dedup(payload.get("events") or [], rule_hit, message, now_ts)
+                    if is_stream
+                    else _dedup_ok(payload.get("events") or [], rule_hit, now_ts)
+                )
+                if not dedup_ok:
                     continue
-                event = _fire_event(payload, rule_hit, message, value)
-                events.append(event)
+                # R15：单轮上限作用在「去重通过」的条目上（先截再去重会把
+                # 未入列的公告永久挡在窗口外）；超限的下轮续推。
+                if is_stream and stream_count >= SUB_MAX_PER_ROUND:
+                    break
+                _fire_event(payload, rule_hit, message, value)
                 fired_total.append((rule_hit, message, value))
-            evaluated_types.add(kind)
+                stream_count += 1
 
         if fired_total:
             _write_all(payload)
-        # 新事件直接取刚写入的尾部（_fire_event 已加入 payload.events）
-        new_items = events[-len(fired_total):] if fired_total else []
+        # 新事件取存储尾部（_fire_event 就地追加；上限裁剪可能替换列表，故读 payload）
+        final_events = payload.get("events") or []
+        new_items = final_events[-len(fired_total):] if fired_total else []
         return {
             "evaluated": len(evaluated_types),
             "new_events": len(fired_total),
