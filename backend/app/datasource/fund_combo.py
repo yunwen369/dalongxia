@@ -8,11 +8,13 @@
 - 净值序列：复用 `fund._all_nav_items`（全历史，第六轮已修）
 - 同类排名：`fund_open_fund_info_em(indicator="同类排名百分比")`，约 837 期
 - 费率：`fund_open_fund_rank_em` 的「手续费」列（按类型批量拉一次并缓存）
-- **规模与成立年限不可用**：东财「基金规模」indicator 返回空表、排行榜无规模列 →
-  「规模 ≥2 亿 / 成立 ≥3 年」两条硬性排除**未能实现**，改为按「近 1 年 + 近 3 年收益」
-  做分位初筛，并在界面提示用户自行确认清盘风险
+- **规模与成立年限（R7 已根治）**：原第七轮「东财规模 indicator 空表 → 两条硬性
+  排除未实现 + 提示自行确认」的降级，2026-11-06 改走天天基金 F10 通道
+  （`fund.get_profile_basis`：季度净资产序列 + 成立日三级兜底），三条硬性排除
+  （规模<2亿 / 成立<3年 / 小型且急缩的清盘风险）在 evaluate 实装，被排除者并入
+  items 且 exclusion.status=excluded（不静默删），数据缺失记 unknown 不默认放行
 - **风格稳定性不可用**：需 8 个季度持仓做重合度，公开接口无历史持仓 →
-  该维度固定给中位分 50，并在 `missing` 点名
+  该维度固定给中位分 50，并在 `missing` 点名（R8 待补）
 - **拥挤度降权未接入**：需「基金→重仓行业→行业拥挤度」三级映射，成本高，留待 M5b
 
 权重算法（不用均值-方差，理由见设计基准）：w ∝ (1/σ) × score^0.5，
@@ -52,6 +54,13 @@ RISK_PROFILES: Dict[str, Dict[str, float]] = {
 # 再平衡阈值（设计基准 §2.5）
 REBALANCE_SINGLE_PT = 5.0
 REBALANCE_CLASS_PT = 8.0
+
+# R7 三条硬性排除阈值（设计基准 §8 R7 / 验收 C7：规模 ≥2 亿、成立 ≥3 年、
+# 清盘风险）。数据不可得一律记 unknown，**绝不默认放行**（零降级裁决 J1）。
+EXCLUDE_MIN_SCALE_YI = 2.0          # ① 规模下限（亿元，净资产口径）
+EXCLUDE_MIN_AGE_YEARS = 3.0         # ② 成立年限下限（年）
+EXCLUDE_LIQUID_BAND_YI = 5.0        # ③ 清盘风险·小型带（亿）：规模在此带内才看流出信号
+EXCLUDE_SHRINK_MOM_PCT = -30.0      # ③ 清盘风险·单季环比流出阈值（%），小型且急缩才算
 
 # 费率缓存（按类型批量拉一次，24 小时）
 _FEE_CACHE: Dict[str, float] = {}
@@ -286,8 +295,67 @@ def _normalize(values: List[Optional[float]], higher_better: bool = True) -> Lis
     return result
 
 
+def _hard_exclusion(code: str) -> Dict[str, Any]:
+    """R7 三条硬性排除判定（规模/年限/清盘风险）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: ``{status, reasons, metrics}``——status ∈ excluded/passed/unknown；
+        reasons 为命中的排除条目文本；metrics 透出真实值供界面展示依据。
+        判定所需的规模或年限任一不可得 → unknown（不作通过假设）。
+    """
+    profile = fund_provider.get_profile_basis(code)
+    reasons: List[str] = []
+    known: List[bool] = []
+    scale = profile.get("scale_yi")
+    age = profile.get("age_years")
+    mom = profile.get("scale_mom_pct")
+
+    if scale is None or age is None:
+        known.append(False)
+    else:
+        known.append(True)
+        if scale < EXCLUDE_MIN_SCALE_YI:
+            reasons.append(f"规模 {scale} 亿 < {EXCLUDE_MIN_SCALE_YI} 亿（硬性排除）")
+        if age < EXCLUDE_MIN_AGE_YEARS:
+            reasons.append(f"成立 {age} 年 < {EXCLUDE_MIN_AGE_YEARS} 年（硬性排除）")
+        # ③ 清盘风险：仅在「小型带（规模 < 5 亿）且单季资金急缩（环比 ≤ -30%）」时命中。
+        # 只看缩水率会误伤健康大基金（56 亿单季 -52.98% 属正常申赎波动，离 5000 万
+        # 清盘红线两个数量级）；规模已 <2 亿的在第①条排除，此处针对 2–5 亿小基金。
+        if scale < EXCLUDE_LIQUID_BAND_YI and mom is not None and mom <= EXCLUDE_SHRINK_MOM_PCT:
+            reasons.append(f"规模 {scale} 亿为小型基金且单季净流出 {mom}%（清盘风险）")
+
+    if not all(known):
+        status = "unknown"
+    elif reasons:
+        status = "excluded"
+    else:
+        status = "passed"
+    return {
+        "status": status,
+        "reasons": reasons,
+        "metrics": {
+            "scale_yi": scale,
+            "age_years": age,
+            "scale_mom_pct": mom,
+            "inception_date": profile.get("inception_date"),
+            "inception_source": profile.get("inception_source"),
+            "scale_source": profile.get("scale_source"),
+        },
+        "profile_missing": profile.get("missing") or [],
+    }
+
+
 def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]:
     """批量评估基金并给出六维打分、相关性、目标权重（不涉及用户持仓）。
+
+    R7（设计基准 §8）：评估前先做三条硬性排除（规模 ≥2 亿 / 成立 ≥3 年 /
+    清盘风险=规模 ≤0.5 亿或单季环比缩水 ≥30%），数据源=天天基金 F10 档案
+    （`fund.get_profile_basis`）。被排除者**不删除而是标注** `excluded` 与
+    `exclude_reasons` 返回（让用户看得见排除依据，而不是静默少一只）；
+    数据不可得者记 `unknown`（宁标未知不作通过假设）。
 
     Args:
         codes: 基金代码列表（建议 ≤30 只，每只 1–2 次上游请求）。
@@ -316,6 +384,17 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
     nav_map: Dict[str, Dict[str, float]] = {}
 
     for code in unique:
+        # R7 硬性排除前置闸门：先判规模/年限/清盘风险。被排除者**照常取数打分并
+        # 返回**（用户看得见依据），但不纳入目标权重；数据不可得记 unknown，
+        # 绝不默认放行（零降级裁决 J1）。
+        try:
+            exclusion = _hard_exclusion(code)
+        except Exception as exc:  # noqa: BLE001 - 档案取数失败按 unknown 处理，不误排除
+            logger.info("硬性排除判定失败 %s：%s", code, type(exc).__name__)
+            exclusion = {"status": "unknown", "reasons": [], "metrics": {},
+                         "profile_missing": [f"档案取数失败（{type(exc).__name__}）"]}
+        if exclusion["status"] == "unknown":
+            missing.append(f"{code}（规模/年限数据不足，硬性排除判定为未知，未默认放行；依据见 exclusion.metrics）")
         stats, nav_items = _stats_from_nav(code)
         if not stats:
             missing.append(f"{code}（净值序列不可用）")
@@ -337,6 +416,7 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
             "rank_pct": rank,
             "fee": fee,
             "style_score": 50.0,  # 风格稳定性数据不可得，固定中位（见 missing）
+            "exclusion": exclusion,
         })
 
     if not items:
@@ -416,7 +496,7 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
                                 "value": round(_pearson(left_returns, right_returns), 3),
                                 "note": None})
 
-    # —— 权重：逆波动率 × 得分^0.5，再按约束裁剪 ——
+    # —— 权重：逆波动率 × 得分^0.5，再按约束裁剪（命中硬性排除者已在 _allocate 内剔除）——
     weights = _allocate(items, profile)
     return {
         "items": items,
@@ -431,7 +511,10 @@ def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]
             "（夏普25/卡玛25/回撤20/排名分位15/风格10/费率5），"
             "风格稳定性因无历史持仓数据固定给 50；"
             "权重=逆波动率×得分^0.5，再按权益上限/单只上限/现金下限迭代裁剪；"
-            "相关性用净值日收益的皮尔逊系数（共同交易日≥60）"
+            "相关性用净值日收益的皮尔逊系数（共同交易日≥60）；"
+            f"硬性排除三条（规模<{EXCLUDE_MIN_SCALE_YI}亿 / 成立<{EXCLUDE_MIN_AGE_YEARS}年 / "
+            f"小型且单季净流出≤{EXCLUDE_SHRINK_MOM_PCT}%）数据源=天天基金 F10 档案，"
+            "被排除者并入 items 且 exclusion.status=excluded（不排除假设，未知记 unknown）"
         ),
         "disclaimer": "本页仅做筛选与结构诊断，不构成任何投资建议；打分高低不代表未来收益。",
     }
@@ -477,7 +560,10 @@ def _allocate(items: List[Dict[str, Any]], profile: Dict[str, float]) -> List[Di
     Returns:
         List[Dict[str, Any]]: [{code, raw, weight, capped_by}]
     """
-    usable = [item for item in items if item.get("stats", {}).get("volatility") and item.get("score")]
+    usable = [item for item in items
+              if item.get("stats", {}).get("volatility") and item.get("score")
+              # R7：命中硬性排除者不纳入目标权重（仍照常打分展示，见 evaluate 注释）
+              and (item.get("exclusion") or {}).get("status") != "excluded"]
     if not usable:
         return []
 

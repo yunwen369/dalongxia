@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from typing import Any, Dict
+
 from backend.app.datasource import fund_combo
 from backend.app.main import app
 
@@ -110,3 +112,145 @@ def test_diagnose_empty_or_consistent(client: TestClient) -> None:
         assert row["actual_weight"] >= 0
     for row in data.get("deviation") or []:
         assert abs(row["gap"]) >= fund_combo.REBALANCE_SINGLE_PT - 1e-9
+
+
+# ============================================================
+# R7（设计基准 §8 / 验收 C7）：三条硬性排除——规模/年限/清盘风险
+# ============================================================
+
+def _patch_profile(monkeypatch, mapping: Dict[str, Dict[str, Any]]) -> None:
+    """把 fund_provider.get_profile_basis 换成按代码查表的假实现。
+
+    Args:
+        monkeypatch: pytest 补丁器。
+        mapping: {code: profile 字典}。
+    """
+    def fake(code: str) -> Dict[str, Any]:
+        """查表返回预置档案。
+
+        Args:
+            code: 基金代码。
+
+        Returns:
+            dict: 预置档案。
+        """
+        return mapping[code]
+
+    monkeypatch.setattr(fund_combo.fund_provider, "get_profile_basis", fake)
+
+
+def test_hard_exclusion_passed_normal(monkeypatch: None) -> None:
+    """规模 277 亿 / 成立 3.7 年 / 环比 -11% → passed，无排除理由。"""
+    _patch_profile(monkeypatch, {"017811": {
+        "scale_yi": 277.34, "age_years": 3.7, "scale_mom_pct": -11.47,
+        "inception_date": "2023-02-22", "inception_source": "天天基金F10",
+        "scale_source": "天天基金F10（季度净资产）", "missing": [],
+    }})
+    result = fund_combo._hard_exclusion("017811")
+    assert result["status"] == "passed", result
+    assert result["reasons"] == []
+
+
+def test_hard_exclusion_scale_below_minimum(monkeypatch: None) -> None:
+    """规模 1.5 亿 < 2 亿 → excluded，理由点名规模下限。"""
+    _patch_profile(monkeypatch, {"888888": {
+        "scale_yi": 1.5, "age_years": 5.0, "scale_mom_pct": 3.0,
+        "inception_date": "2020-01-01", "inception_source": "天天基金F10",
+        "scale_source": "天天基金F10（季度净资产）", "missing": [],
+    }})
+    result = fund_combo._hard_exclusion("888888")
+    assert result["status"] == "excluded", result
+    assert any("规模" in text and "2.0" in text for text in result["reasons"]), result["reasons"]
+
+
+def test_hard_exclusion_age_below_minimum(monkeypatch: None) -> None:
+    """成立 1.15 年 < 3 年 → excluded（025500 实测场景）。"""
+    _patch_profile(monkeypatch, {"025500": {
+        "scale_yi": 66.7, "age_years": 1.15, "scale_mom_pct": -60.91,
+        "inception_date": "2025-09-12", "inception_source": "天天基金F10",
+        "scale_source": "天天基金F10（季度净资产）", "missing": [],
+    }})
+    result = fund_combo._hard_exclusion("025500")
+    assert result["status"] == "excluded", result
+    assert any("成立" in text and "3.0" in text for text in result["reasons"]), result["reasons"]
+
+
+def test_hard_exclusion_large_shrink_not_liquidation(monkeypatch: None) -> None:
+    """56 亿大基金单季 -52.98%（012922 实测）→ passed，不得误判清盘风险。
+
+    清盘风险只对「小型带（<5 亿）且急缩」生效；健康大基金的正常申赎波动
+    离 5000 万监管红线两个数量级，用环比一刀切会误伤（本轮修正的核心断言）。
+    """
+    _patch_profile(monkeypatch, {"012922": {
+        "scale_yi": 56.25, "age_years": 4.82, "scale_mom_pct": -52.98,
+        "inception_date": "2022-01-11", "inception_source": "天天基金F10",
+        "scale_source": "天天基金F10（季度净资产）", "missing": [],
+    }})
+    result = fund_combo._hard_exclusion("012922")
+    assert result["status"] == "passed", f"大基金急缩被误判：{result['reasons']}"
+
+
+def test_hard_exclusion_small_liquidation_risk(monkeypatch: None) -> None:
+    """小型带（3 亿）且单季净流出 ≤ -30% → excluded 清盘风险。"""
+    _patch_profile(monkeypatch, {"777777": {
+        "scale_yi": 3.0, "age_years": 4.0, "scale_mom_pct": -40.0,
+        "inception_date": "2021-01-01", "inception_source": "天天基金F10",
+        "scale_source": "天天基金F10（季度净资产）", "missing": [],
+    }})
+    result = fund_combo._hard_exclusion("777777")
+    assert result["status"] == "excluded", result
+    assert any("清盘" in text for text in result["reasons"]), result["reasons"]
+
+
+def test_hard_exclusion_unknown_not_pass_by_default(monkeypatch: None) -> None:
+    """规模不可得 → unknown（绝不默认放行）；metrics 如实透出 None。"""
+    _patch_profile(monkeypatch, {"968061": {
+        "scale_yi": None, "age_years": 6.7, "scale_mom_pct": None,
+        "inception_date": "2020-02-24", "inception_source": "蛋卷（found_date）",
+        "scale_source": None,
+        "missing": ["净资产规模不可得（F10 无序列且雪球兜底失败）"],
+    }})
+    result = fund_combo._hard_exclusion("968061")
+    assert result["status"] == "unknown", f"规模缺失不能算 passed：{result}"
+    assert result["metrics"]["scale_yi"] is None
+    assert result["profile_missing"], "unknown 必须透出档案缺失原因"
+
+
+def test_allocate_skips_excluded(monkeypatch: None) -> None:
+    """_allocate 必须把 exclusion.status=excluded 者剔出目标权重。"""
+    items = [
+        {"code": "017811", "exclusion": {"status": "passed"},
+         "score": 40.0, "stats": {"volatility": 18.0}},
+        {"code": "025500", "exclusion": {"status": "excluded"},
+         "score": 30.0, "stats": {"volatility": 20.0}},
+        {"code": "012922", "exclusion": {"status": "unknown"},
+         "score": 50.0, "stats": {"volatility": 15.0}},
+    ]
+    weights = fund_combo._allocate(items, fund_combo.RISK_PROFILES["balanced"])
+    codes = {row["code"] for row in weights}
+    assert "025500" not in codes, f"被排除者混入权重：{codes}"
+    # passed 与 unknown 都可参与配权（unknown 只是判定缺依据，非确认排除）
+    assert "017811" in codes and "012922" in codes, codes
+
+
+def test_profile_basis_real_structure(client: TestClient) -> None:
+    """真实档案通道契约：017811 的规模/成立日字段齐全且口径自洽（上游不可用 skip）。
+
+    C7 要求「F10 与天天基金页面值一致」——此处断言结构、来源标注与年限推导；
+    数值一致由人核（5 只）完成，见本轮自检报告。
+    """
+    from backend.app.datasource import fund as fund_provider
+
+    profile = fund_provider.get_profile_basis("017811")
+    if profile.get("scale_yi") is None and profile.get("inception_date") is None:
+        pytest.skip("天天基金档案通道本次不可用")
+    assert profile["code"] == "017811"
+    assert profile["inception_date"] and len(profile["inception_date"]) == 10
+    assert profile["inception_source"], "成立日必须标注来源（F10/蛋卷/净值下界之一）"
+    assert isinstance(profile["age_years"], (int, float)) and profile["age_years"] > 0
+    assert isinstance(profile["scale_series"], list)
+    for row in profile["scale_series"]:
+        assert {"date", "scale_yi", "mom_pct"} <= set(row)
+    if profile["scale_yi"] is not None:
+        assert profile["scale_source"], "有规模值必须有来源"
+    assert "caliber" in profile and profile["caliber"]

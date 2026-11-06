@@ -61,6 +61,8 @@ data/alerts.json
 data/screener_snapshot.json
 data/cache/
 data/exports/
+# 第十轮 R5/R7：板块成分映射预热缓存（2026-11-06 从 data/cache 迁至 DATA_DIR，清缓存不删但同样不入库）
+data/board_cons.json
 # RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
 data/audit/
 data/*.db

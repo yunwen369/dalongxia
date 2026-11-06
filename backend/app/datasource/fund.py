@@ -27,7 +27,8 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app import config
 from backend.app.core import netfix
@@ -1038,6 +1039,168 @@ def _em_f10(path: str, code: str, extra: Dict[str, Any]) -> Dict[str, Any]:
         timeout=config.DATASOURCE_TIMEOUT,
     )
     return json.loads(text)
+
+
+def _profile_inception_date(code: str) -> Tuple[Optional[str], Optional[str]]:
+    """成立日三级兜底：jbgk 页面 → 蛋卷档案 → 净值首点（下界）。
+
+    主源取天天基金 F10「基本概况」页面的「成立日期」，与页面展示值一致
+    （设计基准 C7 断言「F10 与天天基金页面值一致」）；QDII 等页面为 `---`
+    时退蛋卷档案 ``found_date``；再退净值全历史首日（成立日下界，不冒充当
+    成立日，来源如实标注）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        tuple: ``(YYYY-MM-DD 或 None, 来源标注或 None)``。
+    """
+    try:
+        html = utils.http_get_text(
+            f"https://fundf10.eastmoney.com/jbgk_{code}.html",
+            referer="https://fundf10.eastmoney.com/",
+            encoding="utf-8",
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
+        match = re.search(r"成立日期[：:]?\s*(?:<span[^>]*>)?\s*(\d{4}-\d{2}-\d{2})", html)
+        if match:
+            return match.group(1), "天天基金F10"
+    except Exception as exc:  # noqa: BLE001 - jbgk 失败退下一通道
+        logger.info("jbgk 成立日不可得 %s：%s", code, type(exc).__name__)
+    try:
+        payload = _danjuan(f"/djapi/fund/{code}")
+        # _danjuan 已解包：found_date 在顶层（非 data 嵌套，2026-11-06 实测）
+        found = payload.get("found_date")
+        if found:
+            return str(found)[:10], "蛋卷（found_date）"
+    except Exception as exc:  # noqa: BLE001 - 蛋卷失败退净值首点
+        logger.info("蛋卷成立日不可得 %s：%s", code, type(exc).__name__)
+    try:
+        nav = _all_nav_items(code)
+        dates = sorted(str(row.get("date"))[:10] for row in (nav.get("items") or []) if row.get("date"))
+        if dates:
+            return dates[0], "净值首日（下界）"
+    except Exception as exc:  # noqa: BLE001 - 兜底失败返回 None
+        logger.info("净值首点不可得 %s：%s", code, type(exc).__name__)
+    return None, None
+
+
+def _profile_scale_series(code: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """季度净资产规模序列（天天基金 pingzhongdata ``Data_fluctuationScale``）。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        tuple: (``[{date, scale_yi, mom_pct}]`` 按日期升序, 错误说明或 None)；
+        无数据返回 ([], None)。QDII/新基金常见无此序列。
+    """
+    try:
+        text = utils.http_get_text(
+            f"https://fund.eastmoney.com/pingzhongdata/{code}.js",
+            referer="https://fund.eastmoney.com/",
+            encoding="utf-8",
+            timeout=config.DATASOURCE_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 - 档案通道失败
+        return [], f"规模序列通道不可用（{type(exc).__name__}）"
+    match = re.search(r"Data_fluctuationScale\s*=\s*(\{.+?\});", text, re.S)
+    if not match:
+        return [], None
+    segment = match.group(1)
+    categories = re.findall(r'"(20\d{2}-\d{2}-\d{2})"', segment.split('"series"')[0])
+    pairs = re.findall(r'\{"y":([\d.]+),"mom":"(-?[\d.]+)%?"\}', segment)
+    items: List[Dict[str, Any]] = []
+    for index, (value, mom) in enumerate(pairs):
+        items.append({
+            "date": categories[index] if index < len(categories) else None,
+            "scale_yi": float(value),
+            "mom_pct": float(mom),
+        })
+    return items, None
+
+
+def get_profile_basis(code: str) -> Dict[str, Any]:
+    """基金规模与成立年限基础档案（设计基准 R7，主源天天基金 F10 通道）。
+
+    第七轮遗留降级点「规模/成立年限不可用 → 两条硬性排除未实现 + 提示用户
+    自行确认清盘风险」的根治：原东财「基金规模」indicator 空表、排行榜无规模
+    列（第八轮实测），改走天天基金 pingzhongdata js 的季度净资产序列
+    （末值与雪球口径一致，实测 017811=277.34 亿），成立日取 F10「基本概况」
+    页面值（与页面展示一致，满足 C7 交叉对账），三级兜底不冒充。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        Dict[str, Any]: ``{code, inception_date, inception_source, age_years,
+        scale_yi, scale_date, scale_series, scale_mom_pct, scale_source,
+        caliber, missing}``；不可得字段为 None 并在 missing 点名（绝不默认
+        「达标」放行）。24 小时缓存。
+    """
+    from backend.app.core import cache as _cache
+
+    def _load() -> Dict[str, Any]:
+        """聚合三级成立日 + 规模序列 + 雪球规模兜底（供缓存 loader 调用）。
+
+        Returns:
+            Dict[str, Any]: 基础档案。
+        """
+        missing: List[str] = []
+        series, scale_error = _profile_scale_series(code)
+        if scale_error:
+            missing.append(scale_error)
+
+        inception, inception_source = _profile_inception_date(code)
+        if not inception:
+            missing.append("成立日不可得（F10/蛋卷/净值三通道均未命中）")
+
+        scale_yi = series[-1]["scale_yi"] if series else None
+        scale_source = "天天基金F10（季度净资产）"
+        if scale_yi is None:
+            # QDII/新基金常见无 pingzhongdata 序列：退雪球「最新规模」（含"亿"单位）
+            try:
+                frame = ak.fund_individual_basic_info_xq(symbol=code)
+                extra = {str(row.get("item")): row.get("value") for row in frame.to_dict("records")}
+                raw = str(extra.get("最新规模") or "")
+                num_match = re.search(r"([\d.]+)\s*亿", raw)
+                if num_match:
+                    scale_yi = float(num_match.group(1))
+                    scale_source = "雪球（最新规模）"
+                elif inception is None and extra.get("成立时间"):
+                    inception = str(extra.get("成立时间"))[:10]
+                    inception_source = "雪球（成立时间）"
+            except Exception as exc:  # noqa: BLE001 - 雪球为兜底源
+                logger.info("雪球规模兜底不可得 %s：%s", code, type(exc).__name__)
+            if scale_yi is None:
+                missing.append("净资产规模不可得（F10 无序列且雪球兜底失败）")
+
+        age_years: Optional[float] = None
+        if inception:
+            try:
+                start = datetime.strptime(inception, "%Y-%m-%d").date()
+                age_years = round((utils.bj_now().date() - start).days / 365.25, 2)
+            except (TypeError, ValueError):
+                age_years = None
+
+        return {
+            "code": code,
+            "inception_date": inception,
+            "inception_source": inception_source if inception else None,
+            "age_years": age_years,
+            "scale_yi": scale_yi,
+            "scale_date": series[-1]["date"] if series else None,
+            "scale_series": series,
+            "scale_mom_pct": series[-1]["mom_pct"] if series else None,
+            "scale_source": scale_source if scale_yi is not None else None,
+            "caliber": (
+                "规模=最新季报净资产规模（亿元，QDII 常见无披露）；成立日取天天基金 F10 页面值，"
+                "退蛋卷/雪球，再退净值首日（仅下界）；成立年限按自然日折算"
+            ),
+            "missing": missing,
+        }
+
+    return _cache.get_or_load(f"fund:profile_basis:{code}", 24 * 3600, _load)
 
 
 def get_dividend(code: str) -> Dict[str, Any]:
