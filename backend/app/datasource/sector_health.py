@@ -88,11 +88,15 @@ def is_workday(day: date) -> bool:
     return day.weekday() < 5
 
 
-def run_spotcheck(kind: str = "concept") -> Dict[str, Any]:
+def run_spotcheck(kind: str = "concept", day: Optional[str] = None) -> Dict[str, Any]:
     """执行一次概念/行业排行全量扫描并落抽检记录（当日重复触发覆盖）。
 
     Args:
         kind: concept（C11 主判据）/ industry。
+        day: 记录归属日期 YYYY-MM-DD；默认取真实当天。**调度注入时钟时
+            必须由 ensure_today 传入同一日期**——否则真实墙钟跨午夜后，
+            判重键（注入日）与落档日（真实日）错位，「当日已抽检」永不命中，
+            同日重复扫描（全量回归 2026-11-07 00:00 后实测暴露）。
 
     Returns:
         Dict[str, Any]: 抽检记录 {date, kind, scanned, total,
@@ -100,7 +104,7 @@ def run_spotcheck(kind: str = "concept") -> Dict[str, Any]:
     """
     from backend.app.datasource import sector as sector_provider
 
-    key = bj_now().date().isoformat()
+    key = day or bj_now().date().isoformat()
     record: Dict[str, Any] = {
         "date": key, "kind": kind, "scanned": 0, "total": 0,
         "completeness_pct": None, "failed": [], "pass": False,
@@ -149,7 +153,7 @@ def ensure_today(now: Optional[datetime] = None, kind: str = "concept") -> Dict[
         return {"written": False, "reason": f"未到收盘后时点（{SPOTCHECK_HOUR}:{SPOTCHECK_MINUTE:02d}）", "date": key}
     if any(row.get("date") == key and row.get("kind") == kind for row in _read_all()):
         return {"written": False, "reason": "当日抽检已存在", "date": key}
-    run_spotcheck(kind)
+    run_spotcheck(kind, day=key)
     return {"written": True, "reason": "已落档", "date": key}
 
 
