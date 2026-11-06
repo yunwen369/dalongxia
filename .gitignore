@@ -63,6 +63,8 @@ data/cache/
 data/exports/
 # 第十轮 R5/R7：板块成分映射预热缓存（2026-11-06 从 data/cache 迁至 DATA_DIR，清缓存不删但同样不入库）
 data/board_cons.json
+# 第十轮 R13：持仓逐日收益快照（每日收盘后落库的用户本地数据，随日期累积，不入库）
+data/portfolio_snapshots/
 # RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
 data/audit/
 data/*.db
