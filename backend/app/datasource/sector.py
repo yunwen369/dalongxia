@@ -27,7 +27,7 @@ import json
 import logging
 import threading
 import time
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -38,6 +38,7 @@ from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import ashare, sina_flow, tencent, tencent_board, ths_http, utils
+from backend.app.datasource.common import default_range as _common_default_range
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
 netfix.apply_netfix()
@@ -546,17 +547,8 @@ def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[
 # 三、板块 K 线 / 成分股
 # =============================================================
 def _default_kline_range(days: int = 400) -> Tuple[str, str]:
-    """板块 K 线默认区间（同花顺接口必须显式传起止日期）。
-
-    Args:
-        days: 统计天数。
-
-    Returns:
-        Tuple[str, str]: 计算结果。
-    """
-    end = utils.today_bj()  # TZ-06：板块区间按北京时间取当日
-    start = end - timedelta(days=days)
-    return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    """板块 K 线默认区间（第十轮 C17 收敛）：委托 ``common.default_range``。"""
+    return _common_default_range(days)
 
 
 def _kline_ths(kind: str, board: str, period: str, *, fill_today: bool = True) -> List[Dict[str, Any]]:
@@ -1806,7 +1798,7 @@ CROWDING_MISSING = (
     "设计原定五维（成交额/换手率/两融/相关性/动量），第十轮 P3 R4 扩为六维实测："
     "① 成交额维度用「当日/近250日均值」相对强度，不是「占全市场比重」——"
     "全市场成交额源（东财 push2his）在本机被源站重置，新浪指数日线只有成交量无成交额；"
-    "② 换手率分位未纳入：同花顺行业日线不含换手率与流通股本，无法合成板块换手率；"
+    "② 换手率分位已纳入（第十轮验收 C4）：以「板块日成交额 / 成分市值合计」构造 250 日换手率序列取分位，作为 weight=0 独立分项呈现（口径见该项 note）；"
     "③ 行业融资余额分位未纳入：两融仅有全市场口径，无行业口径；"
     "④ 成分股相关性/换手率只作参考值不参与加权：相关性需逐只成分股日线（约 20 只 × 60 日），"
     "换手率只有当日快照，两者都无历史序列可算分位，混进 0–100 分会破坏同质性，故列在 extra 里供参考；"
@@ -1848,7 +1840,8 @@ def _index_kline_func(kind: str = "industry"):
     return None
 
 
-def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True) -> Dict[str, Any]:
+def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True,
+                 light: bool = False) -> Dict[str, Any]:
     """单板块拥挤度打分（M3）。
 
     四个维度的分位加权成 0–100 分，>60 提示、>80 提示复核（用户口径）。
@@ -1858,6 +1851,9 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
         board: 板块名（如「半导体」）。
         kind: 板块类型：industry=行业 / concept=概念（均走纯 HTTP 板块日线）。
         fill_today: 是否补当日成交额（批量排行扫描时置 False）。
+        light: 轻量模式（第十轮 D6 整改）：跳过成分股相关性/换手率与融资余额横截面
+            —— 三者均为 weight=0 的参考分项，不影响 score；排行扫描用它把单板块耗时
+            从 ~1.4s 压到 ~0.3s，避免 90 板块冷启动超 20s。
 
     Returns:
         dict: {board, kind, score, level, parts, sample_days, as_of, caliber, missing}
@@ -2006,7 +2002,7 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     extra: Dict[str, Any] = {}
     cons_missing: List[str] = []
     _load_cons_cache()
-    cached_codes = _CONS_CACHE.get(board) or []
+    cached_codes = [] if light else (_CONS_CACHE.get(board) or [])
     if cached_codes:
         constituents = [{"code": code, "board": board} for code in cached_codes]
         extra["constituent_count"] = len(constituents)
@@ -2020,6 +2016,11 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
             extra["turnover"] = turnover
         else:
             cons_missing.append("成分股换手率不可得（样本报价不足）")
+        turnover_pct = _board_turnover_percentile(board, rows)
+        if turnover_pct:
+            extra["turnover_pct"] = turnover_pct
+        else:
+            cons_missing.append("换手率分位不可得（流通市值或成交额样本不足）")
     else:
         cons_missing.append("成分映射尚未预热（服务启动后由后台线程构建，约数分钟）")
     # R5（C5）：行业融资余额强度作为**独立分项**列出（weight=0，不参与加权）。
@@ -2028,7 +2029,9 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     # 故不混进 0–100 加权分，单独呈现并在 note 里写明口径。
     margin_pct: Optional[float] = None
     margin_note: str = ""
-    if kind == "industry":
+    if light:
+        cons_missing.append("轻量模式：成分股相关/换手与融资余额分位未计算（排行场景）")
+    elif kind == "industry":
         try:
             margin_data = get_margin_by_board(kind="industry")
             for item in margin_data.get("items") or []:
@@ -2053,6 +2056,17 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True)
     # 依据：相关系数只有当期值、无历史序列 ⇒ 无法算分位，硬塞进 0–100 分会破坏同质性；
     # 但它对「同涨同跌是否极端」有直接指示意义，故以绝对水平映射（0→0 分，1→100 分）单列，
     # 并在 note 里写明口径，供方向性核对（半导体分散 / 银行同质）。
+    turnover_block = extra.get("turnover_pct") or {}
+    if turnover_block.get("percentile") is not None:
+        parts["turnover_pct"] = {
+            "label": "换手率分位",
+            "value": turnover_block.get("turnover_pct"),
+            "pct": turnover_block.get("percentile"),
+            "weight": 0.0,
+            "unit": "%",
+            "note": turnover_block.get("note"),
+        }
+
     corr_block = extra.get("correlation") or {}
     if corr_block.get("corr") is not None:
         corr_value = float(corr_block["corr"])
@@ -2182,7 +2196,7 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
             try:
-                data = get_crowding(board, kind=key_kind, fill_today=False)
+                data = get_crowding(board, kind=key_kind, fill_today=False, light=True)
                 return {
                     "board": data["board"],
                     "kind": data.get("kind"),
@@ -2462,6 +2476,115 @@ def _constituent_correlation(
         "caliber": (
             f"成分股相关性=近 {days} 日日线收益率的 {n} 只样本两两 Pearson 相关系数均值"
             f"（{pairs} 对）；相关性越高越拥挤"
+        ),
+    }
+
+
+def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
+    """板块成分市值合计（元），供换手率分位用（第十轮验收 C4）。
+
+    口径说明（重要）：优先用同花顺成分「流通市值」；取不到时退回**本地全市场
+    快照的总市值**（``TOTAL_MARKET_CAP`` 合计）。两者都是「同一分母作用于历史
+    成交额序列」，分位（相对位置）对分母口径不敏感，但**绝对换手率水平会偏小**，
+    故在 note 内明确标注所用口径，不做无标注的静默替换。
+
+    Args:
+        board: 板块名。
+
+    Returns:
+        Optional[Dict[str, Any]]: {value, unit, caliber}；取不到返回 None。
+    """
+    def build() -> Optional[Dict[str, Any]]:
+        # ① 同花顺成分（含流通市值，口径最准）——失败不影响后续兜底
+        try:
+            payload = get_cons_ths(board)
+            items = payload.get("items") or []
+            total = 0.0
+            for item in items:
+                value = _num(item.get("float_cap")) or _num(item.get("流通市值"))
+                if value and value > 0:
+                    total += value
+            if total > 0:
+                return {"value": total, "unit": "元", "caliber": "同花顺成分流通市值合计"}
+        except Exception:  # noqa: BLE001 - 换源兜底
+            pass
+        # ② 新浪成分 nmc（板块名可能不在新浪名录，失败正常）
+        try:
+            items = _cons_sina(board)
+            total = sum((_num(item.get("nmc")) or 0.0) for item in items or [])
+            if total > 0:
+                return {"value": total, "unit": "元", "caliber": "新浪成分流通市值(nmc)合计"}
+        except Exception:  # noqa: BLE001 - 换源兜底
+            pass
+        # ③ 本地全市场快照总市值（零网络、稳定；口径近似）
+        try:
+            from backend.app.datasource import screener as _screener
+
+            snapshot = _screener._read_snapshot()
+            rows = snapshot.get("rows") or snapshot.get("items") or []
+            codes = set(_CONS_CACHE.get(board) or [])
+            if rows and codes:
+                total = sum(
+                    _num(row.get("mktcap")) or 0.0
+                    for row in rows if str(row.get("code")) in codes
+                )
+                if total > 0:
+                    return {
+                        "value": total,
+                        "unit": "元",
+                        "caliber": "本地全市场快照：成分股总市值合计（近似，非流通市值）",
+                    }
+        except Exception:  # noqa: BLE001 - 兜底亦失败则无分位
+            pass
+        return None
+
+    return _lookup(f"sector:floatcap:{board}", 6 * 3600, build)
+
+
+def _board_turnover_percentile(
+    board: str,
+    rows: List[Dict[str, Any]],
+    *,
+    window: int = 250,
+) -> Optional[Dict[str, Any]]:
+    """板块换手率及其历史分位（R4 / 验收 C4）。
+
+    口径（设计基准 §8-R4）：板块换手率 = 板块成交额 / 板块自由流通市值，
+    取近 ``window`` 个交易日序列的当前值分位。分钟/日内换手率拿不到历史，
+    故用「日成交额 ÷ 当期流通市值」构造时序——分子有历史、分母取当期
+    近似（市值变动对换手率量级影响远小于成交额波动），口径在 note 内如实标注。
+
+    Args:
+        board: 板块名。
+        rows: 板块日线（含 amount 亿元），按日期升序。
+        window: 分位窗口（交易日）。
+
+    Returns:
+        Optional[Dict[str, Any]]: {turnover_pct, percentile, samples, window_days, note}。
+    """
+    cap_block = _board_float_cap(board)
+    if not cap_block or not cap_block.get("value"):
+        return None
+    cap = float(cap_block["value"])
+    series: List[float] = []
+    for row in rows[-window:]:
+        amount = _num(row.get("amount"))  # 亿元
+        if amount is None or amount <= 0:
+            continue
+        series.append(amount * 1e8 / cap * 100.0)  # 换手率（%）
+    if len(series) < 60:  # 少于 60 个交易日不足以谈分位
+        return None
+    current = series[-1]
+    pct = _pct_rank(series, current)
+    return {
+        "turnover_pct": round(current, 2),
+        "percentile": pct,
+        "samples": len(series),
+        "window_days": min(window, len(series)),
+        "note": (
+            f"换手率=日成交额/成分市值（{cap_block.get('caliber')}，合计 "
+            f"{round(cap / 1e8, 1)} 亿元）；分位取近 {min(window, len(series))} 个交易日序列；"
+            "分母固定为当期值，属近似序列，分位（相对位置）不受口径整体缩放影响"
         ),
     }
 

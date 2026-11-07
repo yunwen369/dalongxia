@@ -266,6 +266,12 @@
     runBtn.type = "button";
     var result = document.getElementById("m903-body");
 
+    /** 恢复「执行筛选」按钮（第十轮验收 C18：进行中必须可见禁用 + 文案）。 */
+    function restoreRunBtn() {
+      runBtn.disabled = false;
+      runBtn.textContent = t("scr.runBtn");
+    }
+
     runBtn.addEventListener("click", function () {
       var conditions = collect();
       state.screener.conditions = conditions;
@@ -273,19 +279,24 @@
         toast(t("scr.needCond"));
         return;
       }
-      if (!result) {
-        return;
+      if (!result || runBtn.disabled) {
+        return;  // C18：进行中拒绝重复提交
       }
+      // C18（R18 零降级）：点击即禁用并改文案「筛选中…」，完成/失败后复位。
+      runBtn.disabled = true;
+      runBtn.textContent = t("scr.running");
       result.innerHTML = "";
       result.appendChild(el("div", "pg-state", t("scr.running")));
       result.setAttribute("data-state", "loading");
       runScreenerPost(conditions).then(function (data) {
         state.screener.lastResult = data;
         paintScreenerResult(data);
+        restoreRunBtn();
       }).catch(function (error) {
         result.innerHTML = "";
         result.appendChild(el("div", "pg-state", error.message || t("state.errorHint")));
         result.setAttribute("data-state", "error");
+        restoreRunBtn();
       });
     });
 

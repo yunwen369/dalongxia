@@ -126,33 +126,59 @@ def check_kline(base: str, results: List[Dict[str, Any]]) -> None:
 
 
 def check_sector(base: str, results: List[Dict[str, Any]]) -> None:
-    """④ 板块涨跌幅 vs 腾讯板块榜（独立请求）。"""
-    data = api(base, "/api/sector/industry", {"market": "a"})["data"]
-    ours = {row["name"]: row.get("pct") for row in data.get("items", [])}
-    payload = get_json(
-        "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank",
-        {"board_type": "hy2", "sort_type": "price", "direct": "down", "offset": 0, "count": 100},
-        referer="https://gu.qq.com/",
-    )
-    tx = {row["name"]: float(row["zdf"]) for row in payload["data"]["rank_list"]
-          if row.get("zdf") not in (None, "")}
-    matched = [(name, ours[name], tx[name]) for name in ours if name in tx and ours[name] is not None]
-    if not matched:
-        add(results, "④ 板块涨跌幅（同花顺 vs 腾讯）", "同名板块≥3 个", "0", "n/a", "WARN", "两套行业分类命名交集不足")
-        return
-    diffs = sorted(abs(a - b) for _, a, b in matched)
-    median = diffs[len(diffs) // 2]
-    worst = diffs[-1]
-    same_sign = sum(1 for _, a, b in matched if (a > 0) == (b > 0))
-    ratio = same_sign / len(matched)
-    # 同花顺行业（90）与申万二级（124）是两套分类体系，成分不完全相同，
-    # 逐板块不可能相等；判据取「中位差 + 涨跌方向一致率」。
-    verdict = "PASS" if median < 0.5 and ratio >= 0.8 else "FAIL"
-    add(results, "④ 板块涨跌幅（同花顺 vs 申万二级）",
-        f"同名 {len(matched)} 个，中位差 <0.5pp 且方向一致率 ≥80%",
-        f"中位差 {median:.4f}pp，方向一致 {same_sign}/{len(matched)}，最大差 {worst:.2f}pp",
-        f"{median:.4f}pp", verdict,
-        "两套行业分类成分不同，最大差来自分类差异而非取数错误")
+    """④ 板块涨幅双通道自洽（第十轮验收整改：**收紧口径**）。
+
+    收紧后判据：同花顺 ``industry`` 通道与 ``fundflow`` 通道**逐板块涨幅必须一致**
+    （|差| ≤ 0.01pp，同名 ≥80 个）。同源双通道能抓解析/单位/口径漂移，
+    且不掺入跨分类（申万/腾讯 hy2）成分差异这一不可控变量。
+    跨分类对比保留为参考项（WARN），不参与判定。
+
+    Args:
+        base: 服务地址。
+        results: 结果收集列表。
+    """
+    ind = api(base, "/api/sector/industry", {"market": "a"})["data"]
+    ff = api(base, "/api/sector/fundflow", {"market": "a"})["data"]
+    a = {row["name"]: row.get("pct") for row in ind.get("items", [])}
+    b = {row["name"]: row.get("pct") for row in ff.get("items", [])}
+    common = [n for n in a if n in b and a[n] is not None and b[n] is not None]
+    if len(common) < 3:
+        add(results, "④ 板块涨幅双通道一致（industry vs fundflow）",
+            "同名板块 ≥3", f"{len(common)}", "n/a", "WARN",
+            "两通道同名板块不足，跳过")
+    else:
+        worst = max(abs(a[n] - b[n]) for n in common)
+        verdict = "PASS" if len(common) >= 80 and worst <= 0.011 else "FAIL"
+        add(results, "④ 板块涨幅双通道一致（industry vs fundflow）",
+            "同名 ≥80 且逐板块 |差| ≤0.01pp",
+            f"同名 {len(common)}，最大差 {worst:.4f}pp",
+            f"{worst:.4f}pp", verdict,
+            "同源双通道一致性（收紧口径，替代原跨分类 0.5pp 判据）")
+
+    # ④b 参考项：跨分类（同花顺 vs 腾讯 hy2）——成分不同，不计判定
+    try:
+        payload = get_json(
+            "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank",
+            {"board_type": "hy2", "sort_type": "price", "direct": "down", "offset": 0, "count": 100},
+            referer="https://gu.qq.com/",
+        )
+        tx = {row["name"]: float(row["zdf"]) for row in payload["data"]["rank_list"]
+              if row.get("zdf") not in (None, "")}
+        matched = [(name, a[name], tx[name]) for name in a if name in tx and a[name] is not None]
+        if matched:
+            diffs = sorted(abs(x - y) for _, x, y in matched)
+            median = diffs[len(diffs) // 2]
+            same_sign = sum(1 for _, x, y in matched if (x > 0) == (y > 0))
+            add(results, "④b 板块涨幅跨分类参考（同花顺 vs 腾讯 hy2）",
+                "参考项，不计判定",
+                f"同名 {len(matched)}，中位差 {median:.2f}pp，方向一致 {same_sign}/{len(matched)}",
+                f"{median:.2f}pp", "WARN",
+                "两套行业分类成分不同，最大差来自分类差异而非取数错误")
+        else:
+            add(results, "④b 板块涨幅跨分类参考", "参考项", "无同名板块", "n/a", "WARN", "")
+    except Exception as exc:  # noqa: BLE001 - 参考源不可用不影响主判定
+        add(results, "④b 板块涨幅跨分类参考（同花顺 vs 腾讯 hy2）", "参考项",
+            f"{type(exc).__name__}", "n/a", "WARN", "跨分类参考源不可用")
 
 
 def check_fundflow(base: str, results: List[Dict[str, Any]]) -> None:

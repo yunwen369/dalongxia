@@ -70,7 +70,13 @@ def test_registry_api_paths_exist_in_openapi() -> None:
 
 def test_charting_quote_decoupled_from_kline() -> None:
     """R3-32：loadCharting 里报价不得与 K 线/分时共用同一个 Promise.all。"""
-    source = (ROOT / "frontend" / "js" / "pages.js").read_text(encoding="utf-8")
+    # 第十轮 C17：pages.js 已按页拆分为 frontend/js/pages/*.js（旧单文件已删除），
+    # 故拼接全部页模块再断言，等价于原单文件视图。
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "frontend" / "js" / "pages").glob("*.js"))
+    )
+    assert "function loadCharting()" in source, "拆分后未找到 loadCharting"
     start = source.index("function loadCharting()")
     end = source.index("function paintChartingQuote(", start)
     body = source[start:end]

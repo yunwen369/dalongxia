@@ -49,6 +49,37 @@ def _datasource_status() -> Dict[str, Dict[str, Any]]:
     return capabilities.datasource_status()
 
 
+def _northbound_status() -> Dict[str, Any]:
+    """北向数据通道状态（供 /health 展示，第十轮验收 A19）。
+
+    只读内存缓存，不触发网络请求；未预热时如实标注 ``loaded: false``。
+
+    Returns:
+        Dict[str, Any]: {metric, disclosure, loaded, latest, stale, source}
+    """
+    metric = "turnover"
+    disclosure = "沪深股通成交总额 · 交易所 T+0 收市后披露；2024-08-19 起无净买额披露"
+    payload = None
+    try:
+        payload = cache.get("moneyflow:northbound:turnover", config.TTL.get("northbound", 3600))
+    except Exception:  # noqa: BLE001 - 健康检查不得因缓存异常而失败
+        payload = None
+    # get_or_load 直接缓存 data 载荷（无 {data,error} 信封），故兼容两种形态
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        data = payload["data"]
+    else:
+        data = payload if isinstance(payload, dict) else None
+    latest = data.get("latest") if isinstance(data, dict) else None
+    return {
+        "metric": metric,
+        "disclosure": disclosure,
+        "loaded": bool(latest),
+        "latest": latest,
+        "stale": not bool(latest),
+        "source": data.get("source") if isinstance(data, dict) else None,
+    }
+
+
 @router.get("/health")
 def health() -> Dict[str, Any]:
     """健康检查接口。
@@ -68,6 +99,9 @@ def health() -> Dict[str, Any]:
         # 第五轮 P1-01：暴露同花顺 V8 通道健康态（熔断/半开/最近成功时间），
         # 修复前 v8_health() 无调用方，熔断在外部完全不可观测。
         "v8": v8_guard.v8_health(),
+        # 第十轮验收 A19：北向口径状态行（R3 新披露口径的可观测性）
+        # 只读缓存与常量，不发网络请求，保证 /health 亚秒级响应。
+        "northbound": _northbound_status(),
         # 仅暴露是否已配置与来源，绝不返回密钥内容
         "ai": {"configured": ai_config.configured, "source": ai_config.source},
         "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),

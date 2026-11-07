@@ -21,13 +21,13 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from backend.app import config
 from backend.app.core import cache
 from backend.app.datasource import macro, utils
+from backend.app.datasource.common import to_float as _common_to_float
 
 logger = logging.getLogger(__name__)
 
@@ -39,23 +39,54 @@ INDEX_LIST = ["沪深300", "中证500", "上证50", "上证180"]
 
 DISCLAIMER = "分位只表示当前估值在历史区间中的相对位置，不代表未来涨跌，不构成投资建议。"
 
+# 第十轮验收 C2：指数 PE 双通道——乐咕为主源，中证指数官网为备源。
+# 备源窗口仅约 20 个交易日（官网只发布近端估值），分位含义弱于主源，
+# 固在回包内以 backup / window_days 显式标注，避免与 250 日以上主源混淆。
+_CSINDEX_CODE = {
+    "沪深300": "000300",
+    "中证500": "000905",
+    "上证50": "000016",
+    "上证180": "000010",
+}
 
-def _to_float(value: Any) -> Optional[float]:
-    """安全转 float（NaN / 空值返回 None）。
+
+def _index_series_csindex(symbol: str) -> List[Dict[str, Any]]:
+    """指数 PE 序列·备源（中证指数官网，近 20 个交易日）。
 
     Args:
-        value: 原始值。
+        symbol: 指数名（与乐咕口径一致的 4 个指数）。
 
     Returns:
-        Optional[float]: 转换结果。
+        List[Dict[str, Any]]: [{date, value}] 升序。
+
+    Raises:
+        ValueError: 无映射代码、返回为空或无有效值。
     """
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(result) or math.isinf(result):
-        return None
-    return result
+    import akshare as ak
+
+    code = _CSINDEX_CODE.get(symbol)
+    if not code:
+        raise ValueError(f"{symbol} 无中证指数备源代码")
+    frame = ak.stock_zh_index_value_csindex(symbol=code)
+    if frame is None or len(frame) == 0:
+        raise ValueError(f"{symbol} 备源估值序列为空")
+    records: List[Dict[str, Any]] = []
+    for row in frame.to_dict("records"):
+        point = _as_date(row.get("日期"))
+        # 官网列：市盈率1=静态、市盈率2=滚动（TTM）——与乐咕「滚动市盈率」对齐取后者
+        value = _to_float(row.get("市盈率2")) or _to_float(row.get("市盈率1"))
+        if point is not None and value is not None and value > 0:
+            records.append({"date": point, "value": value})
+    if not records:
+        raise ValueError(f"{symbol} 备源估值无有效值")
+    records.sort(key=lambda item: item["date"])
+    return records
+
+
+
+def _to_float(value: Any) -> Optional[float]:
+    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。"""
+    return _common_to_float(value)
 
 
 def _as_date(value: Any) -> Optional[date]:
@@ -277,13 +308,23 @@ def _load_percentile() -> Dict[str, Any]:
     failures: List[str] = []
 
     for symbol in INDEX_LIST:
+        backup_note: Optional[str] = None
         try:
             records = _index_series(symbol)
-        except Exception as exc:  # noqa: BLE001 - 单指数失败不影响其他
-            logger.info("指数估值失败 %s：%s", symbol, type(exc).__name__)
-            failures.append(f"{symbol}（{type(exc).__name__}）")
-            indices.append({"name": symbol, "available": False, "reason": f"估值通道异常（{type(exc).__name__}）"})
-            continue
+        except Exception as exc:  # noqa: BLE001 - 主源失败切备源（C2 双通道）
+            try:
+                records = _index_series_csindex(symbol)
+                backup_note = "中证指数官网（备源 · 近 20 交易日窗口，分位含义弱于主源）"
+                logger.info("指数估值主源失败切备源 %s：%s", symbol, type(exc).__name__)
+            except Exception as exc2:  # noqa: BLE001 - 双通道皆失败才算不可用
+                logger.info("指数估值双通道失败 %s：%s / %s", symbol, type(exc).__name__, type(exc2).__name__)
+                failures.append(f"{symbol}（{type(exc).__name__}/{type(exc2).__name__}）")
+                indices.append({
+                    "name": symbol,
+                    "available": False,
+                    "reason": f"双通道异常（主 {type(exc).__name__} / 备 {type(exc2).__name__}）",
+                })
+                continue
         current = records[-1]["value"]
         win3 = _window(records, 3)
         win5 = _window(records, 5)
@@ -307,6 +348,8 @@ def _load_percentile() -> Dict[str, Any]:
             # 样本数用于让用户判断分位可信度（月频：3 年≈36 个月）
             "samples": {"y3": len(win3), "y5": len(win5), "y10": len(win10)},
             "history_from": records[0]["date"].isoformat(),
+            "backup": backup_note,
+            "window_days": len(records),
         })
 
     market: Dict[str, Any] = {"available": False, "reason": "未取数"}

@@ -28,12 +28,12 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app import config
 from backend.app.core import cache
 from backend.app.datasource import utils
+from backend.app.datasource.common import to_float as _common_to_float
 
 logger = logging.getLogger(__name__)
 
@@ -91,21 +91,8 @@ def _parse_month(text: Any) -> Optional[str]:
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """安全转 float，NaN / None / 空串统一返回 None。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        Optional[float]: 转换结果。
-    """
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(result) or math.isinf(result):
-        return None
-    return result
+    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。"""
+    return _common_to_float(value)
 
 
 def _frame_rows(dataframe) -> List[Dict[str, Any]]:

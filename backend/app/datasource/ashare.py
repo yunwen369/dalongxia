@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, List
 
 import requests
@@ -23,6 +23,7 @@ from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import tencent, utils
+from backend.app.datasource.common import default_range as _common_default_range
 
 # 关键顺序：证书/代理修复必须先于 akshare import
 netfix.apply_netfix()
@@ -66,17 +67,8 @@ def _date_text(value: Any) -> str:
 
 
 def _default_range(days: int = 730) -> tuple[str, str]:
-    """返回默认起止日期（YYYYMMDD）。
-
-    Args:
-        days: 统计天数。
-
-    Returns:
-        tuple[str, str]: 计算结果。
-    """
-    end = utils.today_bj()  # TZ-06：按北京时间取当日，非 UTC+8 宿主不移位
-    start = end - timedelta(days=days)
-    return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    """默认起止日期（第十轮 C17 收敛）：委托 ``common.default_range``。"""
+    return _common_default_range(days)
 
 
 def _period_to_ak(period: str) -> str:

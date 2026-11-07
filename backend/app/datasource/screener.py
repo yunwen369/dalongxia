@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import atomic
 from backend.app.datasource import utils
+from backend.app.datasource.common import to_float as _common_to_float
 
 logger = logging.getLogger(__name__)
 
@@ -266,21 +267,8 @@ def _latest_trade_date() -> Optional[str]:
 
 
 def _num(value: Any) -> Optional[float]:
-    """安全转 float（空串/NaN → None）。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        Optional[float]: 结果。
-    """
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if result != result:  # NaN
-        return None
-    return result
+    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。"""
+    return _common_to_float(value)
 
 
 def _last_completed_quarter(today: Any) -> str:

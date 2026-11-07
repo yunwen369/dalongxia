@@ -224,7 +224,6 @@ def test_r10_fund_crowding_has_five_dims(monkeypatch):
     fc = fund_combo.get_fund_crowding("F1")
     if not fc.get("available"):
         pytest.skip(f"净值构造样本不足（{fc.get('caliber')}）")
-    weights = {p["label"]: p for p in fc["parts"]}
     labels = [p["label"] for p in fc["parts"]]
     assert "规模环比增速" in labels and "重仓股合计换手率" in labels
     assert abs(sum(p["weight"] for p in fc["parts"]) - 1.0) < 1e-9

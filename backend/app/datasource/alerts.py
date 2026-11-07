@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import atomic
 from backend.app.datasource import utils
+from backend.app.datasource.common import to_float as _common_to_float
 
 logger = logging.getLogger(__name__)
 
@@ -270,21 +271,8 @@ def update_rule(rule_id: str, **fields: Any) -> Dict[str, Any]:
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """把任意输入安全转为 float。
-
-    Args:
-        value: 待转换值（数字/字符串/None）。
-
-    Returns:
-        Optional[float]: 转换结果；None、NaN 或不可转换时返回 None。
-    """
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if result != result:
-        return None
-    return result
+    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。"""
+    return _common_to_float(value)
 
 
 # =============================================================
