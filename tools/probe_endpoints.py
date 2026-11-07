@@ -192,8 +192,14 @@ def main() -> int:
     for path, methods in sorted(spec.get("paths", {}).items()):
         if path in SKIP_PATHS or not path.startswith("/api/"):
             continue
-        for method in ("get", "post"):
+        for method in ("get", "post", "patch", "delete"):
             if method not in methods:
+                continue
+            if method in ("patch", "delete"):
+                # 第十轮验收补盲：PATCH/DELETE 不在自动探测范围（写/删会破坏数据），
+                # 但必须**显式登记**，避免「110 端点全覆盖」的错觉。
+                results.append({"path": path, "method": method.upper(), "category": "SKIPPED",
+                                "detail": "写/删方法：探针不执行（避免破坏用户数据），已登记为未探测", "elapsed": 0.0})
                 continue
             baseline = BASELINE.get(path) if method == "get" else READONLY_POST.get(path)
             if baseline is None:

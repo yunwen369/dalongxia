@@ -12,7 +12,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from verify_frontier_fixes import CDP, launch_chrome, page_ws, set_viewport  # noqa: E402
+try:  # 第十轮：verify_frontier_fixes 已并入 ui_clickthrough
+    from verify_frontier_fixes import CDP, launch_chrome, page_ws, set_viewport  # noqa: E402
+except ModuleNotFoundError:
+    from ui_clickthrough import CDP, launch_chrome, page_ws, set_viewport  # noqa: E402
 
 
 def main() -> None:

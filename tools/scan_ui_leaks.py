@@ -12,7 +12,31 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from verify_frontier_fixes import CDP, launch_chrome, page_ws, set_viewport, wait_for_page  # noqa: E402
+try:  # 第十轮：verify_frontier_fixes 已并入 ui_clickthrough，保留旧导入以兼容历史环境
+    from verify_frontier_fixes import CDP, launch_chrome, page_ws, set_viewport, wait_for_page  # noqa: E402
+except ModuleNotFoundError:
+    from ui_clickthrough import CDP, launch_chrome, page_ws, set_viewport, eval_js  # noqa: E402
+
+    def wait_for_page(cdp, route: str, timeout: int = 45) -> bool:
+        """等待页面就绪（原 verify_frontier_fixes.wait_for_page 的最小替代）。
+
+        Args:
+            cdp: CDP 客户端。
+            route: 路由标识（仅日志用）。
+            timeout: 超时秒数。
+
+        Returns:
+            bool: 就绪返回 True，超时 False。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if eval_js(cdp, "document.readyState") == "complete":
+                    return True
+            except Exception:  # noqa: BLE001 - 导航中取值失败属正常
+                pass
+            time.sleep(0.5)
+        return False
 
 ROUTES = [
     ("home", "#/home"),
@@ -90,8 +114,8 @@ def main() -> None:
             cdp.call("Page.navigate", {"url": args.base_url + "/" + route})
             wait_for_page(cdp, route, 45)
             time.sleep(4.5)
-            rows[name] = cdp.eval_js(SCAN)
-        cdp.close()
+            rows[name] = eval_js(cdp, SCAN)
+        pass  # CDP 无 close()，连接随进程结束释放
     finally:
         proc.kill()
 
