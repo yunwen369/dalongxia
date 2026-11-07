@@ -547,7 +547,14 @@ def summary_from_items(items: List[Dict[str, Any]], market: str = "cn") -> Dict[
 # 三、板块 K 线 / 成分股
 # =============================================================
 def _default_kline_range(days: int = 400) -> Tuple[str, str]:
-    """板块 K 线默认区间（第十轮 C17 收敛）：委托 ``common.default_range``。"""
+    """板块 K 线默认区间（第十轮 C17 收敛）：委托 ``common.default_range``。
+
+    Args:
+        days: 向前回溯的自然日天数。
+
+    Returns:
+        Tuple[str, str]: ``(起始日, 结束日)``，格式均为 YYYY-MM-DD。
+    """
     return _common_default_range(days)
 
 
@@ -1314,7 +1321,14 @@ def _fundflow_em_fallback() -> Tuple[List[Dict[str, Any]], str]:
         seen.add(name)
 
         def _yi(key: str) -> Optional[float]:
-            """元 → 亿元（东财给原始元）。"""
+            """元 → 亿元（东财给原始元）。
+
+            Args:
+                key: 当前行记录里的字段名。
+
+            Returns:
+                Optional[float]: 亿元数值（保留 2 位）；缺值或不可转换返回 None。
+            """
             value = record.get(key)
             if value is None or (isinstance(value, float) and value != value):
                 return None

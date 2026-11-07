@@ -425,6 +425,10 @@ def ai_translate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def ai_summary(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """财报 / 公告中文摘要（R14 · N3 契约）。
 
+    Args:
+        payload: 请求体，``{market, code, title, pub_time?, doc_url?, force?}``；
+            market 取 a/hk/us，title 与 code 至少一项，doc_url 需在白名单内。
+
     Body:
         {market, code, title, pub_time?, doc_url?, force?}
         market: a / hk / us；title 与 code 至少一项；doc_url 需在白名单内。

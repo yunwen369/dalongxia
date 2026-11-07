@@ -1265,7 +1265,11 @@ def get_style_history(code: str) -> Dict[str, Any]:
     from backend.app.core import cache as _cache
 
     def _load() -> Dict[str, Any]:
-        """聚合近 2 年季度持仓 + 行业映射 + 漂移度（供缓存 loader 调用）。"""
+        """聚合近 2 年季度持仓 + 行业映射 + 漂移度（供缓存 loader 调用）。
+
+        Returns:
+            Dict[str, Any]: 风格稳定性结果；无披露时 ``status=unavailable``。
+        """
         missing: List[str] = []
         now_year = utils.bj_now().year
         frames = []

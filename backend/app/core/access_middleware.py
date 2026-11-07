@@ -94,7 +94,11 @@ def _check_rate_limit(ip: str) -> bool:
 
 
 def _record_fail(ip: str) -> None:
-    """记录一次失败。"""
+    """记录一次失败。
+
+    Args:
+        ip: 客户端 IP（同 IP 失败累计用于节流）。
+    """
     now = time.time()
     history = _fail_counts.get(ip, [])
     history.append(now)

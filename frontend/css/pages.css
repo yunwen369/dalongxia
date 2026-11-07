@@ -1503,3 +1503,14 @@
 
 .crowd-heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; margin: 8px 0 6px; }
 .crowd-heat-cell { padding: 8px 4px; border-radius: var(--radius-sm); text-align: center; font-size: 11px; color: var(--text); border: 1px solid var(--border); cursor: default; }
+
+/* =============================================================
+ * Web 化：访问方式卡（本机 / 局域网入口 + 扫码）
+ * ============================================================= */
+.set-access-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.set-access-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); }
+.set-access-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.set-access-label { font-size: 12px; color: var(--text-dim); }
+.set-access-url { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+.set-access-qr { flex: 0 0 96px; width: 96px; height: 96px; border-radius: 6px; background: #fff; padding: 4px; box-sizing: border-box; }
+.set-access-note { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin-top: 6px; }

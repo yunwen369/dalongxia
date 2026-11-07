@@ -32,7 +32,14 @@ CALIBER = "经理画像 · 长表按基金代码定位后聚合（规模/最佳�
 
 
 def _to_float(value: Any) -> float | None:
-    """安全转 float（空值/异常返回 None，不补 0）。"""
+    """安全转 float（空值/异常返回 None，不补 0）。
+
+    Args:
+        value: 待转换的原始值（数字/字符串/None）。
+
+    Returns:
+        float | None: 转换结果；空值或不可转换返回 None。
+    """
     try:
         result = float(value)
     except (TypeError, ValueError):

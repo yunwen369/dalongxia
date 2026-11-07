@@ -6,8 +6,8 @@
 本脚本把"必须在打包产物上实测"固化为可执行门禁，失败即退出码非 0，禁止发版。
 
 检查项：
-1. 产物存在性：``<产物目录>/OpenBB-CN.exe`` + ``_internal/frontend/js/pages.js``；
-2. 前端完整性：``pages.js`` 必须命中 ``loadYjbCollect`` / ``loadYjbHoldings``
+1. 产物存在性：``<产物目录>/OpenBB-CN.exe`` + ``_internal/frontend/js/``（第十轮起为拆分目录，非单文件 pages.js）；
+2. 前端完整性：js 目录拼接后必须命中 ``loadYjbCollect`` / ``loadYjbHoldings``
    / ``/api/fund/yjb/collect`` / ``/api/fund/yjb/holdings`` / ``/api/fund/yjb/secret``；
 3. 凭据落位：``<产物目录>/data/`` 下 ``yjb_token.json``、``yjb_secret.json`` 存在且非空；
 4. 起真实进程：``OpenBB-CN.exe --serve-only``（无窗口），跑在门禁端口（默认 6916），
@@ -196,13 +196,21 @@ def _check_frontend(artifact: Path) -> Dict[str, Any]:
     Returns:
         dict: ``{path, bytes, markers:{标记:出现次数}, ok}``。
     """
-    pages = artifact / "_internal" / "frontend" / "js" / "pages.js"
-    result: Dict[str, Any] = {"path": str(pages), "exists": pages.exists(), "bytes": 0,
+    # 第十轮 C17 起 pages.js 已按页拆分为 pages/*.js（旧单文件删除），
+    # 故改为遍历整个 js 目录拼接后检查标记——避免「文件改名/拆分」被误判成「旧包」。
+    js_dir = artifact / "_internal" / "frontend" / "js"
+    result: Dict[str, Any] = {"path": str(js_dir), "exists": js_dir.exists(), "bytes": 0,
                               "markers": {}, "ok": False}
-    if not pages.exists():
+    if not js_dir.exists():
         return result
-    text = pages.read_text(encoding="utf-8", errors="ignore")
-    result["bytes"] = pages.stat().st_size
+    chunks: List[str] = []
+    for path in sorted(js_dir.rglob("*.js")):
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+    text = "\n".join(chunks)
+    result["bytes"] = sum(len(chunk) for chunk in chunks)
     for marker in PAGES_JS_MARKERS:
         result["markers"][marker] = text.count(marker)
     result["ok"] = all(count > 0 for count in result["markers"].values())
@@ -446,7 +454,7 @@ def _print_report(report: Dict[str, Any]) -> None:
     print(f"[{'OK' if exe.get('exists') else 'FAIL'}] 主程序　{exe.get('bytes')} 字节　{exe.get('path')}")
     front = checks.get("frontend") or {}
     marks = front.get("markers") or {}
-    print(f"[{'OK' if front.get('ok') else 'FAIL'}] 前端 pages.js　{front.get('bytes')} 字节　"
+    print(f"[{'OK' if front.get('ok') else 'FAIL'}] 前端 js 目录　{front.get('bytes')} 字节　"
           f"命中 {sum(1 for v in marks.values() if v)}/{len(PAGES_JS_MARKERS)} 个标记")
     cred = checks.get("credentials") or {}
     files = cred.get("files") or {}

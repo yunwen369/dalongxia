@@ -69,6 +69,8 @@ data/portfolio_snapshots/
 data/concept_spotcheck.jsonl
 # 第十轮 P4 R14：财报中文摘要落库（用户配置的 AI 生成，本地产物不入库）
 data/summaries/
+# v2.1.0 网页化：公网隧道组件 cloudflared（首次使用时按镜像自动下载，约 53MB，不入库）
+data/bin/
 # RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
 data/audit/
 data/*.db

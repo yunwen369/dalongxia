@@ -38,7 +38,14 @@ def _ensure_dir() -> None:
 
 
 def _snap_path(day: str) -> Any:
-    """某日快照文件路径。"""
+    """某日快照文件路径。
+
+    Args:
+        day: 日期字符串 YYYY-MM-DD。
+
+    Returns:
+        Any: ``SNAP_DIR/<day>.json`` 的 Path 对象。
+    """
     return SNAP_DIR / f"{day}.json"
 
 
@@ -69,7 +76,14 @@ def take_snapshot(day: str | None = None) -> Dict[str, Any]:
 
 
 def is_workday(day: date) -> bool:
-    """工作日判定（不含法定节假日表，节日由「无快照」自然形成断点）。"""
+    """工作日判定（不含法定节假日表，节日由「无快照」自然形成断点）。
+
+    Args:
+        day: 待判定的日期。
+
+    Returns:
+        bool: 周一至周五为 True，周末为 False。
+    """
     return day.weekday() < 5
 
 

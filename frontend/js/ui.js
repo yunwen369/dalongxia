@@ -193,7 +193,9 @@
   var sectorIndex = null;
   var sectorIndexAt = 0;
 
-  /** 板块名录索引（10 分钟缓存；失败不阻塞面板，返回空表）。 */
+  /** 板块名录索引（10 分钟缓存；失败不阻塞面板，返回空表）。
+   * @param {Function} callback 回调，入参为板块数组
+   */
   function ensureSectorIndex(callback) {
     if (sectorIndex && Date.now() - sectorIndexAt < 600000) {
       callback(sectorIndex);
@@ -218,7 +220,11 @@
     }).catch(function () { callback([]); });
   }
 
-  /** 匹配分：完全相等 100 / 前缀 80 / 包含 60，用于「精确名称优先」排序。 */
+  /** 匹配分：完全相等 100 / 前缀 80 / 包含 60，用于「精确名称优先」排序。
+   * @param {string} label 候选名称
+   * @param {string} query 用户输入
+   * @returns {number} 匹配分（0 / 60 / 80 / 100）
+   */
   function matchScore(label, query) {
     var text = String(label || "").toLowerCase();
     var q = String(query || "").toLowerCase();
@@ -237,9 +243,16 @@
     return 0;
   }
 
-  /** 按关键词生成跨实体命令：页面直达 + 板块 + 股票 + 基金。 */
+  /** 按关键词生成跨实体命令：页面直达 + 板块 + 股票 + 基金。
+   * @param {string} keyword 用户输入关键词
+   * @param {Function} callback 结果回调，入参为命令数组
+   * @returns {void} 无返回值（结果经 callback 异步交付）
+   */
   function entityCommands(keyword, callback) {
-    /** 排序后回调：精确匹配优先，同分按 页面 > 股票 > 板块 > 基金。 */
+    /** 排序后回调：精确匹配优先，同分按 页面 > 股票 > 板块 > 基金。
+     * @param {Array} list 命令数组（原地补 _score 并排序）
+     * @returns {void} 无返回值（结果经外层 callback 交付）
+     */
     function finish(list) {
       list.forEach(function (item) {
         item._score = matchScore(item.label, keyword);
@@ -294,6 +307,7 @@
             group: "palette.stocks",
             label: (item.name || "") + " " + symbol,
             _type: 3,
+            /** 跳到个股页并带上代码与市场。 */
             run: function () {
               location.hash = "#/stock?symbol=" + encodeURIComponent(symbol) +
                 "&market=" + encodeURIComponent(item.market || "a");
@@ -310,6 +324,7 @@
             group: "palette.funds",
             label: (item.name || "") + " " + item.code,
             _type: 1,
+            /** 跳到基金页并带上基金代码。 */
             run: function () {
               location.hash = "#/fund?code=" + encodeURIComponent(item.code);
             }
@@ -320,6 +335,10 @@
     });
   }
 
+  /** 把关键词包成「站内搜索」一条命令（空关键词返回空数组）。
+   * @param {string} keyword 用户输入关键词
+   * @returns {Array} 命令数组
+   */
   function searchCommand(keyword) {
     var query = (keyword || "").trim();
     if (!query) {

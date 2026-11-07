@@ -797,6 +797,10 @@
           rotate: rotate,
           fontSize: labelFont,
           hideOverlap: !rotate,
+          /** 轴标签截断：超过 6 字压到 5 字加省略号，避免类目名互相遮挡。
+           * @param {string} value 原始轴标签
+           * @returns {string} 展示用标签
+           */
           formatter: function (value) {
             var text = String(value == null ? "" : value);
             return text.length > 6 ? text.slice(0, 5) + "…" : text;
@@ -2406,6 +2410,7 @@
 
   /** 独立路由 #/dashboard-manage：仪表板管理整页（DS-01，7 操作 + 分组树）。
    * @param {HTMLElement} container 页面容器（#page-dashboard-manage）
+   * @returns {void} 无返回值（直接渲染到 container）
    */
   function renderDashboardManage(container) {
     loadState();
@@ -2503,6 +2508,10 @@
       { title: t("dashboard.colCount"), num: true, render: function (row) { return (row.widgets || []).length; } },
       {
         title: t("dashboard.colActive"),
+        /** 当前生效仪表板列：命中的行显示「使用中」，其余显示破折号。
+         * @param {Object} row 仪表板行记录
+         * @returns {string} 展示文本
+         */
         render: function (row) {
           return row.id === state.activeId ? t("dashboard.isActive") : "—";
         }
@@ -2511,6 +2520,9 @@
     window.Utils.renderTable(main.body, columns, state.dashboards, {
       tableClass: "pg-table",
       wrapClass: "pg-table-wrap",
+      /** 行点击：切换当前仪表板并跳回 #/dashboard。
+       * @param {Object} row 被点击的仪表板行记录
+       */
       onRowClick: function (row) {
         state.activeId = row.id;
         saveState(true);

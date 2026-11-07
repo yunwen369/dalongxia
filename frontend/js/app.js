@@ -117,6 +117,7 @@
   var _current = { symbol: "600519", market: "a" };
   var _subscribers = [];  // 订阅回调列表
 
+  /** 通知全部订阅者：把当前标的与市场广播出去（单个回调异常不阻断主流程）。 */
   function _notify() {
     _subscribers.forEach(function (cb) {
       try {

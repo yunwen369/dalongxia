@@ -24,7 +24,7 @@ from fastapi import APIRouter, Body
 from fastapi.responses import FileResponse
 
 from backend.app import config
-from backend.app.core import cache, capabilities, user_prefs, v8_guard
+from backend.app.core import cache, capabilities, public_tunnel, user_prefs, v8_guard, web_access
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import utils
 
@@ -181,6 +181,47 @@ def cache_stats() -> Dict[str, Any]:
         "layout_kb": round(detail["layout_bytes"] / 1024, 1),
         "source": "本机缓存目录统计（data/cache）",
         "caliber": "内存字节数按 JSON 序列化长度估算，仅表示量级；布局为 data/dashboards.json",
+        "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
+        "is_realtime": True,
+    })
+
+
+@router.get("/system/access")
+def access_info() -> Dict[str, Any]:
+    """访问方式（Web 化）：本机与局域网入口、二维码、口令开关状态。
+
+    Returns:
+        Dict[str, Any]: data.points 为入口清单（scope/label/url/qr），
+        data.lan_visible 表示是否已放开局域网监听，
+        data.password_required 表示是否已启用访问口令。
+    """
+    lan_visible = config.HOST not in ("127.0.0.1", "localhost", "::1")
+    points = web_access.access_points(config.PORT, lan_visible)
+    for point in points:
+        # 二维码内容即访问地址，手机扫码后直接进入同一应用（口令启用时先验口令）
+        point["qr"] = web_access.qr_data_uri(point["url"])
+    tunnel = public_tunnel.state()
+    if tunnel.get("url"):
+        points.append({
+            "scope": "public",
+            "label": "公网（临时地址）",
+            "url": tunnel["url"],
+            "qr": web_access.qr_data_uri(tunnel["url"]),
+        })
+    return ok({
+        "points": points,
+        "port": config.PORT,
+        "host": config.HOST,
+        "lan_visible": lan_visible,
+        "password_required": bool(os.environ.get("OPENBB_ACCESS_PASSWORD", "").strip()),
+        "public": {
+            "url": tunnel.get("url", ""),
+            "error": tunnel.get("error", ""),
+            "started_at": tunnel.get("started_at", ""),
+            "ready": bool(tunnel.get("ready")),
+        },
+        "source": "本机网卡枚举（UDP 出口探测 + 主机名解析）",
+        "caliber": "局域网地址仅同网段可达；公网为 Cloudflare 临时隧道，重启会变；二维码内容即访问 URL，不含口令",
         "as_of": utils.bj_now_aware().isoformat(timespec="seconds"),
         "is_realtime": True,
     })

@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "OpenBB 中文投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "2.0.0"  # 语义化版本号：2.0.0 第十轮信息架构重构（19 页 IA + 双主题 + 四态 + 22 项能力补齐）
-BUILD_TAG = "v2.0.0-20261107"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "2.1.0"  # 语义化版本号：2.1.0 网页化（浏览器模式 + 局域网 + 公网隧道）
+BUILD_TAG = "v2.1.0-20261108"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
@@ -39,7 +39,10 @@ HOST = os.environ.get("OPENBB_HOST", "127.0.0.1")
 # OPENBB_PORT 临时指定另一端口跑打包产物，避免与用户正在运行的实例抢 6900。
 # 正常双击启动不受影响（无该环境变量时恒为 6900），非静默换端口。
 PORT = int(os.environ.get("OPENBB_PORT") or 6900)
-BASE_URL = f"http://{HOST}:{PORT}"  # 同源访问基址，前端与 API 共用
+BASE_URL = f"http://{HOST}:{PORT}"  # 监听地址（含 0.0.0.0 形态），仅用于展示
+# 本机访问基址：健康检查、默认浏览器打开一律走回环 —— 监听 0.0.0.0 时
+# `http://0.0.0.0:6900` 不是合法访问目标（部分系统直接拒绝），必须与监听地址解耦。
+LOCAL_URL = f"http://127.0.0.1:{PORT}"
 
 # =============================================================
 # 二、目录与文件路径（全部由本文件派生，业务代码禁止另行拼接）

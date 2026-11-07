@@ -67,7 +67,14 @@ def _date_text(value: Any) -> str:
 
 
 def _default_range(days: int = 730) -> tuple[str, str]:
-    """默认起止日期（第十轮 C17 收敛）：委托 ``common.default_range``。"""
+    """默认起止日期（第十轮 C17 收敛）：委托 ``common.default_range``。
+
+    Args:
+        days: 向前回溯的自然日天数。
+
+    Returns:
+        tuple[str, str]: ``(起始日, 结束日)``，格式均为 YYYY-MM-DD。
+    """
     return _common_default_range(days)
 
 

@@ -85,7 +85,14 @@ def _index_series_csindex(symbol: str) -> List[Dict[str, Any]]:
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。"""
+    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。
+
+    Args:
+        value: 待转换的原始值（数字/字符串/None）。
+
+    Returns:
+        Optional[float]: 转换结果；空值或不可转换返回 None，不补 0。
+    """
     return _common_to_float(value)
 
 

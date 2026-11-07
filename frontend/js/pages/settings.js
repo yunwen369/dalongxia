@@ -56,6 +56,11 @@
     closeCard.body.id = "set-close-body";
     grid.appendChild(closeCard.card);
 
+    // —— ST-AC 访问方式卡（Web 化）：本机/局域网入口 + 扫码 + 口令状态 ——
+    var accessCard = P.buildCard("ST-AC", t("set.card.access"), "g-12", t("set.card.accessSub"));
+    accessCard.body.id = "set-access-body";
+    grid.appendChild(accessCard.card);
+
     // —— S-05 关于卡：版本/许可证/数据源数 + 日志导出 + 恢复出厂 ——
     var aboutCard = P.buildCard("ST-AB", t("set.card.about"), "g-12", t("set.card.aboutSub"));
     aboutCard.body.id = "set-about-body";
@@ -540,6 +545,7 @@
     paintSettingsCompliance();
     paintSettingsYjb();
     paintSettingsClose();
+    paintSettingsAccess();
   }
 
   /** 渲染「启动与关闭」卡（R6-12 / F6-14）。
@@ -605,6 +611,99 @@
       body.setAttribute("data-state", "default");
     }).catch(function (error) {
       P.setError(body, error.message || t("state.errorHint"), paintSettingsClose);
+    });
+  }
+
+  /** 复制文本到剪贴板（优先 Clipboard API，回退 execCommand）。
+   *
+   * @param {string} text 待复制内容。
+   * @returns {Promise<boolean>} 复制成功 true；失败 false（界面据此给真实反馈）。
+   */
+  function copyAccessUrl(text) {
+    return new Promise(function (resolve) {
+      var fallback = function () {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.left = "-9999px";
+        document.body.appendChild(area);
+        area.select();
+        var done = false;
+        try {
+          done = document.execCommand("copy");
+        } catch (error) {
+          done = false;
+        }
+        document.body.removeChild(area);
+        resolve(done);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { resolve(true); }, fallback);
+        return;
+      }
+      fallback();
+    });
+  }
+
+  /** 渲染「访问方式」卡（Web 化）：本机与局域网入口、扫码、口令状态。
+   *
+   * 局域网入口只在服务以 --lan（或 OPENBB_HOST=0.0.0.0）启动时出现；
+   * 二维码内容即访问 URL，手机扫码进入的是同一应用、同一份本地数据。
+   *
+   * @returns {void} 无返回值（异步渲染）
+   */
+  function paintSettingsAccess() {
+    var body = document.getElementById("set-access-body");
+    if (!body) {
+      return;
+    }
+    P.setLoading(body);
+    api("/api/system/access", {}).then(function (data) {
+      body.innerHTML = "";
+      var list = el("div", "set-access-list");
+      (data.points || []).forEach(function (point) {
+        var row = el("div", "set-access-row");
+        var meta = el("div", "set-access-meta");
+        var labelKey = point.scope === "lan" ? "set.access.lan"
+          : (point.scope === "public" ? "set.access.public" : "set.access.local");
+        var publicReady = data.public && data.public.ready;
+        if (point.scope === "public") {
+          labelKey = publicReady ? "set.access.publicReady" : "set.access.publicPending";
+        }
+        meta.appendChild(el("span", "set-access-label", t(labelKey)));
+        meta.appendChild(el("span", "set-access-url", point.url));
+        var copy = el("button", "pg-btn", t("set.access.copy"));
+        copy.type = "button";
+        copy.addEventListener("click", function () {
+          copyAccessUrl(point.url).then(function (success) {
+            toast(success ? t("set.access.copied") : t("set.access.fail"));
+          });
+        });
+        meta.appendChild(copy);
+        row.appendChild(meta);
+        if (point.qr) {
+          var img = document.createElement("img");
+          img.className = "set-access-qr";
+          img.alt = point.url;
+          img.src = point.qr;
+          row.appendChild(img);
+        }
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+      body.appendChild(el("div", "set-access-note", t("set.access.scanHint")));
+      if (!data.lan_visible) {
+        body.appendChild(el("div", "set-access-note", t("set.access.onlyLocal")));
+      }
+      body.appendChild(el("div", "set-access-note",
+        data.password_required ? t("set.access.passwordOn") : t("set.access.passwordOff")));
+      var refreshBtn = el("button", "pg-btn", t("set.access.refresh"));
+      refreshBtn.type = "button";
+      refreshBtn.addEventListener("click", function () { paintSettingsAccess(); });
+      body.appendChild(refreshBtn);
+      body.setAttribute("data-state", "default");
+    }).catch(function (error) {
+      P.setError(body, error.message || t("set.access.fail"), paintSettingsAccess);
     });
   }
 

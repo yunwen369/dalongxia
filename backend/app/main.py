@@ -22,7 +22,7 @@ import time
 import webbrowser
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 # 以脚本方式运行时，把 openbb-cn 根目录加入 sys.path，保证 backend 包可导入
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -408,8 +408,8 @@ def _run_frozen_check() -> int:
     code = 0
     if not ok:
         code = 2
-    elif _port_in_use(config.HOST, config.PORT):
-        if desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=3):
+    elif _port_in_use("127.0.0.1", config.PORT):
+        if desktop_shell.wait_for_server(f"{config.LOCAL_URL}/api/health", timeout=3):
             lines.append(f"端口 {config.PORT}：本应用已在运行，双击图标会复用该实例")
         else:
             lines.append(f"端口 {config.PORT}：被其他进程占用，启动将提示冲突")
@@ -440,12 +440,13 @@ def _run_frozen() -> None:
     from backend.app.core import desktop_shell
 
     desktop_shell.redirect_stdio(config.LOG_DIR)
+    _apply_lan_host()  # 允许「桌面窗口 + 局域网」组合（--desktop --lan）
     logger.info("冻结模式启动 %s %s（%s）", config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)
 
-    if _port_in_use(config.HOST, config.PORT):
+    if _port_in_use("127.0.0.1", config.PORT):
         # 端口已被本应用占用（用户重复双击图标）：直接复用，不再起第二个服务
-        if desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=3):
-            if not desktop_shell.open_window(config.BASE_URL, config.APP_NAME,
+        if desktop_shell.wait_for_server(f"{config.LOCAL_URL}/api/health", timeout=3):
+            if not desktop_shell.open_window(config.LOCAL_URL, config.APP_NAME,
                                              desktop_shell.resolve_icon(config.PROJECT_DIR)):
                 raise SystemExit(2)
             return
@@ -463,18 +464,156 @@ def _run_frozen() -> None:
             logger.exception("本地服务异常退出：%s", exc)
 
     threading.Thread(target=_serve, name="uvicorn", daemon=True).start()
-    if not desktop_shell.wait_for_server(f"{config.BASE_URL}/api/health", timeout=60):
+    if not desktop_shell.wait_for_server(f"{config.LOCAL_URL}/api/health", timeout=60):
         desktop_shell.show_error(
             "本地服务启动超时（60 秒），窗口无法打开。\n\n"
             f"请查看日志：{config.LOG_DIR / 'app.log'}\n"
             "常见原因：端口 6900 被占用、防火墙拦截、安装目录无写权限。"
         )
         raise SystemExit(3)
-    logger.info("本地服务就绪：%s", config.BASE_URL)
-    if not desktop_shell.open_window(config.BASE_URL, config.APP_NAME,
+    logger.info("本地服务就绪：%s", config.LOCAL_URL)
+    if not desktop_shell.open_window(config.LOCAL_URL, config.APP_NAME,
                                      desktop_shell.resolve_icon(config.PROJECT_DIR)):
         raise SystemExit(2)
     logger.info("窗口已关闭，进程退出")
+
+
+def _lan_requested() -> bool:
+    """是否需要放开局域网监听。
+
+    判定顺序：命令行 ``--lan`` 优先；否则看 ``OPENBB_HOST`` 是否已指向非回环地址
+    （远程部署文档里的 0.0.0.0 写法自动生效，无需再加参数）。
+
+    Returns:
+        bool: True 表示允许同网段设备访问。
+    """
+    if "--lan" in sys.argv:
+        return True
+    return config.HOST not in ("127.0.0.1", "localhost", "::1")
+
+
+def _apply_lan_host() -> None:
+    """按需把监听地址切到全网卡（0.0.0.0）。
+
+    只改 ``config.HOST``（uvicorn 监听用），``config.LOCAL_URL`` 恒为回环地址，
+    因此"对外可访问"与"本机浏览器打开哪个地址"互不干扰。
+    """
+    if _lan_requested() and config.HOST in ("127.0.0.1", "localhost", "::1"):
+        config.HOST = "0.0.0.0"
+        logger.info("已放开局域网监听：0.0.0.0:%s（同网段设备可访问）", config.PORT)
+
+
+def _maybe_open_tunnel(points: List[dict]) -> Optional[object]:
+    """按需建立公网隧道，并把公网地址加入入口清单。
+
+    安全红线：未设置 ``OPENBB_ACCESS_PASSWORD`` 时**拒绝**建立隧道 —— 未鉴权的
+    公网地址等于把持仓与本地数据公开。口令校验由访问口令中间件执行。
+
+    Args:
+        points: 访问入口清单，命中时原地追加 ``scope=public`` 的一项。
+
+    Returns:
+        Optional[object]: 隧道句柄；未启用、失败或无需隧道时返回 None。
+
+    Raises:
+        SystemExit: 未设置访问口令时中止启动（退出码 4），避免无鉴权暴露到公网。
+    """
+    if "--public" not in sys.argv and os.environ.get("OPENBB_PUBLIC") != "1":
+        return None
+    from backend.app.core import desktop_shell, public_tunnel
+
+    if not os.environ.get("OPENBB_ACCESS_PASSWORD", "").strip():
+        desktop_shell.show_error(
+            "公网访问必须先设置访问口令，已中止启动。\n\n"
+            "设置方法（用户级环境变量，新开窗口生效）：\n"
+            "  setx OPENBB_ACCESS_PASSWORD 你的口令\n\n"
+            "未设口令就暴露到公网，任何人拿到网址都能查看你的持仓与数据。"
+        )
+        raise SystemExit(4)
+    logger.info("正在建立公网隧道（首次运行会自动下载组件，约 60 MB）…")
+    handle = public_tunnel.start(config.PORT)
+    if handle.url:
+        points.append({
+            "scope": "public",
+            "label": "公网（临时地址，重启会变）",
+            "url": handle.url,
+        })
+        logger.info("公网地址：%s", handle.url)
+    else:
+        logger.error("公网隧道建立失败：%s", handle.error)
+        desktop_shell.show_error(
+            "公网隧道建立失败，本机与局域网访问不受影响。\n\n"
+            f"原因：{handle.error}\n"
+            "可稍后重试；若多次失败，请检查网络与安全软件是否拦截 cloudflared。"
+        )
+    return handle
+
+
+def _run_frozen_web() -> None:
+    """冻结形态「浏览器模式」：起服务 → 打开默认浏览器 → 托盘常驻。
+
+    与 :func:`_run_frozen`（内嵌 pywebview 窗口）的区别：界面交给系统默认浏览器，
+    本进程只承担服务端与托盘；关闭浏览器标签不影响服务，退出统一走托盘「退出」，
+    下次双击图标会复用已运行的实例并直接补开一个标签页。
+
+    Raises:
+        SystemExit: 端口被非本应用占用（2）或服务启动超时（3）时退出。
+    """
+    import uvicorn
+
+    from backend.app.core import desktop_shell, web_access
+
+    desktop_shell.redirect_stdio(config.LOG_DIR)
+    logger.info("浏览器模式启动 %s %s（%s）",
+                config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)
+    _apply_lan_host()
+
+    if _port_in_use("127.0.0.1", config.PORT):
+        # 已有实例在跑（用户重复双击图标）：只补开一个标签页，不重复起服务
+        if desktop_shell.wait_for_server(f"{config.LOCAL_URL}/api/health", timeout=3):
+            logger.info("检测到本应用已在运行，直接打开浏览器：%s", config.LOCAL_URL)
+            web_access.open_browser(config.LOCAL_URL)
+            return
+        message = _port_error_message(config.PORT, _find_port_owner(config.PORT))
+        logger.error("端口占用，启动中止：%s", message.replace("\n", " | "))
+        desktop_shell.show_error(message)
+        raise SystemExit(2)
+
+    def _serve() -> None:
+        """后台线程：单进程运行 uvicorn（log_config=None 避免读外部配置文件）。"""
+        try:
+            uvicorn.run(app, host=config.HOST, port=config.PORT,
+                        log_level="warning", log_config=None)
+        except Exception as exc:  # noqa: BLE001 - 线程内异常需落日志
+            logger.exception("本地服务异常退出：%s", exc)
+
+    threading.Thread(target=_serve, name="uvicorn", daemon=True).start()
+    if not desktop_shell.wait_for_server(f"{config.LOCAL_URL}/api/health", timeout=60):
+        desktop_shell.show_error(
+            "本地服务启动超时（60 秒），浏览器无法打开界面。\n\n"
+            f"请查看日志：{config.LOG_DIR / 'app.log'}\n"
+            "常见原因：端口 6900 被占用、防火墙拦截、安装目录无写权限。"
+        )
+        raise SystemExit(3)
+
+    points = web_access.access_points(config.PORT, _lan_requested())
+    tunnel_handle = _maybe_open_tunnel(points)
+    for point in points:
+        logger.info("访问入口[%s]：%s", point["label"], point["url"])
+    web_access.open_browser(config.LOCAL_URL)
+    logger.info("已在默认浏览器打开：%s", config.LOCAL_URL)
+    web_access.run_tray(
+        open_url=config.LOCAL_URL,
+        points=points,
+        data_dir=config.DATA_DIR,
+        icon_path=desktop_shell.resolve_icon(config.PROJECT_DIR),
+        on_quit=lambda: logger.info("用户从托盘退出，服务停止"),
+    )
+    if tunnel_handle is not None:
+        from backend.app.core import public_tunnel
+
+        public_tunnel.stop(tunnel_handle)
+    logger.info("浏览器模式退出")
 
 
 def _run_frozen_serve_only() -> None:
@@ -493,9 +632,11 @@ def _run_frozen_serve_only() -> None:
     from backend.app.core import desktop_shell
 
     desktop_shell.redirect_stdio(config.LOG_DIR)
-    logger.info("冻结模式（仅服务）启动 %s %s（%s）端口 %s",
-                config.APP_NAME, config.APP_VERSION, config.BUILD_TAG, config.PORT)
-    if _port_in_use(config.HOST, config.PORT):
+    _apply_lan_host()  # --lan / OPENBB_HOST 在仅服务模式下同样生效（门禁与远程访问依赖）
+    logger.info("冻结模式（仅服务）启动 %s %s（%s）端口 %s 监听 %s",
+                config.APP_NAME, config.APP_VERSION, config.BUILD_TAG,
+                config.PORT, config.HOST)
+    if _port_in_use("127.0.0.1", config.PORT):
         message = _port_error_message(config.PORT, _find_port_owner(config.PORT))
         logger.error("端口占用，仅服务模式中止：%s", message.replace("\n", " | "))
         raise SystemExit(2)
@@ -566,7 +707,12 @@ def main() -> None:
         if "--serve-only" in sys.argv or "--serve" in sys.argv:
             # 发版门禁 / 远程服务模式：无窗口跑打包产物，供自动化实测接口或 Tailscale 远程访问
             raise SystemExit(_run_frozen_serve_only())
-        _run_frozen()
+        if "--desktop" in sys.argv:
+            # 内嵌窗口形态（原行为）：独立窗口、关窗即退，供不习惯浏览器标签的场景
+            _run_frozen()
+            return
+        # 默认形态：浏览器模式（打开默认浏览器 + 托盘常驻）
+        _run_frozen_web()
         return
 
     import uvicorn
@@ -575,17 +721,24 @@ def main() -> None:
 
     # 源码模式 --serve：无头服务（不开浏览器），供远程访问调试
     serve_only = "--serve-only" in sys.argv or "--serve" in sys.argv
+    _apply_lan_host()
+    from backend.app.core import web_access  # noqa: PLC0415 - 仅源码模式需要
 
     # 中文启动横幅由 Python 输出，避免 .bat 文件的中文编码问题
     print("=" * 60, flush=True)
     print(f"  {config.APP_NAME} · {'服务模式' if serve_only else '开发模式'}", flush=True)
-    print(f"  服务地址: {config.BASE_URL}", flush=True)
-    print(f"  接口文档: {config.BASE_URL}/docs", flush=True)
+    print(f"  本机地址: {config.LOCAL_URL}", flush=True)
+    print(f"  接口文档: {config.LOCAL_URL}/docs", flush=True)
+    if _lan_requested():
+        for point in web_access.access_points(config.PORT, True):
+            if point["scope"] == "lan":
+                print(f"  {point['label']}: {point['url']}", flush=True)
+        print("  手机访问: 打开上面的局域网地址，或在前端「访问方式」扫码", flush=True)
     if not serve_only:
         print("  停止服务: Ctrl+C", flush=True)
     print("=" * 60, flush=True)
 
-    if _port_in_use(config.HOST, config.PORT):
+    if _port_in_use("127.0.0.1", config.PORT):
         pids = _find_port_owner(config.PORT)
         message = _port_error_message(config.PORT, pids)
         logger.error("端口占用，启动中止：%s", message.replace("\n", " | "))
@@ -594,7 +747,7 @@ def main() -> None:
 
     # 开发模式自动打开浏览器；服务模式 / OPENBB_NO_BROWSER=1 不打开
     if not serve_only and os.environ.get("OPENBB_NO_BROWSER") != "1":
-        threading.Timer(2.5, lambda: webbrowser.open(f"{config.BASE_URL}/")).start()
+        threading.Timer(2.5, lambda: webbrowser.open(f"{config.LOCAL_URL}/")).start()
 
     # ── 后台预热拥挤度排行缓存（缓解 P1-1：首次 44s+ 冷启动）─────────
     # 排行首次计算需扫描 90 个行业（同花顺 V8 串行），超过规范 15s 单接口预期。
