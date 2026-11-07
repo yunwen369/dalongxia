@@ -540,20 +540,69 @@
     card.body.setAttribute("data-state", "empty");
   }
 
-  /** 公告正文：分页拼接，>6000 字截断标注（AN-01 口径）。 */
+  /** 公告正文：分页拼接，>6000 字截断标注（AN-01 口径）；R14 追加中文摘要按钮。 */
   function openAnnDetail(card, item) {
     var code = item.code || item.symbol || "";
+    var market = item.market || "a";
+    var title = item.title || "";
+    var pubTime = (item.pubTime || item.date || "").slice(0, 10);
+    var docUrl = item.docUrl || "";
     api(
       "/api/news/financial-detail?code=" + encodeURIComponent(code) +
-      "&market=" + encodeURIComponent(item.market || "a") +
-      "&title=" + encodeURIComponent(item.title || "") +
-      "&date=" + encodeURIComponent((item.date || "").slice(0, 10))
+      "&market=" + encodeURIComponent(market) +
+      "&title=" + encodeURIComponent(title) +
+      "&date=" + encodeURIComponent(pubTime)
     )
       .then(function (body) {
         var data = unwrap(body);
         var panel = el("div", "p1-detail");
-        var title = el("h4", "p1-detail-title", data.title || item.title || "");
+        var title = el("h4", "p1-detail-title", data.title || title || "");
         panel.appendChild(title);
+
+        // R14：中文摘要按钮（未配置时点击后端返回 NOT_CONFIGURED，前端给引导）
+        var summaryBar = el("div", "p1-detail-summary-bar");
+        var summaryBtn = el("button", "pg-btn pg-btn-sm", "AI 中文摘要");
+        summaryBtn.type = "button";
+        var summaryBox = el("div", "p1-detail-summary-box");
+        summaryBtn.addEventListener("click", function () {
+          if (summaryBtn.getAttribute("data-loading") === "1") return;
+          summaryBtn.setAttribute("data-loading", "1");
+          summaryBtn.textContent = "生成中…";
+          summaryBox.innerHTML = "";
+          fetch("/api/ai/summary", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              market: market, code: code, title: title,
+              pub_time: pubTime, doc_url: docUrl, force: false,
+            }),
+          })
+            .then(function (resp) { return resp.json(); })
+            .then(function (sb) {
+              if (sb && sb.error) {
+                throw new Error(sb.error);
+              }
+              var sd = (sb && sb.data) || {};
+              summaryBtn.textContent = "重新生成摘要";
+              summaryBtn.removeAttribute("data-loading");
+              renderSummary(summaryBox, sd);
+            })
+            .catch(function (err) {
+              summaryBtn.textContent = "AI 中文摘要";
+              summaryBtn.removeAttribute("data-loading");
+              var msg = (err && err.message) ? err.message : "摘要生成失败";
+              if (msg.indexOf("未配置") >= 0 || msg.indexOf("NOT_CONFIGURED") >= 0) {
+                summaryBox.appendChild(el("p", "pg-hint",
+                  "未配置 AI 模型：请到「设置 → AI 设置」填写 base_url / api_key / model 后再生成中文摘要。"));
+              } else {
+                summaryBox.appendChild(el("p", "pg-hint", msg));
+              }
+            });
+        });
+        summaryBar.appendChild(summaryBtn);
+        panel.appendChild(summaryBar);
+        panel.appendChild(summaryBox);
+
         var content = data.content || data.text || "";
         if (!content) {
           panel.appendChild(el("p", "pg-hint", "该公告未取到正文（部分公告仅有 PDF 原文，源站未提供结构化正文）。"));
@@ -580,6 +629,59 @@
       .catch(function (err) {
         P.toast(err.message || "正文加载失败");
       });
+  }
+
+  /** 渲染 R14 中文摘要（关键数据表 / 要点 / 风险 三段式）。 */
+  function renderSummary(box, sd) {
+    if (!sd) {
+      box.appendChild(el("p", "pg-hint", "摘要数据为空。"));
+      return;
+    }
+    if (sd.status === "no_content" || !sd.summary) {
+      box.appendChild(el("p", "pg-hint", sd.caliber || "正文未能获取，未生成摘要（不造数）。"));
+      return;
+    }
+    var s = sd.summary;
+    if (s.key_table && s.key_table.length) {
+      var h = el("h5", "p1-summary-h", "关键数据表");
+      box.appendChild(h);
+      var tbl = el("table", "pg-table p1-summary-table");
+      var trh = el("tr");
+      ["指标", "数值", "同比"].forEach(function (x) { trh.appendChild(el("th", "", x)); });
+      tbl.appendChild(trh);
+      s.key_table.forEach(function (row) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "", row.metric || ""));
+        tr.appendChild(el("td", "", row.value || ""));
+        tr.appendChild(el("td", "", row.yoy || ""));
+        tbl.appendChild(tr);
+      });
+      box.appendChild(tbl);
+    }
+    if (s.points && s.points.length) {
+      box.appendChild(el("h5", "p1-summary-h", "要点"));
+      var ul = el("ul", "p1-summary-list");
+      s.points.forEach(function (p) {
+        var li = el("li");
+        li.textContent = p;
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    }
+    if (s.risks && s.risks.length) {
+      box.appendChild(el("h5", "p1-summary-h", "风险 / 不确定事项"));
+      var ur = el("ul", "p1-summary-list");
+      s.risks.forEach(function (p) {
+        var li = el("li");
+        li.textContent = p;
+        ur.appendChild(li);
+      });
+      box.appendChild(ur);
+    }
+    var meta = el("p", "pg-hint");
+    meta.textContent = (sd.caliber || "") + (sd.model ? "（模型：" + sd.model + "）" : "") +
+      (sd.cached ? "（缓存命中）" : "");
+    box.appendChild(meta);
   }
 
   // =============================================================

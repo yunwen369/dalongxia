@@ -1551,6 +1551,7 @@ def _detail_payload(content: str, *, source: str, verified: bool, caliber: str) 
         note += f"；超长正文节选前 {_DETAIL_MAX_CHARS} 字，完整内容请打开原文"
     return {
         "content": content[:_DETAIL_MAX_CHARS],
+        "content_chars": len(content),
         "source": source,
         "verified": verified,
         "truncated": truncated,

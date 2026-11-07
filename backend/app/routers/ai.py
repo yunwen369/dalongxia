@@ -18,19 +18,28 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import requests
 from fastapi import APIRouter, Body
 
 from backend.app import config
 from backend.app.core import atomic, netfix
-from backend.app.core.errors import ErrorCode, api_error, ok
+from backend.app.core.errors import ErrorCode, api_error, bad_request, ok
 from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
+
+# 与 /api/news/financial-detail 同一白名单（doc_url 安全约束，防 SSRF）。
+_DOC_URL_ALLOWED_PREFIXES: Tuple[str, ...] = (
+    "https://np-anotice-stock.eastmoney.com/",
+    "https://data.eastmoney.com/notices/detail/",
+    "https://static.cninfo.com.cn/",
+    "https://www1.hkexnews.hk/",
+    "https://www.sec.gov/Archives/",
+)
 
 
 def _now() -> str:
@@ -408,5 +417,83 @@ def ai_translate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "source": "用户配置 AI（OpenAI 兼容）",
         "as_of": _now(),
         "market_status": "机翻快照",
+        "is_realtime": False,
+    })
+
+
+@router.post("/summary")
+def ai_summary(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """财报 / 公告中文摘要（R14 · N3 契约）。
+
+    Body:
+        {market, code, title, pub_time?, doc_url?, force?}
+        market: a / hk / us；title 与 code 至少一项；doc_url 需在白名单内。
+
+    Returns:
+        dict: 统一信封；data 含 summary（key_table/points/risks 三段式）、
+        source_text_chars、truncated、cached、model、caliber、as_of。
+        正文不可得时返回成功信封 + status=no_content + summary=None（空/错分离）。
+
+    Notes:
+        未配置 AI → NOT_CONFIGURED（界面按钮禁用+引导，不静默降级）；
+        doc_url 仅接受巨潮/东财/HKEX/SEC 已知域名前缀，防 SSRF；
+        摘要失败=UPSTREAM_ERROR（不得以原文冒充摘要）。
+    """
+    from backend.app.core.errors import NonRetryableError
+    from backend.app.datasource import ai_summary as summary_provider
+
+    market = str(payload.get("market") or "a").strip().lower()
+    if market not in ("a", "hk", "us"):
+        return bad_request("market 仅支持 a / hk / us")
+    code = str(payload.get("code") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    if not code and not title:
+        return bad_request("缺少公告标识：code 与 title 至少一项")
+    pub_time = str(payload.get("pub_time") or "").strip()
+    doc_url = str(payload.get("doc_url") or "").strip()
+    force = bool(payload.get("force"))
+    if doc_url and not any(doc_url.startswith(p) for p in _DOC_URL_ALLOWED_PREFIXES):
+        return bad_request(
+            "doc_url 来源不在支持的公告源（巨潮资讯/东方财富/HKEX/SEC）内，已拒绝处理。"
+        )
+
+    if not summary_provider.is_configured():
+        return api_error(
+            ErrorCode.NOT_CONFIGURED,
+            "未配置 AI 模型，无法生成中文摘要。请到「设置 → AI 设置」填写 base_url / api_key / model 后重试。",
+            data={"configured": False},
+        )
+
+    try:
+        result = summary_provider.summarize(
+            market=market, code=code, title=title,
+            pub_time=pub_time, doc_url=doc_url, force=force,
+        )
+    except NonRetryableError as exc:
+        msg = str(exc)
+        if msg == "NOT_CONFIGURED":
+            return api_error(
+                ErrorCode.NOT_CONFIGURED,
+                "未配置 AI 模型，无法生成中文摘要。请到「设置 → AI 设置」填写后重试。",
+                data={"configured": False},
+            )
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            msg,
+            data={"configured": True},
+        )
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转中文错误态
+        logger.warning("AI 摘要生成失败：%s", type(exc).__name__)
+        return api_error(
+            ErrorCode.UPSTREAM_ERROR,
+            f"摘要服务调用失败（{type(exc).__name__}），请稍后重试。",
+            data={"configured": True},
+        )
+
+    return ok({
+        **result,
+        "source": "用户配置 AI + 公告原文",
+        "as_of": _now(),
+        "market_status": "AI 摘要",
         "is_realtime": False,
     })

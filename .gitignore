@@ -67,6 +67,8 @@ data/board_cons.json
 data/portfolio_snapshots/
 # 第十轮 R11/C11：概念排行每日抽检日志（本地取证数据，随交易日累积，不入库）
 data/concept_spotcheck.jsonl
+# 第十轮 P4 R14：财报中文摘要落库（用户配置的 AI 生成，本地产物不入库）
+data/summaries/
 # RT-01 脱敏审计痕迹：属用户本机安全记录（谁在何时做过解绑/清盐），不得随源码分发
 data/audit/
 data/*.db
