@@ -68,7 +68,9 @@
     ann: "page-ann",
     mgr: "page-mgr",
     tools: "page-tools",
-    cand: "page-cand"
+    cand: "page-cand",
+    backtest: "page-backtest",
+    dca: "page-dca"
   };
 
   // 图表实例登记表：路由切换时统一 dispose，窗口 resize 时统一 resize
@@ -553,6 +555,10 @@
       P.renderManager(parsed.params);
     } else if (name === "tools") {
       P.renderTools(parsed.params);
+    } else if (name === "backtest") {
+      P.renderBacktest(parsed.params);
+    } else if (name === "dca") {
+      P.renderDca(parsed.params);
     } else if (name === "cand") {
       P.renderCandidates(parsed.params);
     }

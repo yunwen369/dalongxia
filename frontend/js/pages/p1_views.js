@@ -815,7 +815,9 @@
       ["估值分位", "指数/行业/全A 分位", "#/valuation"],
       ["板块拥挤度", "六维分解 · 全板块排行", "#/crowding"],
       ["图表分析", "K线六副图 · 分时", "#/charting"],
-      ["候选池", "入池来源 · 偏离价", "#/cand"]
+      ["候选池", "入池来源 · 偏离价", "#/cand"],
+      ["组合回测", "多基金权重 · 净值曲线 · 回撤夏普", "#/backtest"],
+      ["定投计算器", "定期定额 · IRR · 收益模拟", "#/dca"]
     ];
     var grid = el("div", "tl-grid");
     entries.forEach(function (row) {
@@ -829,7 +831,7 @@
       grid.appendChild(cell);
     });
     card.body.appendChild(grid);
-    var note = el("p", "pg-hint", "按功能整合规范（§7.11），工具页只做入口，不复制各页渲染实现；组合回测与定投计算器随 P4 上线后加入本页。");
+    var note = el("p", "pg-hint", "按功能整合规范（§7.11），工具页只做入口，不复制各页渲染实现；组合回测与定投计算器（P4）已上线，基于现有 /api/fund/nav 净值序列纯前端计算。");
     card.body.appendChild(note);
     card.body.setAttribute("data-state", "default");
   }
@@ -888,6 +890,269 @@
       });
   }
 
+  // =============================================================
+  // 八、组合回测（P4 · 纯前端 + /api/fund/nav）
+  // =============================================================
+  function renderBacktest() {
+    var node = host("backtest");
+    if (!node) return;
+    var card = buildCard("bt-main", "组合回测", "pg-col-12", "/api/fund/nav 净值序列 · 前端计算");
+    node.appendChild(card.card);
+
+    // 输入区
+    var form = el("div", "bt-form");
+    form.innerHTML =
+      '<div class="bt-row"><label>基金代码（逗号分隔，如 017811,025500）</label>' +
+      '<input id="bt-codes" type="text" value="017811,025500" placeholder="6位代码，逗号分隔"></div>' +
+      '<div class="bt-row"><label>权重（逗号分隔，和=1；留空则等权）</label>' +
+      '<input id="bt-weights" type="text" value="" placeholder="如 0.6,0.4"></div>' +
+      '<div class="bt-row"><label>起始日期</label><input id="bt-start" type="date" value="">' +
+      '<label>结束日期</label><input id="bt-end" type="date" value=""></div>' +
+      '<div class="bt-row"><button id="bt-run" class="pg-btn">开始回测</button></div>';
+    card.body.appendChild(form);
+    var resultBox = el("div", "bt-result");
+    card.body.appendChild(resultBox);
+
+    card.body.querySelector("#bt-run").addEventListener("click", function () {
+      var codes = (card.body.querySelector("#bt-codes").value || "").split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean);
+      var weightsRaw = (card.body.querySelector("#bt-weights").value || "").split(/[,，]/).map(function (s) { return parseFloat(s); });
+      var start = card.body.querySelector("#bt-start").value;
+      var end = card.body.querySelector("#bt-end").value;
+      if (!codes.length) { P.toast("请输入至少一个基金代码"); return; }
+      resultBox.innerHTML = "";
+      setLoading(resultBox);
+      runBacktest(codes, weightsRaw, start, end, resultBox);
+    });
+    card.body.setAttribute("data-state", "default");
+  }
+
+  function runBacktest(codes, weightsRaw, start, end, box) {
+    // 权重归一
+    var weights;
+    if (weightsRaw.length === codes.length && weightsRaw.every(function (w) { return w > 0; })) {
+      var sum = weightsRaw.reduce(function (a, b) { return a + b; }, 0);
+      weights = weightsRaw.map(function (w) { return w / sum; });
+    } else {
+      weights = codes.map(function () { return 1 / codes.length; });
+    }
+    // 拉每只基金净值（取 500 条，覆盖约 2 年）
+    Promise.all(codes.map(function (code) {
+      return api("/api/fund/nav", { code: code, page: 1, size: 500 }).then(function (body) {
+        var d = unwrap(body);
+        var items = (d.items || []).slice().reverse(); // 按日期升序
+        return { code: code, items: items };
+      });
+    })).then(function (all) {
+      box.innerHTML = "";
+      // 按日期对齐，取交集
+      var dateMap = {};
+      all.forEach(function (f, fi) {
+        f.items.forEach(function (it) {
+          if (!dateMap[it.date]) dateMap[it.date] = {};
+          dateMap[it.date][fi] = it.nav;
+        });
+      });
+      var dates = Object.keys(dateMap).sort();
+      // 日期过滤
+      if (start) dates = dates.filter(function (d) { return d >= start; });
+      if (end) dates = dates.filter(function (d) { return d <= end; });
+      if (dates.length < 2) {
+        setEmpty(box, "净值数据不足（需至少 2 个交易日），请检查代码或日期范围");
+        return;
+      }
+      // 计算组合净值曲线
+      var firstNav = {};
+      all.forEach(function (f, fi) { firstNav[fi] = dateMap[dates[0]][fi]; });
+      var curve = [];
+      dates.forEach(function (d) {
+        var row = dateMap[d];
+        var val = 0;
+        for (var fi = 0; fi < all.length; fi++) {
+          if (row[fi] != null && firstNav[fi] != null && firstNav[fi] > 0) {
+            val += weights[fi] * (row[fi] / firstNav[fi]);
+          }
+        }
+        curve.push({ date: d, value: val });
+      });
+      // 指标
+      var totalRet = (curve[curve.length - 1].value - 1) * 100;
+      var years = (curve.length - 1) / 252;
+      var annualRet = years > 0 ? (Math.pow(curve[curve.length - 1].value, 1 / years) - 1) * 100 : 0;
+      // 最大回撤
+      var peak = curve[0].value, maxDD = 0;
+      curve.forEach(function (p) {
+        if (p.value > peak) peak = p.value;
+        var dd = (peak - p.value) / peak * 100;
+        if (dd > maxDD) maxDD = dd;
+      });
+      // 年化波动 & 夏普（无风险利率取 2%）
+      var dailyRets = [];
+      for (var i = 1; i < curve.length; i++) {
+        dailyRets.push((curve[i].value - curve[i - 1].value) / curve[i - 1].value);
+      }
+      var mean = dailyRets.reduce(function (a, b) { return a + b; }, 0) / dailyRets.length;
+      var variance = dailyRets.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / dailyRets.length;
+      var vol = Math.sqrt(variance) * Math.sqrt(252) * 100;
+      var sharpe = vol > 0 ? (annualRet - 2) / vol : 0;
+
+      // 渲染指标卡
+      var metrics = el("div", "bt-metrics");
+      var mData = [
+        ["总收益率", totalRet.toFixed(2) + "%"],
+        ["年化收益率", annualRet.toFixed(2) + "%"],
+        ["最大回撤", "-" + maxDD.toFixed(2) + "%"],
+        ["年化波动率", vol.toFixed(2) + "%"],
+        ["夏普比率", sharpe.toFixed(2)],
+        ["回测天数", curve.length + " 个交易日"],
+      ];
+      mData.forEach(function (m) {
+        var cell = el("div", "bt-metric");
+        cell.appendChild(el("div", "bt-metric-v", m[1]));
+        cell.appendChild(el("div", "bt-metric-l", m[0]));
+        metrics.appendChild(cell);
+      });
+      box.appendChild(metrics);
+
+      // 权重表
+      var wtbl = el("table", "pg-table");
+      var wh = el("tr");
+      ["基金代码", "权重"].forEach(function (t) { wh.appendChild(el("th", "", t)); });
+      wtbl.appendChild(wh);
+      codes.forEach(function (c, i) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "", c));
+        tr.appendChild(el("td", "", (weights[i] * 100).toFixed(1) + "%"));
+        wtbl.appendChild(tr);
+      });
+      box.appendChild(wtbl);
+
+      // 净值曲线（纯文本 sparkline 占位，避免引入图表库）
+      var spark = el("div", "bt-spark");
+      var minV = Math.min.apply(null, curve.map(function (p) { return p.value; }));
+      var maxV = Math.max.apply(null, curve.map(function (p) { return p.value; }));
+      var range = maxV - minV || 1;
+      var w = 600, h = 120;
+      var pts = curve.map(function (p, i) {
+        var x = (i / (curve.length - 1)) * w;
+        var y = h - ((p.value - minV) / range) * (h - 20) - 10;
+        return x.toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+      spark.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '">' +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent,#4a90d9)" stroke-width="1.5"/></svg>';
+      box.appendChild(el("p", "pg-hint", "组合净值曲线（起点=1.0000）"));
+      box.appendChild(spark);
+      box.appendChild(el("p", "pg-hint", "口径：单位净值复权曲线；权重按日再平衡假设；年化收益按 252 交易日折算；夏普无风险利率取 2%。数据来源=蛋卷/东财净值序列（/api/fund/nav）。"));
+    }).catch(function (err) {
+      setError(box, err.message || "回测失败", null);
+    });
+  }
+
+  // =============================================================
+  // 九、定投计算器（P4 · 纯前端 + /api/fund/nav）
+  // =============================================================
+  function renderDca() {
+    var node = host("dca");
+    if (!node) return;
+    var card = buildCard("dca-main", "定投计算器", "pg-col-12", "/api/fund/nav 净值序列 · 前端模拟定投");
+    node.appendChild(card.card);
+
+    var form = el("div", "dca-form");
+    form.innerHTML =
+      '<div class="dca-row"><label>基金代码</label>' +
+      '<input id="dca-code" type="text" value="017811" placeholder="6位基金代码"></div>' +
+      '<div class="dca-row"><label>每次定投金额（元）</label>' +
+      '<input id="dca-amount" type="number" value="1000" min="1"></div>' +
+      '<div class="dca-row"><label>定投频率</label>' +
+      '<select id="dca-freq"><option value="weekly">每周</option><option value="biweekly">每两周</option><option value="monthly" selected>每月</option></select></div>' +
+      '<div class="dca-row"><label>起始日期</label><input id="dca-start" type="date" value="">' +
+      '<label>结束日期</label><input id="dca-end" type="date" value=""></div>' +
+      '<div class="dca-row"><button id="dca-run" class="pg-btn">计算定投收益</button></div>';
+    card.body.appendChild(form);
+    var resultBox = el("div", "dca-result");
+    card.body.appendChild(resultBox);
+
+    card.body.querySelector("#dca-run").addEventListener("click", function () {
+      var code = (card.body.querySelector("#dca-code").value || "").trim();
+      var amount = parseFloat(card.body.querySelector("#dca-amount").value) || 0;
+      var freq = card.body.querySelector("#dca-freq").value;
+      var start = card.body.querySelector("#dca-start").value;
+      var end = card.body.querySelector("#dca-end").value;
+      if (!code || amount <= 0) { P.toast("请输入基金代码和定投金额"); return; }
+      resultBox.innerHTML = "";
+      setLoading(resultBox);
+      runDca(code, amount, freq, start, end, resultBox);
+    });
+    card.body.setAttribute("data-state", "default");
+  }
+
+  function runDca(code, amount, freq, start, end, box) {
+    api("/api/fund/nav", { code: code, page: 1, size: 500 }).then(function (body) {
+      var d = unwrap(body);
+      var items = (d.items || []).slice().reverse(); // 升序
+      if (!items.length) { setEmpty(box, "未获取到净值数据"); return; }
+      // 日期过滤
+      if (start) items = items.filter(function (it) { return it.date >= start; });
+      if (end) items = items.filter(function (it) { return it.date <= end; });
+      if (items.length < 2) { setEmpty(box, "净值数据不足"); return; }
+
+      // 定投日选择：按频率从起始日起取最近一个交易日
+      var days = { weekly: 7, biweekly: 14, monthly: 30 };
+      var interval = days[freq] || 30;
+      var investDates = [];
+      var cur = new Date(items[0].date);
+      var last = new Date(items[items.length - 1].date);
+      while (cur <= last) {
+        investDates.push(cur.toISOString().slice(0, 10));
+        cur.setDate(cur.getDate() + interval);
+      }
+      // 对齐到最近的交易日
+      var dateSet = {};
+      items.forEach(function (it) { dateSet[it.date] = it.nav; });
+      var navByDate = items.reduce(function (acc, it) { acc[it.date] = it.nav; return acc; }, {});
+      var tradeDates = items.map(function (it) { return it.date; }).sort();
+
+      var shares = 0, totalInvest = 0, investCount = 0;
+      investDates.forEach(function (id) {
+        // 找 >= id 的第一个交易日
+        var td = tradeDates.find(function (t) { return t >= id; });
+        if (td && navByDate[td] > 0) {
+          shares += amount / navByDate[td];
+          totalInvest += amount;
+          investCount++;
+        }
+      });
+      var finalNav = navByDate[tradeDates[tradeDates.length - 1]];
+      var marketValue = shares * finalNav;
+      var profit = marketValue - totalInvest;
+      var profitRate = totalInvest > 0 ? (profit / totalInvest) * 100 : 0;
+
+      // 简单 IRR（XIRR 近似：用年化收益率公式）
+      var years = (new Date(tradeDates[tradeDates.length - 1]) - new Date(tradeDates[0])) / (365.25 * 86400000);
+      var annualized = years > 0 && totalInvest > 0 ? (Math.pow(marketValue / totalInvest, 1 / years) - 1) * 100 : 0;
+
+      box.innerHTML = "";
+      var metrics = el("div", "bt-metrics");
+      var mData = [
+        ["定投次数", investCount + " 次"],
+        ["累计投入", totalInvest.toFixed(2) + " 元"],
+        ["期末市值", marketValue.toFixed(2) + " 元"],
+        ["累计收益", (profit >= 0 ? "+" : "") + profit.toFixed(2) + " 元"],
+        ["收益率", (profitRate >= 0 ? "+" : "") + profitRate.toFixed(2) + "%"],
+        ["年化收益", annualized.toFixed(2) + "%"],
+      ];
+      mData.forEach(function (m) {
+        var cell = el("div", "bt-metric");
+        cell.appendChild(el("div", "bt-metric-v", m[1]));
+        cell.appendChild(el("div", "bt-metric-l", m[0]));
+        metrics.appendChild(cell);
+      });
+      box.appendChild(metrics);
+      box.appendChild(el("p", "pg-hint", "口径：按选定频率定期定额买入，份额按当日单位净值计算；期末市值=累计份额×期末净值；年化收益按总投入时间折算（非严格 XIRR，定投现金流近似）。数据来源=蛋卷/东财净值序列（/api/fund/nav）。"));
+    }).catch(function (err) {
+      setError(box, err.message || "定投计算失败", null);
+    });
+  }
+
   // ---- 导出到 window.Pages ----
   P.renderToday = renderToday;
   P.renderMarketOverview = renderMarketOverview;
@@ -895,5 +1160,7 @@
   P.renderAnnLib = renderAnnLib;
   P.renderManager = renderManager;
   P.renderTools = renderTools;
+  P.renderBacktest = renderBacktest;
+  P.renderDca = renderDca;
   P.renderCandidates = renderCandidates;
 })(window.Pages = window.Pages || {});

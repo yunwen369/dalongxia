@@ -1028,7 +1028,8 @@ class TestFrontendViews:
         menu_views = set(re.findall(r'data-view="([\w-]+)"', index))
         # 第十轮 P1：19 页 IA 中「工具」为单页，screener/valuation/crowding/charting
         # 收敛为工具页内的五个入口卡（唯一实现仍在各自视图），故这 4 个视图由工具页承载。
-        tool_view_ids = {"screener", "valuation", "crowding", "charting"}
+        # P4：backtest/dca 同样在工具页入口卡内，不单独占侧栏菜单项。
+        tool_view_ids = {"screener", "valuation", "crowding", "charting", "backtest", "dca"}
         assert tool_view_ids <= view_ids, "工具子视图必须仍在 VIEW_IDS 内"
         assert view_ids <= menu_views | tool_view_ids, f"以下视图缺菜单入口：{sorted(view_ids - menu_views - tool_view_ids)}"
         assert menu_views <= view_ids | {"home"}, f"菜单出现未登记视图：{sorted(menu_views - view_ids - {'home'})}"
