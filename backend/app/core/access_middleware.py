@@ -7,7 +7,7 @@
 口径
 ----
 - 启用条件：环境变量 ``OPENBB_ACCESS_PASSWORD`` 非空（≥4 字符）。
-- 放行路径：``/`` 及静态资源（浏览器直访）、``/api/system/health``（健康探针）。
+- 放行路径：``/`` 及静态资源（浏览器直访）、``/api/health``（健康探针）。
 - 鉴权方式（二选一）：
   1. ``Authorization: Bearer <口令>``；
   2. Cookie ``access_token=<口令>``。
@@ -28,7 +28,7 @@ from starlette.responses import Response
 
 # 放行路径前缀（静态前端 + 健康探针）
 _ALLOWED_PREFIXES = (
-    "/api/system/health",
+    "/api/health",
     "/docs",
     "/openapi.json",
 )

@@ -204,7 +204,6 @@ def main() -> int:
 
     # ---- 生成 ----
     os.makedirs(OUTDIR, exist_ok=True)
-    header = lines[:HEADER_END]
     generated = []
     for name, rngs, desc in MODULES:
         body: list[str] = []

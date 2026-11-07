@@ -85,7 +85,7 @@ def test_health_endpoint_bypasses_auth():
     """健康探针路径在放行前缀内。"""
     from backend.app.core import access_middleware as mod
 
-    assert any("/api/system/health".startswith(p) for p in mod._ALLOWED_PREFIXES)
+    assert any("/api/health".startswith(p) for p in mod._ALLOWED_PREFIXES)
 
 
 def test_middleware_passthrough_when_disabled(monkeypatch, _reset_fails):
@@ -161,10 +161,10 @@ def test_health_endpoint_allowed_without_token(monkeypatch, _reset_fails):
     app = FastAPI()
     app.add_middleware(AccessPasswordMiddleware)
 
-    @app.get("/api/system/health")
+    @app.get("/api/health")
     def t():
         return {"ok": True}
 
     client = TestClient(app)
-    resp = client.get("/api/system/health")
+    resp = client.get("/api/health")
     assert resp.status_code == 200
