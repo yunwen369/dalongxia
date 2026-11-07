@@ -306,6 +306,11 @@ def create_app() -> FastAPI:
     application.add_exception_handler(RequestValidationError, _validation_exception_handler)
     application.add_exception_handler(Exception, _unhandled_exception_handler)
 
+    # P5 访问口令中间件：未配置 OPENBB_ACCESS_PASSWORD 时透传（本地单用户零打扰）
+    from backend.app.core.access_middleware import AccessPasswordMiddleware
+
+    application.add_middleware(AccessPasswordMiddleware)
+
     # API 必须先于根路径静态挂载注册，保证 /api/* 不被 StaticFiles 截获
     application.include_router(system.router)
     application.include_router(market.router)
@@ -558,8 +563,8 @@ def main() -> None:
     if config.IS_FROZEN:
         if "--check" in sys.argv:
             raise SystemExit(_run_frozen_check())
-        if "--serve-only" in sys.argv:
-            # 发版门禁专用：无窗口跑打包产物，供自动化实测接口
+        if "--serve-only" in sys.argv or "--serve" in sys.argv:
+            # 发版门禁 / 远程服务模式：无窗口跑打包产物，供自动化实测接口或 Tailscale 远程访问
             raise SystemExit(_run_frozen_serve_only())
         _run_frozen()
         return
@@ -568,12 +573,16 @@ def main() -> None:
 
     logger.info("启动 %s %s（%s）", config.APP_NAME, config.APP_VERSION, config.BUILD_TAG)
 
+    # 源码模式 --serve：无头服务（不开浏览器），供远程访问调试
+    serve_only = "--serve-only" in sys.argv or "--serve" in sys.argv
+
     # 中文启动横幅由 Python 输出，避免 .bat 文件的中文编码问题
     print("=" * 60, flush=True)
-    print(f"  {config.APP_NAME} · 开发模式", flush=True)
+    print(f"  {config.APP_NAME} · {'服务模式' if serve_only else '开发模式'}", flush=True)
     print(f"  服务地址: {config.BASE_URL}", flush=True)
     print(f"  接口文档: {config.BASE_URL}/docs", flush=True)
-    print("  停止服务: Ctrl+C", flush=True)
+    if not serve_only:
+        print("  停止服务: Ctrl+C", flush=True)
     print("=" * 60, flush=True)
 
     if _port_in_use(config.HOST, config.PORT):
@@ -583,8 +592,8 @@ def main() -> None:
         print(message, file=sys.stderr)
         raise SystemExit(2)
 
-    # 开发模式自动打开浏览器；自动化测试可用 OPENBB_NO_BROWSER=1 关闭
-    if os.environ.get("OPENBB_NO_BROWSER") != "1":
+    # 开发模式自动打开浏览器；服务模式 / OPENBB_NO_BROWSER=1 不打开
+    if not serve_only and os.environ.get("OPENBB_NO_BROWSER") != "1":
         threading.Timer(2.5, lambda: webbrowser.open(f"{config.BASE_URL}/")).start()
 
     # ── 后台预热拥挤度排行缓存（缓解 P1-1：首次 44s+ 冷启动）─────────
