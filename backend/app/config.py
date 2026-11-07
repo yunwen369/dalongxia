@@ -32,7 +32,9 @@ BUILD_TAG = "v1.3.2-20261104"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写�
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
 
-HOST = "127.0.0.1"  # 仅监听本机回环地址，不对外网暴露
+# 默认仅监听本机回环（127.0.0.1），不对外网暴露；
+# 远程访问（Tailscale）时设 OPENBB_HOST=0.0.0.0 放开。
+HOST = os.environ.get("OPENBB_HOST", "127.0.0.1")
 # 端口固定 6900（复刻 OpenBB ODP 本地连接器约定）；仅"发版门禁"自动化允许用
 # OPENBB_PORT 临时指定另一端口跑打包产物，避免与用户正在运行的实例抢 6900。
 # 正常双击启动不受影响（无该环境变量时恒为 6900），非静默换端口。
