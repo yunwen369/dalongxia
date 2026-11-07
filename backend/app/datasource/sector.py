@@ -1824,22 +1824,6 @@ def _pct_rank(series: List[float], current: float) -> Optional[float]:
     return round(below / len(clean) * 100, 1)
 
 
-def _index_kline_func(kind: str = "industry"):
-    """兼容占位：板块指数日线已改由纯 HTTP 通道取（见 :func:`_kline_ths`）。
-
-    Args:
-        kind: industry=行业 / concept=概念。
-
-    Returns:
-        None: 恒返回 None，调用方应改用 :func:`_kline_ths`。
-
-    Notes:
-        第八轮移除以 py_mini_racer(V8) 为前置的 akshare 板块指数函数；
-        本函数仅为旧调用方的显式失效点，避免静默回退到 V8 通道。
-    """
-    return None
-
-
 def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True,
                  light: bool = False) -> Dict[str, Any]:
     """单板块拥挤度打分（M3）。
@@ -2327,66 +2311,6 @@ def get_crowding_board_names(kind: str = "industry") -> List[str]:
 _CONS_FAIL = ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected", "ValueError")
 
 
-def get_sector_constituents(board: str, *, kind: str = "industry") -> List[Dict[str, Any]]:
-    """取某板块的成分股列表（供拥挤度的换手率/相关性维度、资金流四档聚合使用）。
-
-    2026-11-02 第八轮重写：主源改为同花顺板块详情页（纯 HTTP，``/thshy/detail`` 与
-    ``/gn/detail``），不再依赖东财 push2（本机被源站重置）与申万（页面改版后返回空表）。
-    同花顺反爬触发时（401/403）自动退避重试，仍失败则回退新浪板块成分。
-
-    Args:
-        board: 板块名（如「半导体」「白酒概念」）。
-        kind: industry / concept。
-
-    Returns:
-        List[Dict[str, Any]]: 成分股列表 [{code, name, pct, board}]。
-
-    Raises:
-        ValueError: 全部源均失败时抛出，附具体源名与异常类型。
-    """
-    ensure_enabled()
-    errors: List[str] = []
-    try:
-        code = ths_http.get_board_code(board, kind=kind)
-        if not code:
-            errors.append("同花顺名录无此板块")
-        else:
-            rows = ths_http.get_board_cons(code, kind=kind)
-            items = [
-                {"code": row["code"], "name": row.get("name"), "pct": row.get("pct"),
-                 "board": board}
-                for row in rows
-                if row.get("code")
-            ]
-            if items:
-                return items
-            errors.append("同花顺成分返回空")
-    except Exception as exc:  # noqa: BLE001 - 记录后尝试备源
-        errors.append(f"同花顺成分:{type(exc).__name__}")
-
-    # 备源：新浪板块成分（需先反查 label）
-    try:
-        label = _sina_label(board)
-        if not label:
-            errors.append("新浪板块映射缺失")
-        else:
-            df = _call(lambda: ak.stock_sector_detail(sector=label))
-            rows = utils.clean_records(df)
-            items = [
-                {"code": str(r.get("代码") or r.get("CODE") or "").zfill(6),
-                 "name": str(r.get("名称") or r.get("NAME") or ""), "board": board}
-                for r in rows
-            ]
-            items = [i for i in items if i["code"].isdigit()]
-            if items:
-                return items
-            errors.append("新浪成分返回空")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"新浪成分:{type(exc).__name__}")
-
-    raise ValueError("；".join(errors) if errors else "成分股不可用")
-
-
 def _constituent_correlation(
     constituents: List[Dict[str, Any]],
     *,
@@ -2495,6 +2419,11 @@ def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
         Optional[Dict[str, Any]]: {value, unit, caliber}；取不到返回 None。
     """
     def build() -> Optional[Dict[str, Any]]:
+        """缓存未命中时的三级取数：同花顺 → 新浪 → 本地全市场快照。
+
+        Returns:
+            Optional[Dict[str, Any]]: {value, unit, caliber}；三级皆失败返回 None。
+        """
         # ① 同花顺成分（含流通市值，口径最准）——失败不影响后续兜底
         try:
             payload = get_cons_ths(board)

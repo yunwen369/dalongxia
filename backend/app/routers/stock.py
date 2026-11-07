@@ -208,25 +208,6 @@ def stock_realtime_panel(
 # =============================================================
 # 三、财务四接口（A股专用）
 # =============================================================
-def _require_a_share(symbol: str, market: str) -> Optional[Dict[str, Any]]:
-    """财务接口仅支持 A股；非 A股返回明确中文说明的错误结构。
-
-    Args:
-        symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
-        market: 市场标识：a=A股 / hk=港股 / us=美股 / fund=场外基金。
-
-    Returns:
-        dict | None: 命中时返回记录，缺失返回 None。
-    """
-    if market != "a":
-        return api_error(
-            ErrorCode.EMPTY_DATA,
-            "港美股中文财报通道暂无免费来源，本批如实标注不可用。",
-            data={"items": []},
-        )
-    return None
-
-
 @router.get("/financial-summary")
 def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代码")) -> Dict[str, Any]:
     """财务摘要（ST-09 关键指标表：EPS/毛利率/ROE）。

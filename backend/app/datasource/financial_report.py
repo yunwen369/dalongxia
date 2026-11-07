@@ -1589,17 +1589,3 @@ def detail_cached(*, market: str, title: str, code: str, pub_time: str, doc_url:
         cache.set(key, result)
     return result
 
-
-def cn_detail_cached(*, title: str, code: str, pub_time: str, doc_url: str) -> Dict[str, Any]:
-    """带缓存的 A 股公告正文详情（detail_cached 的 A 股别名，保持既有调用兼容）。
-
-    Args:
-        title: 公告标题。
-        code: 6 位证券代码。
-        pub_time: 发布时间。
-        doc_url: 原文链接。
-
-    Returns:
-        Dict[str, Any]: 同 :func:`cn_detail`。
-    """
-    return detail_cached(market="a", title=title, code=code, pub_time=pub_time, doc_url=doc_url)

@@ -105,6 +105,15 @@ class AccessPasswordMiddleware(BaseHTTPMiddleware):
     """访问口令中间件（未配置时直接透传）。"""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """ASGI 请求入口：未配置口令则透传，已配置则按 Bearer/Cookie 校验。
+
+        Args:
+            request: 入站请求。
+            call_next: 下游处理链。
+
+        Returns:
+            Response: 放行后的下游响应，或 401/429 拒绝响应。
+        """
         pwd = _get_password()
         if pwd is None:
             # 未配置：完全不启用
