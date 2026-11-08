@@ -373,6 +373,22 @@ def create_app() -> FastAPI:
             target=_fundflow_warm_loop, daemon=True, name="fundflow-warm"
         ).start()
 
+    # v2.1.0 网页化：URL 口令登录入口。必须早于 mount("/")，否则会被 StaticFiles 截获
+    # 当成「不存在的静态文件」而 404。三个分支见 access_middleware.auth_response。
+    @application.get("/auth", include_in_schema=False)
+    def _auth_entry(token: str = ""):
+        """口令登录入口：无 token 给登录页，token 正确则写 Cookie 并回首页。
+
+        Args:
+            token: URL 查询参数中的访问口令，可省略。
+
+        Returns:
+            Response: 登录页（200）或重定向（302，含错误重试分支）。
+        """
+        from backend.app.core.access_middleware import auth_response
+
+        return auth_response(token)
+
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(
         "/",

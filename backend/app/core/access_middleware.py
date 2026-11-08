@@ -11,6 +11,9 @@
 - 鉴权方式（二选一）：
   1. ``Authorization: Bearer <口令>``；
   2. Cookie ``access_token=<口令>``。
+- 登录入口（v2.1.0 网页化补充）：``GET /auth`` 提供口令表单，
+  ``GET /auth?token=<口令>`` 校验通过即写 30 天 Cookie 并 302 回首页，
+  便于把「带 token 的网址」存成书签/桌面快捷方式，实现打开即用。
 - 失败：HTTP 401 + JSON ``{error, error_code:"UNAUTHORIZED"}``，不泄露口令正误细节。
 - 口令不落盘、不入日志；从环境变量读取，进程启动时固定。
 """
@@ -22,9 +25,13 @@ import time
 from typing import Optional
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
+
+# 鉴权 Cookie 名与有效期（30 天：远程访问免频繁输入，过期后回 /auth 重新登录）
+COOKIE_NAME = "access_token"
+COOKIE_MAX_AGE = 30 * 24 * 3600
 
 # 放行路径前缀（静态前端 + 健康探针）
 _ALLOWED_PREFIXES = (
@@ -103,6 +110,42 @@ def _record_fail(ip: str) -> None:
     history = _fail_counts.get(ip, [])
     history.append(now)
     _fail_counts[ip] = history
+
+
+def auth_response(token: str) -> Response:
+    """``GET /auth`` 的统一响应：登录页 / 发 Cookie 后跳首页 / 错误重试。
+
+    三种分支：
+    - 未配置口令（本机单用户）：直接 302 回首页，登录页不存在；
+    - 无 token：返回 ``frontend/auth.html`` 口令表单（200）；
+    - token 正确：写 ``access_token`` Cookie（30 天）并 302 回首页；
+    - token 错误：302 回 ``/auth?error=1``，由登录页显示错误提示（不暴露细节）。
+
+    Args:
+        token: URL 上的 ``token`` 查询参数（可为空）。
+
+    Returns:
+        Response: 登录页、重定向或错误重定向。
+    """
+    pwd = _get_password()
+    if pwd is None:
+        return RedirectResponse("/", status_code=302)
+    if not token:
+        from backend.app import config
+
+        return FileResponse(str(config.FRONTEND_DIR / "auth.html"), media_type="text/html")
+    if token != pwd:
+        return RedirectResponse("/auth?error=1", status_code=302)
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 class AccessPasswordMiddleware(BaseHTTPMiddleware):

@@ -117,3 +117,69 @@ def test_access_endpoint_includes_public_block():
     assert set(public) == {"url", "error", "started_at", "ready"}
     assert public["url"] == ""
     assert public["ready"] is False
+
+
+# =============================================================
+# /auth 口令登录入口（v2.1.0 网页化：一条带 token 的网址即可进工作台）
+# =============================================================
+def test_auth_response_disabled_redirects_home(monkeypatch):
+    """未配置口令时 /auth 直接回首页，不弹登录页（本机单用户零打扰）。"""
+    monkeypatch.delenv("OPENBB_ACCESS_PASSWORD", raising=False)
+    from backend.app.core import access_middleware
+
+    resp = access_middleware.auth_response("")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/"
+
+
+def test_auth_response_without_token_serves_login_page(monkeypatch):
+    """配置了口令但未带 token 时返回登录页（200 HTML，含口令输入框）。"""
+    from pathlib import Path
+
+    monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
+    from backend.app.core import access_middleware
+
+    resp = access_middleware.auth_response("")
+    assert resp.status_code == 200
+    assert "text/html" in resp.media_type
+    html = Path(resp.path).read_text(encoding="utf-8")
+    assert "需要访问口令" in html
+    assert 'name="token"' in html
+
+
+def test_auth_response_correct_token_sets_cookie(monkeypatch):
+    """口令正确：302 回首页并下发 30 天 HttpOnly Cookie。"""
+    monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
+    from backend.app.core import access_middleware
+
+    resp = access_middleware.auth_response("testpass123")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/"
+    cookie = resp.headers["set-cookie"]
+    assert "access_token=testpass123" in cookie
+    assert "HttpOnly" in cookie
+    assert "Max-Age=2592000" in cookie
+
+
+def test_auth_response_wrong_token_redirects_error(monkeypatch):
+    """口令错误：回登录页错误分支（302），不以 401 JSON 暴露口令正误细节。"""
+    monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
+    from backend.app.core import access_middleware
+
+    resp = access_middleware.auth_response("wrong-token")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/auth?error=1"
+
+
+def test_auth_route_registered_before_static_mount():
+    """装配顺序红线：/auth 必须早于 StaticFiles 挂载，否则被当成静态文件 404。"""
+    from backend.app.main import create_app
+
+    app = create_app()
+    paths = [getattr(route, "path", "") for route in app.routes]
+    assert "/auth" in paths
+    auth_index = paths.index("/auth")
+    mount_index = next(
+        index for index, route in enumerate(app.routes) if route.__class__.__name__ == "Mount"
+    )
+    assert auth_index < mount_index

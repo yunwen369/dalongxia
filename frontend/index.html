@@ -5,6 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenBB 中文投研工作台</title>
   <link rel="icon" href="favicon.ico" type="image/x-icon">
+  <!-- v2.1.0 网页化：远端访问口令兜底 —— 任一 API 返回 401 即跳 /auth 登录页。
+       必须同步执行且早于各页面脚本，故不加 defer。未配置口令时不触发。 -->
+  <script>
+    (function () {
+      var rawFetch = window.fetch;
+      window.fetch = function () {
+        return rawFetch.apply(this, arguments).then(function (resp) {
+          if (resp.status === 401 && !window.__openbbAuthRedirect) {
+            window.__openbbAuthRedirect = true;
+            window.location.replace("/auth");
+          }
+          return resp;
+        });
+      };
+    })();
+  </script>
   <!-- 主题变量与布局样式：尺寸与色板来自规范 v7.0 §7.4 -->
   <link rel="stylesheet" href="css/theme.css">
   <link rel="stylesheet" href="css/app.css">
