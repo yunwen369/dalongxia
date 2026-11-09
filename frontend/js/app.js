@@ -532,9 +532,66 @@
     });
   }
 
+  /** 移动端侧栏抽屉（AR-01，REQ-20261109-01）：≤768px 时汉堡唤出 + 遮罩关闭。
+   * 桌面宽度（>768）下按钮由 CSS 隐藏、抽屉样式不生效，本函数的所有交互自动退化为无操作；
+   * 点击侧栏任一导航项后自动收起抽屉（移动端单手操作闭环）。
+   * @returns {void} 无返回值
+   */
+  function bindMobileDrawer() {
+    const sidebar = document.getElementById("sidebar");
+    const toggle = document.getElementById("menu-toggle");
+    const backdrop = document.getElementById("sb-backdrop");
+    if (!sidebar || !toggle || !backdrop) {
+      return;
+    }
+
+    const isOpen = () => sidebar.classList.contains("open");
+
+    function openDrawer() {
+      sidebar.classList.add("open");
+      backdrop.hidden = false;
+      toggle.setAttribute("aria-expanded", "true");
+    }
+
+    function closeDrawer() {
+      sidebar.classList.remove("open");
+      backdrop.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+    }
+
+    toggle.addEventListener("click", function () {
+      if (isOpen()) {
+        closeDrawer();
+      } else {
+        openDrawer();
+      }
+    });
+    backdrop.addEventListener("click", closeDrawer);
+
+    // 侧栏项点击后自动收起（事件委托，覆盖静态与动态创建的导航项）
+    sidebar.addEventListener("click", function (event) {
+      if (!isOpen()) {
+        return;
+      }
+      const target = event.target;
+      const isNavItem = target.closest
+        && target.closest(".sidebar-item, .sb-group-h");
+      if (isNavItem && target.closest(".sidebar-item")) {
+        // 分组标题只折叠分组不关抽屉；二级导航项跳转后收起
+        closeDrawer();
+      }
+    });
+
+    // 桌面宽度恢复时清理抽屉状态，避免残留 open 类影响桌面布局
+    window.addEventListener("resize", function () {
+      if (window.innerWidth > 768 && isOpen()) {
+        closeDrawer();
+      }
+    });
+  }
+
   /** 页面初始化。 */
-  function init() {
-    let savedTheme = "dark";
+  function init() {    let savedTheme = "dark";
     try {
       savedTheme = window.localStorage.getItem("openbb-theme") || "light";
     } catch (error) {
@@ -553,6 +610,7 @@
     bindNavigation();
     bindSidebar();
     bindShortcuts();
+    bindMobileDrawer();
 
     const themeButton = document.getElementById("theme-toggle");
     if (themeButton) {

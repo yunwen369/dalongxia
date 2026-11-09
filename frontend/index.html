@@ -112,6 +112,10 @@
   <div class="app-shell">
     <!-- ① 主菜单条：高 64px，通栏顶部 -->
     <header class="topbar" role="banner">
+      <!-- AR-01（REQ-20261109-01）：移动端汉堡按钮——≤768px 显示，唤出侧栏抽屉 -->
+      <button class="menu-toggle" id="menu-toggle" type="button" aria-label="打开导航菜单" aria-expanded="false" aria-controls="sidebar">
+        <span aria-hidden="true">☰</span>
+      </button>
       <div class="logo">
         <span class="logo-mark" aria-hidden="true">OB</span>
         <span data-i18n="app.name">OpenBB 中文投研工作台</span>
@@ -150,8 +154,10 @@
     </header>
 
     <div class="body">
+      <!-- AR-01：移动端侧栏抽屉遮罩（≤768px 且抽屉打开时显示，点击关闭） -->
+      <div class="sb-backdrop" id="sb-backdrop" hidden></div>
       <!-- ② 可折叠仪表板侧栏：宽 236px -->
-      <aside class="sidebar" role="complementary" aria-label="主导航">
+      <aside class="sidebar" role="complementary" aria-label="主导航" id="sidebar">
         <div class="sb-search">
           <input id="sb-search" type="search" placeholder="搜索页面 / 功能…" autocomplete="off" aria-label="搜索页面">
         </div>
