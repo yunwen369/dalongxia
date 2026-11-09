@@ -855,7 +855,7 @@ body {
   height: 44px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--bg-deep, var(--bg-panel));
+  background: var(--bg-panel);
   overflow: hidden;
   display: flex;
   flex-direction: column;

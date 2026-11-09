@@ -8,6 +8,7 @@
   /* ---------- 应用背景与面板 ---------- */
   --bg-app: #070707;          /* 最外层应用背景 */
   --bg-widget: #151518;       /* widget 卡片底色 */
+  --bg-widget-2: #1a1a1e;     /* widget 内嵌二级底色（表头/摘要项/指标格/资讯卡/Copilot 消息体）；REQ-20261109-01 AR-04：此前未定义，6 处 fallback 黑底导致浅色主题黑底黑字 */
   --bg-panel: #131313;        /* 面板 / 工具栏背景 */
   --bg-sidebar: #101013;      /* 侧边栏背景 */
   --bg-hover: #1c1c20;        /* 悬停态背景 */
@@ -57,6 +58,7 @@
 [data-theme="light"] {
   --bg-app: #ffffff;          /* 应用底：白底（灰底看久累） */
   --bg-widget: #ffffff;       /* 卡片 */
+  --bg-widget-2: #f7f9fb;     /* widget 内嵌二级底色：与 --bg-panel 一致（REQ-20261109-01 AR-04 补定义，正文对比度 1.05:1 → ≥4.5:1） */
   --bg-panel: #f7f9fb;        /* 面板 */
   --bg-sidebar: #f7f9fb;      /* 侧栏 */
   --bg-hover: #eef3f8;        /* 悬停 */
