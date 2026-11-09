@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -151,9 +152,29 @@ def _get_json(url: str, timeout: float = 20.0) -> Tuple[Optional[Dict[str, Any]]
 
     Returns:
         tuple: (解析后的 JSON 或 None, 失败说明；成功时说明为空串)。
+
+    Note:
+        2026-11-10 复验补修（两处环境坑，均实测踩到）：
+        1. 本机 ``HTTP_PROXY`` 会把 ``127.0.0.1`` 也转发给代理，表现为
+           ``upstream connect failed ... 10061`` → 门禁误判端点失败；
+           故对回环地址显式禁用代理。
+        2. 部署环境用 ``setx`` 设了 ``OPENBB_ACCESS_PASSWORD``，产物会默认启用
+           访问口令，未带凭证的探测一律 401 → 门禁误判 ``http_ok=false``；
+           故读取同名环境变量并以 ``Authorization: Bearer`` 带上（未设置则不加）。
     """
+    host = urllib.parse.urlsplit(url).hostname or ""
+    headers: Dict[str, str] = {}
+    pwd = os.environ.get("OPENBB_ACCESS_PASSWORD", "").strip()
+    if pwd:
+        headers["Authorization"] = f"Bearer {pwd}"
+    if host in ("127.0.0.1", "localhost", "::1"):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        _open = opener.open
+    else:
+        _open = urllib.request.urlopen
+    request = urllib.request.Request(url, headers=headers) if headers else url
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with _open(request, timeout=timeout) as response:
             status = response.status
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:  # 有状态码的失败
