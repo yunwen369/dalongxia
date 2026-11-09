@@ -1514,3 +1514,66 @@
 .set-access-url { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12px; color: var(--text); word-break: break-all; }
 .set-access-qr { flex: 0 0 96px; width: 96px; height: 96px; border-radius: 6px; background: #fff; padding: 4px; box-sizing: border-box; }
 .set-access-note { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin-top: 6px; }
+
+/* =============================================================
+ * 第 3 步打磨（REQ-20261109-01 AR-16/19/21/22/23，2026-11-09）
+ * ============================================================= */
+
+/* AR-21/23：资讯卡信息层级——正文(title 600 --text) > 摘要(--text-dim 5.62:1) >
+ * 分值/标签(--text-dim)。分值行原 --text-muted 仅 2.91:1 不达 AA（13px 小字无豁免） */
+.pg-feed-score {
+  color: var(--text-dim);
+}
+
+.pg-news-tag {
+  color: var(--text-dim);
+}
+
+/* AR-22：操作区/标签行不硬裁切——长标签（事件合并串）限宽省略 + title 全文（JS 侧） */
+.pg-news-tag.event {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* AR-16：板块树 / Tab 选中态——深蓝实底(#0f2f54+白字)与浅色画布割裂，
+ * 改浅底强调：左侧 3px 品牌色条 + hover 底 + 品牌深字（两主题同构） */
+.pg-tab.active {
+  background: var(--bg-hover);
+  color: var(--accent-strong);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.pg-tree-row.level1.active,
+.pg-tree-row.level2.active,
+.pg-tree-row.level3.active {
+  background: var(--bg-hover);
+  color: var(--accent-strong);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* AR-11：口径 ℹ 浮层按钮（badge 形态，可聚焦） */
+.badge-info {
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+
+.badge-info:hover,
+.badge-info:focus-visible {
+  color: var(--text);
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+/* AR-10：可关闭引导卡（K线分时/搜索）与关闭按钮 */
+.card.market-card.dismissible[hidden] {
+  display: none;
+}
+
+.dismiss-btn {
+  flex: 0 0 auto;
+  min-width: 32px;
+}

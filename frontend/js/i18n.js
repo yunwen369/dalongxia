@@ -362,6 +362,7 @@
     "state.loading": "加载中…",
     "state.empty": "暂无数据，点击刷新",
     "state.errorTitle": "加载失败",
+    "state.timeout": "请求超时（30 秒无响应），请检查服务状态后重试",
     "state.errorHint": "请检查网络后点击重试",
     "state.noData": "无数据",
     "value.none": "无数据",
@@ -1531,6 +1532,7 @@
     "connectors.unavailable": "暂不可用",
     // 新闻页
     "news.scoreLabel": "分：",
+    "news.scoreMissing": "本地初评未生效 · 未评分",
     "news.weak": "弱",
     // 单板块估值页
     "val.boardLabel": "板块：",
@@ -1725,7 +1727,7 @@
     "market.indexTrend": "上证指数走势",
     "market.klineMinute": "K线 / 分时",
     "market.label": "市场",
-    "market.notice": "本页所有数值均来自真实接口；数据源与口径徽章显示实际命中通道。休市/盘后显示“收盘快照”，不伪装盘中实时；搜索与概况字段以源站返回为准。",
+    "market.notice": "本页所有数值均来自真实接口；数据源与口径徽章显示实际命中通道。字段显示「—」表示该来源本次未返回（休市 / 限频 / 未披露），并非程序错误；休市/盘后显示“收盘快照”，不伪装盘中实时；搜索与概况字段以源站返回为准。",
     "market.search": "搜索",
     "market.searchPlaceholder": "输入代码 / 名称 / 拼音",
     "market.tencentSuggest": "腾讯智能联想",

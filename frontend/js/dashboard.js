@@ -1801,7 +1801,13 @@
       body.setAttribute("data-state", "default");
       return;
     }
-    fetchJson(recipe.path, params)
+    // AR-18（REQ-20261109-01）：加载态超时兜底——后端 30s 无响应时进错误态
+    // （带重试按钮），骨架不得永久残留。30s 覆盖最慢的真实端点（板块全量扫描类）。
+    const TIMEOUT_MS = 30000;
+    const timeout = new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error(t("state.timeout"))); }, TIMEOUT_MS);
+    });
+    Promise.race([fetchJson(recipe.path, params), timeout])
       .then(function (data) {
         disposeChartsIn(body);
         body.innerHTML = "";

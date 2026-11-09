@@ -468,7 +468,12 @@
       var head = el("div", "pg-feed-head");
       var chipClass = sentiment.label === t("stock.sentiment.up") ? "chip up" : sentiment.label === t("stock.sentiment.down") ? "chip down" : "chip";
       head.appendChild(el("span", chipClass, sentiment.label || t("stock.sentiment.neutral")));
-      head.appendChild(el("span", "pg-feed-score", t("news.scoreLabel") + fmt(sentiment.score, 4) + " · " + (sentiment.strength || t("news.weak"))));
+      // AR-21（REQ-20261109-01）：分值为 0 / 缺失时如实显示「未评分」，
+      // 不把缺失值伪装成「中性 0.0000」类有效结论；有分值才展示数值与强度
+      const rawScore = Number(sentiment.score);
+      const hasScore = sentiment.score !== undefined && sentiment.score !== null && !Number.isNaN(rawScore) && rawScore !== 0;
+      head.appendChild(el("span", "pg-feed-score",
+        hasScore ? t("news.scoreLabel") + fmt(rawScore, 4) + " · " + (sentiment.strength || t("news.weak")) : t("news.scoreMissing")));
       head.appendChild(el("span", "pg-spacer"));
       head.appendChild(P.newsTime(item.time));
       box.appendChild(head);
@@ -488,15 +493,19 @@
 
       var foot = el("div", "pg-feed-foot");
       foot.appendChild(el("span", "pg-card-sub", item.source || t("news.sourceUnknown")));
-      (item.channels || []).forEach(function (channel) {
+      // AR-20（REQ-20261109-01）：空值 / undefined 不渲染标签节点（filter(Boolean)），
+      // 杜绝「无文字无图标」的空描边框；事件类长标签加 title 全文（AR-19 防硬裁切）
+      (item.channels || []).filter(Boolean).forEach(function (channel) {
         foot.appendChild(el("span", "pg-news-tag", channel));
       });
-      (item.boards || []).forEach(function (board) {
+      (item.boards || []).filter(Boolean).forEach(function (board) {
         foot.appendChild(el("span", "pg-news-tag board", board));
       });
       if ((sentiment.events || []).length) {
-        foot.appendChild(el("span", "pg-news-tag",
-          t("news.eventLabel") + sentiment.events.map(function (event) { return event.name; }).join("、")));
+        const eventTag = el("span", "pg-news-tag event",
+          t("news.eventLabel") + sentiment.events.map(function (event) { return event.name; }).join("、"));
+        eventTag.title = eventTag.textContent;  // AR-19：裁切部分悬停可见全文
+        foot.appendChild(eventTag);
       }
       var reviewButton = el("button", "pg-btn", t("news.button.review"));
       reviewButton.type = "button";

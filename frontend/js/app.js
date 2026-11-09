@@ -634,6 +634,40 @@
     });
   }
 
+  /** 首页引导卡（AR-10，REQ-20261109-01）：K线分时/搜索两张引导卡改为
+   * 「可关闭的一次性提示」——localStorage 记忆关闭意图，此后不再显示；
+   * 首次访问默认显示（与原行为一致，不丢失引导价值）。
+   * @returns {void} 无返回值
+   */
+  function bindHomeHints() {
+    const cards = [
+      { card: "mk-kline-card", dismiss: "mk-kline-dismiss", key: "openbb-hint-kline-v1" },
+      { card: "mk-search-card", dismiss: "mk-search-dismiss", key: "openbb-hint-search-v1" },
+    ];
+    cards.forEach(function (entry) {
+      const card = document.getElementById(entry.card);
+      const btn = document.getElementById(entry.dismiss);
+      if (!card || !btn) {
+        return;
+      }
+      let dismissed = false;
+      try {
+        dismissed = window.localStorage.getItem(entry.key) === "1";
+      } catch (error) {
+        dismissed = false;  // 隐私模式下每次都显示
+      }
+      card.hidden = dismissed;
+      btn.addEventListener("click", function () {
+        card.hidden = true;
+        try {
+          window.localStorage.setItem(entry.key, "1");
+        } catch (error) {
+          // 隐私模式下仅本次会话关闭
+        }
+      });
+    });
+  }
+
   /** 页面初始化。 */
   function init() {    let savedTheme = "dark";
     try {
@@ -655,6 +689,7 @@
     bindSidebar();
     bindShortcuts();
     bindMobileDrawer();
+    bindHomeHints();
 
     const themeButton = document.getElementById("theme-toggle");
     if (themeButton) {

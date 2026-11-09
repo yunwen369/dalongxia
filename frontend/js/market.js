@@ -58,20 +58,22 @@
     if (state) el.classList.add(state);
   }
 
-  /** 设置全局数据源/口径/状态/时间徽章。
+  /** 设置全局数据源徽章 + 「口径 ℹ」浮层（AR-11：三徽章合并，title 动态含口径/状态/时间）。
    * @param {Object} data 数据主体（接口 data 段）
    */
   function setGlobalBadges(data) {
     if (!data) return;
     setBadge("mk-source", t("mk.sourceBadge") + (data.source || t("value.dash")), "accent");
-    setBadge("mk-caliber", t("mk.caliberBadge") + (data.caliber || t("value.dash")));
-    const realtime = Boolean(data.is_realtime);
-    setBadge(
-      "mk-status",
-      t("mk.statusBadge") + (data.market_status || t("value.dash")) + (realtime ? t("mk.realtime") : t("mk.notRealtime")),
-      realtime ? "ok" : ""
-    );
-    setBadge("mk-asof", t("mk.timeBadge") + (data.as_of || t("value.dash")));
+    // AR-11：三行详情收进「口径 ℹ」按钮 title 浮层，主行只保留数据源
+    const info = document.getElementById("mk-caliber-info");
+    if (info) {
+      const realtime = Boolean(data.is_realtime);
+      info.title = [
+        t("mk.caliberBadge") + (data.caliber || t("value.dash")),
+        t("mk.statusBadge") + (data.market_status || t("value.dash")) + (realtime ? t("mk.realtime") : t("mk.notRealtime")),
+        t("mk.timeBadge") + (data.as_of || t("value.dash")),
+      ].join("\n");
+    }
   }
 
   /** 渲染普通表格（P1-13 委托 window.Utils.renderTable）。
