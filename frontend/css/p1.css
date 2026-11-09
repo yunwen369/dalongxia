@@ -41,21 +41,34 @@
 }
 
 .sb-group + .sb-group {
-  border-top: 1px solid var(--border);
+  /* C11（REQ-20261109-01）：组间分隔由 --border 提到 --border-strong（深色主题下原分隔线几乎不可见） */
+  border-top: 1px solid var(--border-strong);
 }
 
+/* C11（AR-15）：分组标题与子项「形态不同」—— 提亮、放大、加底条、强化箭头，
+ * 层级由「颜色+字号+字重+背景+缩进+箭头」多维度同时建立（原仅字重 600 且字号反而小于子项） */
 .sb-group-h {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 9px 12px 9px 10px;
   cursor: pointer;
   list-style: none;
-  color: var(--text-dim);
-  font-size: var(--fs-aux);
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--bg-panel);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-sm);
   user-select: none;
+}
+
+.sb-group-h:hover,
+.sb-group-h:focus-visible {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+  outline: none;
 }
 
 .sb-group-h::-webkit-details-marker {
@@ -65,8 +78,9 @@
 .sb-group-h::after {
   content: "▾";
   margin-left: auto;
-  font-size: 10px;
-  color: var(--text-muted);
+  /* C11：10px → 14px 且用 --text（原 --text-muted 在深色主题下不可辨） */
+  font-size: 14px;
+  color: var(--text);
   transition: transform 0.15s ease;
 }
 

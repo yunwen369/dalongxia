@@ -116,7 +116,7 @@
       <button class="menu-toggle" id="menu-toggle" type="button" aria-label="打开导航菜单" aria-expanded="false" aria-controls="sidebar">
         <span aria-hidden="true">☰</span>
       </button>
-      <div class="logo">
+      <div class="logo" id="logo-home" role="link" tabindex="0" title="返回首页（点击 Logo 回到 市场总览）">
         <span class="logo-mark" aria-hidden="true">OB</span>
         <span data-i18n="app.name">OpenBB 中文投研工作台</span>
       </div>
@@ -167,10 +167,12 @@
           <details class="sb-group" data-group="overview" open>
             <summary class="sb-group-h" data-i18n="grp.overview">总览</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="today" data-view-target="today" data-i18n="nav.today">今日研判</li>
-              <li class="sidebar-item" data-action="view" data-view="dashboard" data-view-target="dashboard" data-i18n="nav.workspace">自定义工作区</li>
-              <li class="sidebar-item" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
-              <li class="sidebar-item" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
+              <!-- AR-04（REQ-20261109-01）：首页「市场总览」入侧栏 —— 此前首页是导航孤儿（无任何入口） -->
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="home" data-view-target="home" data-i18n="nav.marketOverview">市场总览</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="today" data-view-target="today" data-i18n="nav.today">今日研判</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="dashboard" data-view-target="dashboard" data-i18n="nav.workspace">自定义工作区</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
             </ul>
           </details>
 
@@ -178,13 +180,13 @@
           <details class="sb-group" data-group="market" open>
             <summary class="sb-group-h" data-i18n="grp.market">行情市场</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="market" data-view-target="market" data-i18n="nav.marketOverview">市场概览</li>
-              <li class="sidebar-item" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macroData">宏观数据</li>
-              <li class="sidebar-item" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectorsMap">板块云图</li>
-              <li class="sidebar-item" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorDetail">板块详情</li>
-              <li class="sidebar-item" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.moneyFlow">资金流向</li>
-              <li class="sidebar-item" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fundDetail">基金详情</li>
-              <li class="sidebar-item" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合诊断</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="market" data-view-target="market" data-i18n="nav.marketOverview">市场概览</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macroData">宏观数据</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectorsMap">板块云图</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorDetail">板块详情</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.moneyFlow">资金流向</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fundDetail">基金详情</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合诊断</li>
             </ul>
           </details>
 
@@ -192,12 +194,12 @@
           <details class="sb-group" data-group="research" open>
             <summary class="sb-group-h" data-i18n="grp.research">投研分析</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stockResearch">个股研究</li>
-              <li class="sidebar-item" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.newsSenti">新闻情绪</li>
-              <li class="sidebar-item" data-action="view" data-view="fin" data-view-target="fin" data-i18n="nav.finSummary">财报摘要</li>
-              <li class="sidebar-item" data-action="view" data-view="ann" data-view-target="ann" data-i18n="nav.annLib">公告库·正文</li>
-              <li class="sidebar-item" data-action="view" data-view="tools" data-view-target="tools" data-i18n="nav.tools">工具</li>
-              <li class="sidebar-item" data-action="view" data-view="cand" data-view-target="cand" data-i18n="nav.cand">候选池</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stockResearch">个股研究</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.newsSenti">新闻情绪</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fin" data-view-target="fin" data-i18n="nav.finSummary">财报摘要</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="ann" data-view-target="ann" data-i18n="nav.annLib">公告库·正文</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="tools" data-view-target="tools" data-i18n="nav.tools">工具</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="cand" data-view-target="cand" data-i18n="nav.cand">候选池</li>
             </ul>
           </details>
 
@@ -205,10 +207,10 @@
           <details class="sb-group" data-group="my" open>
             <summary class="sb-group-h" data-i18n="grp.my">我的投资</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.myInvest">我的投资</li>
-              <li class="sidebar-item" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">自选股</li>
-              <li class="sidebar-item" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">养基宝</li>
-              <li class="sidebar-item" data-action="view" data-view="mgr" data-view-target="mgr" data-i18n="nav.mgr">经理画像</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.myInvest">我的投资</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">自选股</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">养基宝</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="mgr" data-view-target="mgr" data-i18n="nav.mgr">经理画像</li>
             </ul>
             <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
           </details>
@@ -217,9 +219,9 @@
           <details class="sb-group" data-group="sys" open>
             <summary class="sb-group-h" data-i18n="grp.sys">系统</summary>
             <ul class="sidebar-list">
-              <li class="sidebar-item" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.sysSettings">系统设置</li>
-              <li class="sidebar-item" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">连接器</li>
-              <li class="sidebar-item" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.sysSettings">系统设置</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">连接器</li>
+              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
             </ul>
           </details>
 

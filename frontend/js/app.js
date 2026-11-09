@@ -266,64 +266,49 @@
     }
   }
 
-  /** 视图 → 顶栏一级项分组映射（R6-13：顶栏只放 8 个一级项，二级视图高亮其所属一级）。
-   * 未登记的视图（如 dashboard-manage / widget-library）按前缀兜底。
+  /** 导航单一配置表（REQ-20261109-01 AR-05：NAV_TREE，取代原 VIEW_GROUP + CRUMBS 两套硬编码）。
+   * 每个视图一行：group=顶栏一级组（""=首页等特殊页，顶栏不亮）；
+   * sidebar=侧栏 data-group（决定面包屑外、侧栏树的展开与高亮归属）；
+   * crumb=面包屑链 [[名称键, 落点视图或 null], ...]，末层为当前页。
+   * 顶栏高亮 / 侧栏选中 / 面包屑 / 折叠展开四处全部由本表派生，新增视图只改这一处。
    */
-  const VIEW_GROUP = {
-    home: "",
-    dashboard: "dashboard",
-    "dashboard-manage": "dashboard",
-    "widget-library": "dashboard",
-    watchlist: "watchlist",
-    news: "news",
-    sectors: "market",
-    stock: "market",
-    charting: "market",
-    "sector-val": "market",
-    // 第七轮：宏观与估值分位同属「市场」组
-    macro: "market",
-    valuation: "market",
-    crowding: "market",
-    // 第七轮 M9：筛选器同属「市场」组
-    screener: "market",
-    "fund-combo": "portfolio",
-    lhb: "money",
-    portfolio: "portfolio",
-    fund: "portfolio",
-    yjb: "yjb",
-    alerts: "system",
-    connectors: "system",
-    settings: "system"
+  const NAV_TREE = {
+    home: { group: "", sidebar: "overview", crumb: [["nav.marketOverview", null]] },
+    dashboard: { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["dashboard.mine", null]] },
+    "dashboard-manage": { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["nav.dashboardManage", null]] },
+    "widget-library": { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["sidebar.library", null]] },
+    watchlist: { group: "watchlist", sidebar: "my", crumb: [["nav.watchlist", "watchlist"], ["sidebar.myWatchlist", null]] },
+    news: { group: "news", sidebar: "research", crumb: [["nav.newsGroup", "news"], ["nav.news", null]] },
+    sectors: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.sectors", null]] },
+    stock: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.stock", null]] },
+    charting: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.charting", null]] },
+    "sector-val": { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.sectorVal", null]] },
+    macro: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.macro", null]] },
+    valuation: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.valuation", null]] },
+    crowding: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.crowding", null]] },
+    screener: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.screener", null]] },
+    lhb: { group: "money", sidebar: "market", crumb: [["nav.money", "lhb"], ["nav.lhb", null]] },
+    "fund-combo": { group: "portfolio", sidebar: "market", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.fundCombo", null]] },
+    portfolio: { group: "portfolio", sidebar: "my", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]] },
+    fund: { group: "portfolio", sidebar: "market", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]] },
+    yjb: { group: "yjb", sidebar: "my", crumb: [["nav.yjb", "yjb"], ["nav.yjbHoldings", null]] },
+    // AR-07：提醒中心由铃铛直入，无父级语义 → 面包屑单层（消除「点系统却到设置」的错配）
+    alerts: { group: "system", sidebar: "sys", crumb: [["nav.alerts", null]] },
+    connectors: { group: "system", sidebar: "sys", crumb: [["nav.system", "settings"], ["nav.connectors", null]] },
+    settings: { group: "system", sidebar: "sys", crumb: [["nav.system", "settings"], ["nav.settings", null]] }
   };
 
-  /** 面包屑层级表（R6-13 / F6-13）：视图 → [[名称, 跳转视图或 null], ...]。
-   * 最后一层为当前页（不可点）；前面各层点击回对应一级/二级页。
-   */
-  const CRUMBS = {
-    home: [],
-    dashboard: [["nav.dashboard", "dashboard"], ["dashboard.mine", null]],
-    "dashboard-manage": [["nav.dashboard", "dashboard"], ["nav.dashboardManage", null]],
-    "widget-library": [["nav.dashboard", "dashboard"], ["sidebar.library", null]],
-    watchlist: [["nav.watchlist", "watchlist"], ["sidebar.myWatchlist", null]],
-    news: [["nav.newsGroup", "news"], ["nav.news", null]],
-    sectors: [["nav.market", "sectors"], ["nav.sectors", "sectors"], ["nav.sectorsIndustry", null]],
-    stock: [["nav.market", "sectors"], ["nav.stock", null]],
-    charting: [["nav.market", "sectors"], ["nav.charting", null]],
-    "sector-val": [["nav.market", "sectors"], ["nav.sectorVal", null]],
-    crowding: [["nav.market", "sectors"], ["nav.crowding", null]],
-    "fund-combo": [["nav.portfolioGroup", "portfolio"], ["nav.fundCombo", null]],
-    macro: [["nav.market", "sectors"], ["nav.macro", null]],
-    valuation: [["nav.market", "sectors"], ["nav.valuation", null]],
-    // 第七轮 M9/M6：筛选器挂市场组；提醒中心挂系统组（铃铛跳入）
-    screener: [["nav.market", "sectors"], ["nav.screener", null]],
-    alerts: [["nav.system", "settings"], ["nav.alerts", null]],
-    lhb: [["nav.money", "lhb"], ["nav.lhb", null]],
-    portfolio: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]],
-    fund: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]],
-    yjb: [["nav.yjb", "yjb"], ["nav.yjbHoldings", null]],
-    connectors: [["nav.system", "settings"], ["nav.connectors", null]],
-    settings: [["nav.system", "settings"], ["nav.settings", null]]
-  };
+  /** 视图 → 顶栏一级项分组（兼容别名：由 NAV_TREE 派生，R6-13 语义不变）。 */
+  const VIEW_GROUP = {};
+  Object.keys(NAV_TREE).forEach(function (view) {
+    VIEW_GROUP[view] = NAV_TREE[view].group;
+  });
+
+  /** 面包屑层级表（兼容别名：由 NAV_TREE 派生，AR-08 已修正落点）。 */
+  const CRUMBS = {};
+  Object.keys(NAV_TREE).forEach(function (view) {
+    CRUMBS[view] = NAV_TREE[view].crumb;
+  });
 
   /** 渲染面包屑（同页面只有一个导航项高亮，面包屑体现三级归属）。
    * @param {string} view 当前视图标识
@@ -386,20 +371,51 @@
     return node;
   }
 
-  /** 按当前视图高亮顶栏一级项（同组多个二级视图共用同一个高亮）。
+  /** 按当前视图同步全部导航选中态（AR-05/AR-06：顶栏 + 侧栏 + 面包屑三处一致）。
+   * - 顶栏：同组二级视图共用一级高亮（R6-13 语义不变）；
+   * - 侧栏：data-view-target === view 的项设 .active（前进/后退与点击路径均覆盖）；
+   * - 折叠：展开当前视图所属分组并写入 tree.js 的折叠记忆（openbb-sb-groups-v1），
+   *   其余组保持用户手动状态（不强制收起）。
    * @param {string} view 当前视图标识
    * @returns {void} 无返回值
    */
   function syncNavActive(view) {
     const nav = document.getElementById("main-nav");
-    if (!nav) {
-      return;
+    if (nav) {
+      const group = VIEW_GROUP[view] !== undefined ? VIEW_GROUP[view] : "";
+      nav.querySelectorAll(".nav-item").forEach(function (item) {
+        const itemGroup = item.getAttribute("data-group") || "";
+        item.classList.toggle("active", !!group && itemGroup === group);
+      });
     }
-    const group = VIEW_GROUP[view] !== undefined ? VIEW_GROUP[view] : "";
-    nav.querySelectorAll(".nav-item").forEach(function (item) {
-      const itemGroup = item.getAttribute("data-group") || "";
-      item.classList.toggle("active", !!group && itemGroup === group);
-    });
+
+    // AR-06：侧栏选中态 —— 顶栏不亮时（如首页）用户仍能从侧栏看出当前位置
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebar) {
+      sidebar.querySelectorAll(".sidebar-item").forEach(function (item) {
+        const target = item.getAttribute("data-view-target") || item.getAttribute("data-view");
+        item.classList.toggle("active", !!target && target === view);
+      });
+      // AR-15/C11：展开当前视图所属分组（写入折叠记忆，与 tree.js 手动折叠共存）
+      const entry = NAV_TREE[view];
+      if (entry && entry.sidebar) {
+        const current = document.querySelector(
+          '.sidebar details.sb-group[data-group="' + entry.sidebar + '"]'
+        );
+        if (current && !current.open) {
+          current.open = true;
+          try {
+            const raw = window.localStorage.getItem("openbb-sb-groups-v1");
+            const state = raw ? JSON.parse(raw) : {};
+            state[entry.sidebar] = true;
+            window.localStorage.setItem("openbb-sb-groups-v1", JSON.stringify(state));
+          } catch (error) {
+            // 隐私模式下忽略记忆写入，仅当前页展开
+          }
+        }
+      }
+    }
+
     renderCrumb(view);
   }
 
@@ -409,6 +425,17 @@
     const title = document.getElementById("page-title");
     if (!nav) {
       return;
+    }
+    // AR-04（REQ-20261109-01）：点 Logo 回首页 —— HTML 注释承诺的行为此前未实现（导航孤儿）
+    const logo = document.querySelector(".topbar .logo");
+    if (logo) {
+      logo.addEventListener("click", function () {
+        window.location.hash = "#/home";
+        syncNavActive("home");
+        if (title) {
+          title.textContent = VIEW_TITLES.home || t("nav.homeTitle");
+        }
+      });
     }
     nav.addEventListener("click", function (event) {
       const button = event.target.closest(".nav-item");
@@ -451,6 +478,19 @@
     if (!sidebar) {
       return;
     }
+    // AR-06（REQ-20261109-01）：侧栏项现在带 role=link + tabindex=0，
+    // 但非原生 <a> 的 Enter/Space 不会自动触发 click —— 这里补键盘委托。
+    sidebar.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const item = event.target.closest(".sidebar-item");
+      if (!item) {
+        return;
+      }
+      event.preventDefault();
+      item.click();
+    });
     sidebar.addEventListener("click", function (event) {
       const item = event.target.closest(".sidebar-item");
       if (!item) {
@@ -463,6 +503,10 @@
           // W-03：自选分组树节点带 data-group → 进入自选页并预过滤该市场
           const group = item.getAttribute("data-group");
           if (target) {
+            // AR-06：点击立即反馈选中态（hash 路由随后会再次统一同步，双保险）
+            document.querySelectorAll(".sidebar-item").forEach(function (node) {
+              node.classList.toggle("active", node === item);
+            });
             window.location.hash = "#/" + target + (group ? "?group=" + encodeURIComponent(group) : "");
           }
           return;

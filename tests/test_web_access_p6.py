@@ -125,48 +125,58 @@ def test_access_endpoint_includes_public_block():
 def test_auth_response_disabled_redirects_home(monkeypatch):
     """未配置口令时 /auth 直接回首页，不弹登录页（本机单用户零打扰）。"""
     monkeypatch.delenv("OPENBB_ACCESS_PASSWORD", raising=False)
-    from backend.app.core import access_middleware
+    from fastapi.testclient import TestClient
 
-    resp = access_middleware.auth_response("")
+    from backend.app.main import create_app
+
+    client = TestClient(create_app())
+    resp = client.get("/auth", follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["location"] == "/"
 
 
 def test_auth_response_without_token_serves_login_page(monkeypatch):
-    """配置了口令但未带 token 时返回登录页（200 HTML，含口令输入框）。"""
-    from pathlib import Path
-
+    """配置了口令但未带 token 时返回登录页（200 HTML，POST 表单）。"""
     monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
-    from backend.app.core import access_middleware
+    from fastapi.testclient import TestClient
 
-    resp = access_middleware.auth_response("")
+    from backend.app.main import create_app
+
+    client = TestClient(create_app())
+    resp = client.get("/auth", follow_redirects=False)
     assert resp.status_code == 200
-    assert "text/html" in resp.media_type
-    html = Path(resp.path).read_text(encoding="utf-8")
-    assert "需要访问口令" in html
-    assert 'name="token"' in html
+    assert "需要访问口令" in resp.text
+    assert 'name="token"' in resp.text
+    assert 'method="post"' in resp.text  # AR-02：口令不进 URL
 
 
 def test_auth_response_correct_token_sets_cookie(monkeypatch):
-    """口令正确：302 回首页并下发 30 天 HttpOnly Cookie。"""
+    """口令正确：302 回首页并下发 7 天 HttpOnly 随机会话 Cookie（≠口令原文）。"""
     monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
-    from backend.app.core import access_middleware
+    from fastapi.testclient import TestClient
 
-    resp = access_middleware.auth_response("testpass123")
+    from backend.app.main import create_app
+
+    client = TestClient(create_app())
+    resp = client.get("/auth", params={"token": "testpass123"}, follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["location"] == "/"
     cookie = resp.headers["set-cookie"]
-    assert "access_token=testpass123" in cookie
+    assert "openbb_session=" in cookie  # AR-02：Cookie 名已改随机会话
+    assert "testpass123" not in cookie.split("openbb_session=")[1].split(";")[0]
     assert "HttpOnly" in cookie
-    assert "Max-Age=2592000" in cookie
+    assert "Max-Age=604800" in cookie  # AR-02：30 天 → 7 天
 
 
 def test_auth_response_wrong_token_redirects_error(monkeypatch):
     """口令错误：回登录页错误分支（302），不以 401 JSON 暴露口令正误细节。"""
     monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "testpass123")
-    from backend.app.core import access_middleware
+    from fastapi.testclient import TestClient
 
-    resp = access_middleware.auth_response("wrong-token")
+    from backend.app.main import create_app
+
+    client = TestClient(create_app())
+    resp = client.get("/auth", params={"token": "wrong-token"}, follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["location"] == "/auth?error=1"
 

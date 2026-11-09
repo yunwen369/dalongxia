@@ -2490,6 +2490,8 @@
       tree.body.appendChild(el("div", "sidebar-heading", group));
       groups[group].forEach(function (dash) {
         var item = el("div", "sidebar-item" + (dash.id === state.activeId ? " active" : ""), dash.name);
+        item.setAttribute("role", "link");
+        item.setAttribute("tabindex", "0");
         item.addEventListener("click", function () {
           state.activeId = dash.id;
           saveState(true);
@@ -2999,6 +3001,8 @@
         }
         var item = el("li", "sidebar-item" + (dash.id === state.activeId ? " active" : ""),
           dash.name + (dash.id === state.activeId ? t("sidebar.current") : ""));
+        item.setAttribute("role", "link");
+        item.setAttribute("tabindex", "0");
         item.setAttribute("data-action", "dashboard");
         item.setAttribute("data-dash-id", dash.id);
         host.appendChild(item);

@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from backend.app import config
@@ -32,6 +34,15 @@ from backend.app.datasource import screener as screener_module
 from backend.app.datasource import tencent
 from backend.app.datasource import watchlist as watchlist_module
 from backend.app.datasource import yangjibao as yangjibao_module
+
+# REQ-20261109-01 批次发现（全套修复的一半）：部署环境可能 setx 了
+# OPENBB_ACCESS_PASSWORD（公网访问口令），pytest 进程继承后——
+# ① middleware 在全部单测生效 → 401/429 假失败（实测 226 failed）；
+# ② 测试模块顶层 `client = TestClient(create_app())` 在 import 时刻按
+#    「口令已启用」冻结 app 形态（openapi_url=None）→ 契约对账拿空 schema。
+# conftest 在 pytest 启动早期加载、先于所有测试模块 import，此处直接清环境；
+# autouse fixture 再逐用例兜底（防测试中途改环境）。
+os.environ.pop("OPENBB_ACCESS_PASSWORD", None)
 
 
 def _reset_process_state() -> None:
@@ -63,6 +74,12 @@ def isolate_process_state(monkeypatch, tmp_path):
     Yields:
         None: 用例执行期间的隔离环境。
     """
+    # REQ-20261109-01 批次发现：部署环境可能 setx 了 OPENBB_ACCESS_PASSWORD
+    # （公网访问口令），pytest 进程继承后中间件在全部单测中生效 → 大面积
+    # 401/429 假失败（实测 226 failed）。测试基线统一为「未配置口令」，
+    # 需要口令场景的用例（test_access_middleware_p5）自行 setenv 覆盖。
+    monkeypatch.delenv("OPENBB_ACCESS_PASSWORD", raising=False)
+
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(config, "CACHE_DIR", cache_dir)
