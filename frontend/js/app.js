@@ -527,11 +527,8 @@
         closeCopilot();
         return;
       }
-      if (event.key === "F5") {
-        // 拦截浏览器刷新，改为刷新当前视图数据（P2-03）
-        event.preventDefault();
-        refreshCurrentView();
-      }
+      // F5 不再拦截（REQ-20261109-01 AR-03）：恢复浏览器原生刷新——
+      // 劫持刷新会导致前端卡死/版本更新残留旧脚本时失去自救手段；工具栏「刷新」按钮承担数据刷新职责。
     });
   }
 

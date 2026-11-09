@@ -294,12 +294,18 @@ def create_app() -> FastAPI:
     Returns:
         FastAPI: 已挂载路由、异常处理器与静态前端的应用实例。
     """
+    # AR-14/1c 安全收敛：启用访问口令（远程可达）时禁用 /docs 与 /openapi.json，
+    # 不对外暴露 API schema 明细；本机未启用口令时保持开发态可用。
+    from backend.app.core import access_middleware
+
+    _docs_enabled = not access_middleware.is_enabled()
     application = FastAPI(
         title=config.APP_NAME,
         version=config.APP_VERSION,
         description="本地投研工作台 API（阶段 1：环境与工程初始化）",
-        docs_url="/docs",
+        docs_url="/docs" if _docs_enabled else None,
         redoc_url=None,
+        openapi_url="/openapi.json" if _docs_enabled else None,
     )
 
     application.add_exception_handler(StarletteHTTPException, _http_exception_handler)
@@ -307,9 +313,7 @@ def create_app() -> FastAPI:
     application.add_exception_handler(Exception, _unhandled_exception_handler)
 
     # P5 访问口令中间件：未配置 OPENBB_ACCESS_PASSWORD 时透传（本地单用户零打扰）
-    from backend.app.core.access_middleware import AccessPasswordMiddleware
-
-    application.add_middleware(AccessPasswordMiddleware)
+    application.add_middleware(access_middleware.AccessPasswordMiddleware)
 
     # API 必须先于根路径静态挂载注册，保证 /api/* 不被 StaticFiles 截获
     application.include_router(system.router)
@@ -375,11 +379,13 @@ def create_app() -> FastAPI:
 
     # v2.1.0 网页化：URL 口令登录入口。必须早于 mount("/")，否则会被 StaticFiles 截获
     # 当成「不存在的静态文件」而 404。三个分支见 access_middleware.auth_response。
+    # AR-02（REQ-20261109-01）：GET token 兑换随机 session Cookie；POST 表单登录口令不进 URL。
     @application.get("/auth", include_in_schema=False)
-    def _auth_entry(token: str = ""):
-        """口令登录入口：无 token 给登录页，token 正确则写 Cookie 并回首页。
+    def _auth_entry(request: Request, token: str = ""):
+        """口令登录入口：无 token 给登录页，token 正确则兑换 session Cookie 并回首页。
 
         Args:
+            request: 请求（用于 HTTPS 判定 Cookie Secure 标志）。
             token: URL 查询参数中的访问口令，可省略。
 
         Returns:
@@ -387,7 +393,35 @@ def create_app() -> FastAPI:
         """
         from backend.app.core.access_middleware import auth_response
 
-        return auth_response(token)
+        return auth_response(request, token)
+
+    @application.post("/auth", include_in_schema=False)
+    async def _auth_post(request: Request):
+        """口令表单登录（POST，口令不进 URL）：成功发 session Cookie 并 303 回首页。
+
+        Args:
+            request: 请求（表单字段 ``token``）。
+
+        Returns:
+            Response: 303 重定向（成功带 Cookie / 失败回错误提示）。
+        """
+        from backend.app.core.access_middleware import post_auth_response
+
+        return await post_auth_response(request)
+
+    @application.get("/auth/logout", include_in_schema=False)
+    def _auth_logout(request: Request):
+        """主动登出：吊销当前会话并清除 Cookie，回登录页。
+
+        Args:
+            request: 请求（读取待吊销的会话 id）。
+
+        Returns:
+            Response: 302 → /auth。
+        """
+        from backend.app.core.access_middleware import logout_response
+
+        return logout_response(request)
 
     # 单端口同源托管：/ 返回 index.html，其余静态资源按路径查找
     application.mount(

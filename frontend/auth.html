@@ -47,8 +47,9 @@
   <div class="card">
     <div class="brand"><i class="dot"></i><span>OPENBB 中文投研工作台</span></div>
     <h1>需要访问口令</h1>
-    <p>这是一台本地运行的投研工作台。输入口令后，本浏览器 30 天内免输入。</p>
-    <form method="get" action="/auth">
+    <p>这是一台本地运行的投研工作台。输入口令后，本浏览器 7 天内免输入。</p>
+    <!-- AR-02（REQ-20261109-01）：改 POST 提交，口令不进 URL/浏览器历史；成功后 Cookie 为随机会话而非口令原文 -->
+    <form method="post" action="/auth">
       <label for="token">访问口令</label>
       <input id="token" type="password" name="token" placeholder="请输入口令"
              autofocus autocomplete="current-password" required>
@@ -58,7 +59,7 @@
     <div class="hint">忘记口令：在本机执行 <code>setx OPENBB_ACCESS_PASSWORD 新口令</code> 后重启工作台。</div>
   </div>
   <script>
-    // 服务端校验失败会 302 回 /auth?error=1，这里据此显示错误提示
+    // 服务端校验失败会 303 回 /auth?error=1，这里据此显示错误提示
     if (location.search.indexOf("error=1") > -1) {
       document.getElementById("err").classList.add("on");
       document.getElementById("token").value = "";

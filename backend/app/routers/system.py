@@ -20,11 +20,11 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 from fastapi.responses import FileResponse
 
 from backend.app import config
-from backend.app.core import cache, capabilities, public_tunnel, user_prefs, v8_guard, web_access
+from backend.app.core import access_middleware, cache, capabilities, public_tunnel, user_prefs, v8_guard, web_access
 from backend.app.core.errors import ErrorCode, api_error, ok
 from backend.app.datasource import utils
 
@@ -81,16 +81,31 @@ def _northbound_status() -> Dict[str, Any]:
 
 
 @router.get("/health")
-def health() -> Dict[str, Any]:
-    """健康检查接口。
+def health(request: Request) -> Dict[str, Any]:
+    """健康检查接口（AR-14 分级收敛）。
+
+    匿名请求（未鉴权）仅返回最小存活字段，不暴露 Python 版本、监听地址、
+    数据源明细等指纹信息（openbb-review #12：/api/health 无鉴权即返回明细）；
+    已鉴权请求（登录后的前端/本机未启用口令）返回完整诊断字段，行为与
+    修复前一致——设置页「服务健康」「关于」卡不受影响。
+
+    Args:
+        request: 请求（用于判定是否已鉴权）。
 
     Returns:
         Dict[str, Any]: {"data": {build, app, 数据源状态, v8 引擎状态, ...}, "error": null}
     """
-    ai_config = config.load_ai_config()
     data = {
         "build": config.BUILD_TAG,
         "app": {"name": config.APP_NAME, "version": config.APP_VERSION},
+        "status": "ok",
+        "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),
+    }
+    # 未鉴权：到此为止（最小存活集）；已鉴权/未启用口令：补全诊断明细
+    if not access_middleware.is_authed_request(request):
+        return ok(data)
+    ai_config = config.load_ai_config()
+    data.update({
         "python": platform.python_version(),
         "host": config.HOST,
         "port": config.PORT,
@@ -104,8 +119,7 @@ def health() -> Dict[str, Any]:
         "northbound": _northbound_status(),
         # 仅暴露是否已配置与来源，绝不返回密钥内容
         "ai": {"configured": ai_config.configured, "source": ai_config.source},
-        "server_time": utils.bj_now_aware().isoformat(timespec="seconds"),
-    }
+    })
     return ok(data)
 
 

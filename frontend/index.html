@@ -5,21 +5,53 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenBB 中文投研工作台</title>
   <link rel="icon" href="favicon.ico" type="image/x-icon">
-  <!-- v2.1.0 网页化：远端访问口令兜底 —— 任一 API 返回 401/429 即跳 /auth 登录页。
+  <!-- v2.1.0 网页化：远端访问口令兜底 —— API 返回 401 即跳 /auth 登录页。
        必须同步执行且早于各页面脚本，故不加 defer。未配置口令时不触发。
-       429 也跳转：首次加载并发请求全部 401 会触发同 IP 失败节流（≥10 次/60s），
-       后续请求全返回 429；若只拦截 401，用户会卡在满屏「加载失败」无法到达登录页。 -->
+       AR-14（REQ-20261109-01）拆分归因：429=同 IP 失败节流（≥10 次/60s），不是未登录——
+       改为指数退避自动重试（0.8s→1.6s→3.2s 共 3 次）并顶部提示，不再误跳登录页；
+       服务端已改为「未登录访问 / 直接 302 /auth」，首次加载的并发 401 已被 302 前置消除。 -->
   <script>
     (function () {
       var rawFetch = window.fetch;
+      // 顶部提示条（429 场景），避免用户卡在满屏加载失败无解释
+      function showRetryHint() {
+        var bar = document.getElementById("openbb-429-hint");
+        if (bar) { bar.hidden = false; return; }
+        bar = document.createElement("div");
+        bar.id = "openbb-429-hint";
+        bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;" +
+          "padding:6px 14px;font:12px/1.6 sans-serif;color:#8a6d00;background:#fff8e1;" +
+          "border-bottom:1px solid #e6c84a;text-align:center;";
+        bar.textContent = "请求过于频繁（失败节流），正在自动重试……请稍候，不要反复刷新";
+        (document.body || document.documentElement).appendChild(bar);
+      }
+      function hideRetryHint() {
+        var bar = document.getElementById("openbb-429-hint");
+        if (bar) { bar.hidden = true; }
+      }
       window.fetch = function () {
-        return rawFetch.apply(this, arguments).then(function (resp) {
-          if ((resp.status === 401 || resp.status === 429) && !window.__openbbAuthRedirect) {
-            window.__openbbAuthRedirect = true;
-            window.location.replace("/auth");
-          }
-          return resp;
-        });
+        var args = arguments;
+        function attempt(remain, delayMs) {
+          return rawFetch.apply(this, args).then(function (resp) {
+            if (resp.status === 401 && !window.__openbbAuthRedirect) {
+              window.__openbbAuthRedirect = true;
+              window.location.replace("/auth");
+              return resp;
+            }
+            if (resp.status === 429 && remain > 0) {
+              showRetryHint();
+              return new Promise(function (resolve) {
+                setTimeout(function () {
+                  attempt(remain - 1, delayMs * 2).then(resolve);
+                }, delayMs);
+              });
+            }
+            if (resp.status !== 429) { hideRetryHint(); }
+            return resp;
+          });
+        }
+        // 指数退避：0.8s / 1.6s / 3.2s 共 3 次重试
+        return attempt(3, 800);
       };
     })();
   </script>

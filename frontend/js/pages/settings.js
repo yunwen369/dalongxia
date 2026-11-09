@@ -701,6 +701,15 @@
       refreshBtn.type = "button";
       refreshBtn.addEventListener("click", function () { paintSettingsAccess(); });
       body.appendChild(refreshBtn);
+      // AR-02（REQ-20261109-01）：口令启用时提供主动登出（吊销当前会话 Cookie → 登录页）
+      if (data.password_required) {
+        var logoutBtn = el("button", "pg-btn", t("set.access.logout"));
+        logoutBtn.type = "button";
+        logoutBtn.addEventListener("click", function () {
+          window.location.href = "/auth/logout";
+        });
+        body.appendChild(logoutBtn);
+      }
       body.setAttribute("data-state", "default");
     }).catch(function (error) {
       P.setError(body, error.message || t("set.access.fail"), paintSettingsAccess);

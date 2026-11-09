@@ -807,6 +807,7 @@
     "set.access.onlyLocal": "当前仅本机可访问。要让手机/平板访问，请以 --lan 参数启动（或设环境变量 OPENBB_HOST=0.0.0.0）后重启程序。",
     "set.access.passwordOn": "访问口令：已启用 —— 远程设备首次访问需输入口令",
     "set.access.passwordOff": "访问口令：未启用 —— 公网或公共 Wi-Fi 下建议先设 OPENBB_ACCESS_PASSWORD",
+    "set.access.logout": "登出本浏览器（吊销 7 天会话）",
     "set.access.scanHint": "手机扫码即可打开同一应用（与电脑看到的是同一份数据）",
     "set.access.copy": "复制地址",
     "set.access.copied": "地址已复制",
