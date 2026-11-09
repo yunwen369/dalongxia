@@ -11,9 +11,43 @@ ashare 的 ``_default_range`` 与 sector 的 ``_default_kline_range``——
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
+from backend.app.core.errors import NonRetryableError
 from backend.app.datasource import utils
+
+# 确定性网络失效异常类名：这类异常重试结果必然相同，直接降级不重试。
+_DETERMINISTIC_NET_ERRORS = (
+    "ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected",
+)
+
+
+def call_akshare(func: Callable[[], Any], *, channel: str = "") -> Any:
+    """统一包装 akshare 调用：确定性网络失效直接降级。
+
+    抽自 news/overseas/sector/stock 四处逐字相同的 ``_call``（P1 收敛）。
+    各源差异仅在错误消息措辞，通过 ``channel`` 参数保留。
+
+    Args:
+        func: 待执行的无参取数函数。
+        channel: 通道名（可选）。为空时消息为「上游通道不可用：<异常类名>」；
+            非空时为「<channel>不可用（<异常类名>），切换备源」。
+
+    Returns:
+        Any: 结果原样透传（类型由 loader/func 约定）。
+
+    Raises:
+        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
+    """
+    try:
+        return func()
+    except Exception as exc:  # noqa: BLE001
+        name = type(exc).__name__
+        if name in _DETERMINISTIC_NET_ERRORS:
+            message = (f"{channel}不可用（{name}），切换备源" if channel
+                       else f"上游通道不可用：{name}")
+            raise NonRetryableError(message) from exc
+        raise
 
 
 def to_float(value: Any) -> Optional[float]:

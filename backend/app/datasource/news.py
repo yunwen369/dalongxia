@@ -30,6 +30,7 @@ netfix.apply_netfix()
 import akshare as ak  # noqa: E402
 
 from backend.app.datasource import utils  # noqa: E402
+from backend.app.datasource.common import call_akshare as _common_call_akshare  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -40,26 +41,8 @@ BOARD_TREE_VERSION = "20261020"
 _TITLE_NOISE = re.compile(r"[【】\[\]（）()\s　:：,，。.、!！?？\"'“”‘’|/\\-]+")
 
 
-def _call(func) -> Any:
-    """统一包装 akshare 调用：确定性网络失效直接降级。
-
-    Args:
-        func: 待执行的无参取数函数。
-
-    Returns:
-        Any: 结果原样透传（类型由 loader/func 约定）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    try:
-        return func()
-    except Exception as exc:  # noqa: BLE001
-        name = type(exc).__name__
-        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
-            raise NonRetryableError(f"上游通道不可用：{name}") from exc
-        raise
-
+# P1 收敛：_call 统一委托 common.call_akshare（原 news/overseas/sector/stock 四处同体副本）。
+_call = _common_call_akshare
 
 def _call_ths(func) -> Any:
     """同花顺/财联社 V8 类调用入口：进程级互斥 + 代理错误分类。

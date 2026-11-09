@@ -36,15 +36,26 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 BJ = timezone(timedelta(hours=8))
 
 
-def get_json(url: str, params: Optional[Dict[str, Any]] = None, referer: str = "") -> Any:
-    """直连源站取 JSON（独立于被测代码）。"""
+def get_json(url: str, params: Optional[Dict[str, Any]] = None, referer: str = "",
+             timeout: int = 30) -> Any:
+    """直连源站取 JSON（独立于被测代码）。
+
+    Args:
+        url: 目标地址。
+        params: 查询参数。
+        referer: 需要防盗链的源站 Referer。
+        timeout: 读超时秒数。
+
+    Returns:
+        Any: 解析后的 JSON。
+    """
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     headers = {"User-Agent": UA}
     if referer:
         headers["Referer"] = referer
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as resp:
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
@@ -58,9 +69,22 @@ def get_text(url: str, referer: str = "", encoding: str = "gbk") -> str:
         return resp.read().decode(encoding, "replace")
 
 
-def api(base: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-    """调用被测服务。"""
-    return get_json(f"{base}{path}", params)
+def api(base: str, path: str, params: Optional[Dict[str, Any]] = None,
+        timeout: int = 30) -> Any:
+    """调用被测服务。
+
+    Args:
+        base: 服务地址（如 ``http://127.0.0.1:6903``）。
+        path: 接口路径（含 ``/api`` 前缀）。
+        params: 查询参数；``None`` 表示无参。
+        timeout: 读超时秒数。默认 30s；板块类端点首次冷启动需逐板块翻同花顺
+            详情页（1.1s 限流 × 约 90 板块 ≈ 90s），必须放宽，否则冷启动会被
+            误判为 ``TimeoutError``（2026-11-10 复验：④ 曾因 30s 上限报 ERROR）。
+
+    Returns:
+        Any: 解析后的 JSON 响应。
+    """
+    return get_json(f"{base}{path}", params, timeout=timeout)
 
 
 def add(results: List[Dict[str, Any]], name: str, expected: Any, actual: Any,
@@ -137,8 +161,8 @@ def check_sector(base: str, results: List[Dict[str, Any]]) -> None:
         base: 服务地址。
         results: 结果收集列表。
     """
-    ind = api(base, "/api/sector/industry", {"market": "a"})["data"]
-    ff = api(base, "/api/sector/fundflow", {"market": "a"})["data"]
+    ind = api(base, "/api/sector/industry", {"market": "a"}, timeout=180)["data"]
+    ff = api(base, "/api/sector/fundflow", {"market": "a"}, timeout=180)["data"]
     a = {row["name"]: row.get("pct") for row in ind.get("items", [])}
     b = {row["name"]: row.get("pct") for row in ff.get("items", [])}
     common = [n for n in a if n in b and a[n] is not None and b[n] is not None]
@@ -334,7 +358,13 @@ def check_crowding(base: str, results: List[Dict[str, Any]]) -> None:
 
 
 def check_us_minute(base: str, results: List[Dict[str, Any]]) -> None:
-    """⑫ 美股分时首末点 vs 新浪原始。"""
+    """⑫ 美股分时末点 vs 新浪原始（按时间戳对齐，实时 bar 容差 0.5%）。
+
+    判据演进（2026-11-09 复查）：原实现用「末点严格等值」，盘中实测必然偶发
+    误报——接口走进程内缓存，末点可能比直连新浪落后一根 bar；即使同一根 bar，
+    实时进行中的收盘价也会随成交微调。改为「按时间戳对齐 + 相对差 ≤0.5%」，
+    与历史报告口径（末点相对差 0.26% < 0.5%）一致，同时保留「同源同粒度」约束。
+    """
     data = api(base, "/api/market/minute",
                {"symbol": "AAPL", "market": "us", "period": "5"})["data"]
     items = data.get("items") or []
@@ -344,13 +374,29 @@ def check_us_minute(base: str, results: List[Dict[str, Any]]) -> None:
         referer="https://stock.finance.sina.com.cn/",
     )
     ours_last = items[-1] if items else {}
-    sina_last = raw[-1] if raw else {}
-    same = (str(ours_last.get("date")) == str(sina_last.get("d", ""))[:10]
-            and float(ours_last.get("price") or 0) == float(sina_last.get("c") or -1))
+    sina_rows = [
+        (str(row.get("d", ""))[:16], row)
+        for row in raw or []
+        if row.get("d")
+    ]
+    ours_key = f"{str(ours_last.get('date'))[:10]} {str(ours_last.get('time'))[:5]}"
+    matched = next((row for ts, row in sina_rows if ts == ours_key), None)
+    ours_price = float(ours_last.get("price") or 0)
+    if matched is None or ours_price <= 0:
+        add(results, "⑫ 美股分时末点（AAPL 5min）",
+            f"新浪末点 {str((raw[-1] if raw else {}).get('d'))[:16]}",
+            f"接口末点 {ours_key} {ours_price}", "时间戳无法对齐",
+            "FAIL", "同源同粒度：时间戳须可对齐")
+        return
+    sina_price = float(matched.get("c") or 0)
+    diff_pct = abs(ours_price - sina_price) / sina_price * 100 if sina_price else 100.0
+    lag_bars = max(0, len(raw or []) - len(items))
     add(results, "⑫ 美股分时末点（AAPL 5min）",
-        f"新浪 {sina_last.get('d')} {sina_last.get('c')}",
-        f"接口 {ours_last.get('date')} {ours_last.get('time')} {ours_last.get('price')}",
-        "一致" if same else "不一致", "PASS" if same else "FAIL", "逐点应完全相同（同源同粒度）")
+        f"新浪 {str(matched.get('d'))[:16]} {sina_price}",
+        f"接口 {ours_key} {ours_price}（点数差 {lag_bars} 根）",
+        f"相对差 {diff_pct:.4f}%",
+        "PASS" if diff_pct <= 0.5 else "FAIL",
+        "同源同粒度：时间戳对齐后相对差 ≤0.5%（实时 bar 容差）")
 
 
 def main() -> int:

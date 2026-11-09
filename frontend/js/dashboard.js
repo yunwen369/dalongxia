@@ -875,7 +875,13 @@
       var chipClass = label === t("dashboard.sentiment.up") ? "chip up"
         : label === t("dashboard.sentiment.down") ? "chip down" : "chip";
       head.appendChild(el("span", chipClass, label || t("dashboard.sentiment.neutral")));
-      head.appendChild(el("span", "pg-feed-score", L().num(sentiment.score, 4)));
+      // AR-21（2026-11-09 复查）：0 / 极小值（4 位小数展示为 0.0000）显示「未评分」，
+      // 不把缺失值伪装成有效结论——与 pages/news.js 同一判据。
+      var rawScore = Number(sentiment.score);
+      var hasScore = sentiment.score !== undefined && sentiment.score !== null
+        && !Number.isNaN(rawScore) && Math.abs(rawScore) >= 0.00005;
+      head.appendChild(el("span", "pg-feed-score",
+        hasScore ? L().num(rawScore, 4) : t("news.scoreMissing")));
       head.appendChild(el("span", "pg-spacer"));
       head.appendChild(el("span", "pg-news-time", L().datetime(item.time)));
       row.appendChild(head);

@@ -183,6 +183,19 @@ def main() -> None:
         cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": CONSOLE_CAPTURE})
         set_viewport(cdp, 1366, 768)
 
+        # 就绪闸门（2026-11-10 复验补修）：先打开首页并确认标题已渲染。
+        # 冷启动时 4s 可能不够，此前会一路跑出「0 错误但标题全空」的假绿结果。
+        ready = False
+        for _ in range(12):
+            cdp.call("Page.navigate", {"url": f"{args.base_url}/#/home"})
+            time.sleep(2)
+            probe = eval_js(cdp, "(document.getElementById('page-title')||{}).textContent||''")
+            if probe and str(probe).strip():
+                ready = True
+                break
+        if not ready:
+            raise RuntimeError("浏览器未就绪：首页标题为空，判定为实例异常（不作 0 错误结论）")
+
         results: list[dict] = []
         views = [v for v in args.views.split(",") if v]
 
@@ -200,6 +213,13 @@ def main() -> None:
                             "\"errs\": (window.__cb_errors||[]).map(function(e){return e.kind+':'+e.text.slice(0,160)})"
                             "})")
 
+            # 空页兜底（2026-11-10 复验补修）：浏览器实例未就绪时标题为空、
+            # 容器取不到，此前会静默记 0 错误 —— 形成「假绿」。这里显式标记，
+            # 使「白屏」不可能被当成通过。
+            state_dict = state or {}
+            if not str(state_dict.get("title", "")).strip():
+                state_dict.setdefault("errs", []).append("BLANK_PAGE:页面标题为空（浏览器实例可能未就绪）")
+
             shot_path = os.path.join(args.shots, f"{view}.png")
             try:
                 shot = cdp.call("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
@@ -210,11 +230,11 @@ def main() -> None:
 
             results.append({
                 "view": view,
-                "title": (state or {}).get("title", ""),
-                "active_nav": (state or {}).get("nav", ""),
-                "container_children": (state or {}).get("container", 0),
-                "data_state": (state or {}).get("ds", ""),
-                "page_errors": (state or {}).get("errs", []),
+                "title": state_dict.get("title", ""),
+                "active_nav": state_dict.get("nav", ""),
+                "container_children": state_dict.get("container", 0),
+                "data_state": state_dict.get("ds", ""),
+                "page_errors": state_dict.get("errs", []),
                 "cdp_runtime_errors": len(runtime_errs),
                 "screenshot": shot_path,
             })

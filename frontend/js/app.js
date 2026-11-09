@@ -42,14 +42,15 @@
     yjb: t("nav.yjbHoldings"),
     connectors: t("nav.connectors"),
     settings: t("nav.settings"),
-    // 第十轮 P1 新 IA
-    today: "今日研判",
-    market: "市场概览",
-    fin: "财报摘要",
-    ann: "公告库 · 正文",
-    mgr: "经理画像",
-    tools: "工具",
-    cand: "候选池"
+    // 第十轮 P1 新 IA（2026-11-10 复验补修：改用 i18n 键，与其余条目同口径，
+    // 避免中文硬编码绕过词条字典；键值与 index.html 侧栏 data-i18n 一致）
+    today: t("nav.today"),
+    market: t("nav.marketOverview"),
+    fin: t("nav.finSummary"),
+    ann: t("nav.annLib"),
+    mgr: t("nav.mgr"),
+    tools: t("nav.tools"),
+    cand: t("nav.cand")
   };
 
   let toastTimer = null;
@@ -273,7 +274,14 @@
    * 顶栏高亮 / 侧栏选中 / 面包屑 / 折叠展开四处全部由本表派生，新增视图只改这一处。
    */
   const NAV_TREE = {
-    home: { group: "", sidebar: "overview", crumb: [["nav.marketOverview", null]] },
+    // 2026-11-10 复验补修（审查报告 #4 建议 2）：首页此前 group="" → 顶栏 8 项无一高亮，
+    // 「顶栏 / 侧栏 / 面包屑 / 标题四处一致」不成立。按报告建议归入「仪表板」组（总览落地组）。
+    home: { group: "dashboard", sidebar: "overview", crumb: [["nav.marketOverview", null]] },
+    // 2026-11-10 复验补修：第十轮 P1 新 IA 的 7 个视图此前未登记 NAV_TREE，
+    // 结果面包屑整条缺失（renderCrumb 取不到链）+ 顶栏无高亮，违反审查报告
+    // 第九节复核项 #4「任一子页面下顶栏 / 侧栏 / 面包屑三处 current 态一致」。
+    today: { group: "dashboard", sidebar: "overview", crumb: [["nav.marketOverview", "home"], ["nav.today", null]] },
+    market: { group: "market", sidebar: "market", crumb: [["nav.marketOverview", null]] },
     dashboard: { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["dashboard.mine", null]] },
     "dashboard-manage": { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["nav.dashboardManage", null]] },
     "widget-library": { group: "dashboard", sidebar: "overview", crumb: [["nav.dashboard", "dashboard"], ["sidebar.library", null]] },
@@ -281,6 +289,12 @@
     news: { group: "news", sidebar: "research", crumb: [["nav.newsGroup", "news"], ["nav.news", null]] },
     sectors: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.sectors", null]] },
     stock: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.stock", null]] },
+    // 2026-11-10 复验补修：投研分析组 4 页（财报摘要 / 公告库 / 工具 / 候选池）补入 NAV_TREE，
+    // 顶栏归「市场」组（与 stock / news 同组口径），侧栏归「投研分析」组。
+    fin: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.finSummary", null]] },
+    ann: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.annLib", null]] },
+    tools: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.tools", null]] },
+    cand: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.cand", null]] },
     charting: { group: "market", sidebar: "research", crumb: [["nav.market", "market"], ["nav.charting", null]] },
     "sector-val": { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.sectorVal", null]] },
     macro: { group: "market", sidebar: "market", crumb: [["nav.market", "market"], ["nav.macro", null]] },
@@ -292,7 +306,9 @@
     portfolio: { group: "portfolio", sidebar: "my", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.portfolio", null]] },
     fund: { group: "portfolio", sidebar: "market", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.fund", null]] },
     yjb: { group: "yjb", sidebar: "my", crumb: [["nav.yjb", "yjb"], ["nav.yjbHoldings", null]] },
-    // AR-07：提醒中心由铃铛直入，无父级语义 → 面包屑单层（消除「点系统却到设置」的错配）
+    // 2026-11-10 复验补修：经理画像页此前未登记（无面包屑 / 无顶栏高亮）
+    mgr: { group: "portfolio", sidebar: "my", crumb: [["nav.portfolioGroup", "portfolio"], ["nav.mgr", null]] },
+    // AR-08：提醒中心由铃铛直入，无父级语义 → 面包屑单层（消除「点系统却到设置」的错配）
     alerts: { group: "system", sidebar: "sys", crumb: [["nav.alerts", null]] },
     connectors: { group: "system", sidebar: "sys", crumb: [["nav.system", "settings"], ["nav.connectors", null]] },
     settings: { group: "system", sidebar: "sys", crumb: [["nav.system", "settings"], ["nav.settings", null]] }
@@ -396,7 +412,9 @@
         const target = item.getAttribute("data-view-target") || item.getAttribute("data-view");
         item.classList.toggle("active", !!target && target === view);
       });
-      // AR-15/C11：展开当前视图所属分组（写入折叠记忆，与 tree.js 手动折叠共存）
+      // AR-09/C11：展开当前视图所属分组。
+      // 只改 DOM 不写折叠记忆（2026-11-09 复查）：记忆仅由用户手动 toggle 写入，
+      // 否则首次进入会被路由预写成「全部展开」，tree.js 无法识别「无记忆」初态。
       const entry = NAV_TREE[view];
       if (entry && entry.sidebar) {
         const current = document.querySelector(
@@ -404,14 +422,6 @@
         );
         if (current && !current.open) {
           current.open = true;
-          try {
-            const raw = window.localStorage.getItem("openbb-sb-groups-v1");
-            const state = raw ? JSON.parse(raw) : {};
-            state[entry.sidebar] = true;
-            window.localStorage.setItem("openbb-sb-groups-v1", JSON.stringify(state));
-          } catch (error) {
-            // 隐私模式下忽略记忆写入，仅当前页展开
-          }
         }
       }
     }

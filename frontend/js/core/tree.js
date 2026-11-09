@@ -63,11 +63,24 @@
       return;
     }
     var state = loadState();
+    var hasMemory = Object.keys(state).length > 0;
     var groups = tree.querySelectorAll(".sb-group");
+    var currentGroup = null;
+    if (!hasMemory) {
+      // AR-09/C11（2026-11-09 复查）：首次进入只展开当前路由所在组，
+      // 避免 5 组 25 项全平铺弱化层级（openbb-review 第九节复核项）；
+      // 之后按用户手动折叠记忆（toggle 写入）恢复。
+      var view = (window.location.hash || "#/home").replace(/^#\/?/, "").split(/[?&]/)[0] || "home";
+      var active = tree.querySelector('.sidebar-item[data-view-target="' + view + '"]');
+      currentGroup = active ? active.closest(".sb-group") : null;
+    }
     Array.prototype.forEach.call(groups, function (group) {
       var name = group.getAttribute("data-group") || "";
-      if (name && Object.prototype.hasOwnProperty.call(state, name)) {
-        group.open = Boolean(state[name]);
+      if (hasMemory) {
+        // 有记忆：按记忆恢复，未记录的组视为用户已折叠
+        group.open = Object.prototype.hasOwnProperty.call(state, name) ? Boolean(state[name]) : false;
+      } else {
+        group.open = currentGroup ? group === currentGroup : name === "overview";
       }
       group.addEventListener("toggle", function () {
         if (!name) {

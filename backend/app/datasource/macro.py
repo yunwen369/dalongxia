@@ -90,16 +90,8 @@ def _parse_month(text: Any) -> Optional[str]:
     return None
 
 
-def _to_float(value: Any) -> Optional[float]:
-    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。
-
-    Args:
-        value: 待转换的原始值（数字/字符串/None）。
-
-    Returns:
-        Optional[float]: 转换结果；空值或不可转换返回 None，不补 0。
-    """
-    return _common_to_float(value)
+# P1 收敛：_to_float 统一委托 common.to_float（原 alerts/macro/valuation 薄包装）。
+_to_float = _common_to_float
 
 
 def _frame_rows(dataframe) -> List[Dict[str, Any]]:

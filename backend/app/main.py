@@ -176,7 +176,14 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
         JSONResponse: FastAPI 响应对象（统一错误体，中文文案且不泄露堆栈）。
     """
     if exc.status_code == 404:
-        message = "接口或页面不存在，请检查地址；接口清单请访问 /docs。"
+        # 2026-11-10 复验补修：启用访问口令时 /docs 与 /openapi.json 已由 create_app
+        # 禁用，404 文案不应再把用户指向不可用的路径（原文案恒提示「请访问 /docs」）。
+        # 延迟导入与 create_app 内保持同口径，避免模块级循环依赖。
+        from backend.app.core import access_middleware
+
+        message = "接口或页面不存在，请检查地址。"
+        if not access_middleware.is_enabled():
+            message = "接口或页面不存在，请检查地址；接口清单请访问 /docs。"
     elif exc.status_code == 405:
         message = "请求方法不被允许，请确认使用 GET 或 POST。"
     else:

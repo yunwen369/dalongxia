@@ -38,22 +38,8 @@ METRICS = [
 ]
 
 
-def _num(value: Any) -> Optional[float]:
-    """安全转 float。
-
-    Args:
-        value: 任意值。
-
-    Returns:
-        Optional[float]: 数值；无法转换返回 None。
-    """
-    try:
-        if value is None:
-            return None
-        number = float(value)
-        return number if number == number else None  # 过滤 NaN
-    except (TypeError, ValueError):
-        return None
+# P1 收敛：_num 统一委托 utils.to_float（原 peers/fund/moneyflow 等重复实现）。
+_num = utils.to_float
 
 
 def _yoy_index(periods: List[str], latest: int = 0) -> Optional[int]:

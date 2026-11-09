@@ -442,3 +442,21 @@ def test_docs_disabled_when_password_enabled(monkeypatch):
     client = TestClient(create_app())
     assert client.get("/docs").json()["error_code"] == "NOT_FOUND"
     assert client.get("/openapi.json").json()["error_code"] == "NOT_FOUND"
+    # 2026-11-10 复验补修：禁用态的 404 文案不得再把用户指向 /docs（该路径此时不存在）
+    detail = client.get("/docs").json()["error"]
+    assert "/docs" not in detail, f"禁用态文案仍指向 /docs：{detail}"
+
+
+def test_404_message_mentions_docs_only_when_enabled(monkeypatch):
+    """404 文案分支：未启用口令时提示 /docs，启用后不再提示（2026-11-10 补）。"""
+    from fastapi.testclient import TestClient
+
+    from backend.app.main import create_app
+
+    monkeypatch.delenv("OPENBB_ACCESS_PASSWORD", raising=False)
+    anon = TestClient(create_app()).get("/no-such-path").json()["error"]
+    assert "/docs" in anon, f"未启用口令时应提示接口清单位置：{anon}"
+
+    monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "secret123")
+    guarded = TestClient(create_app()).get("/no-such-path").json()["error"]
+    assert "/docs" not in guarded, f"启用口令后 /docs 已禁用，不应再提示：{guarded}"

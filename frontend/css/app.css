@@ -193,7 +193,7 @@ body {
 }
 
 .sidebar-item {
-  /* C11（AR-15）：子项缩进 22px 与分组标题（10px+底条）拉开层级 */
+  /* C11（AR-09）：子项缩进 22px 与分组标题（10px+底条）拉开层级 */
   padding: 8px 10px 8px 22px;
   border-radius: var(--radius-sm);
   color: var(--text-dim);
@@ -1515,12 +1515,18 @@ html[data-font="lg"] {
   background: rgba(0, 0, 0, 0.45);
 }
 
-@media (max-width: 768px) {
-  /* AR-01：解除桌面「最小窗口 1024」约束（app.css:18），否则整链被钉死在 1024 宽 */
+/* 2026-11-09 复查：1024×768 是设计最小窗口，但 Windows 下 1024 窗口的可视宽
+ * 只有约 1000（滚动条/窗口边框），body 的 min-width:1024 会把右侧「提醒」等
+ * 操作入口裁掉约 24px（report 第九节复核项「顶栏操作入口可见」）。
+ * ≤1100 起解除最小宽度，布局仍由下方各窄屏媒体查询接管。 */
+@media (max-width: 1100px) {
   html,
   body {
     min-width: 0;
   }
+}
+
+@media (max-width: 768px) {
 
   .menu-toggle {
     display: inline-flex;

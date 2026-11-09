@@ -471,7 +471,11 @@
       // AR-21（REQ-20261109-01）：分值为 0 / 缺失时如实显示「未评分」，
       // 不把缺失值伪装成「中性 0.0000」类有效结论；有分值才展示数值与强度
       const rawScore = Number(sentiment.score);
-      const hasScore = sentiment.score !== undefined && sentiment.score !== null && !Number.isNaN(rawScore) && rawScore !== 0;
+      // 2026-11-09 复查补强：按 4 位小数展示口径，|score| < 0.00005 四舍五入即
+      // 显示 0.0000，仍属「未评分」——否则页面会出现「分：0.0000 · 强」这类
+      // 把缺失值伪装成有效结论的卡片（openbb-review C7 残留）。
+      const hasScore = sentiment.score !== undefined && sentiment.score !== null
+        && !Number.isNaN(rawScore) && Math.abs(rawScore) >= 0.00005;
       head.appendChild(el("span", "pg-feed-score",
         hasScore ? t("news.scoreLabel") + fmt(rawScore, 4) + " · " + (sentiment.strength || t("news.weak")) : t("news.scoreMissing")));
       head.appendChild(el("span", "pg-spacer"));

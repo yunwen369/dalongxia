@@ -33,6 +33,7 @@ from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import ashare, tencent, utils
+from backend.app.datasource.common import call_akshare as common_call_akshare
 
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
@@ -54,50 +55,11 @@ NEGATIVE_WORDS = (
 )
 
 
-def _call(func) -> Any:
-    """统一包装 akshare 调用：确定性网络失效直接降级，不做无效重试。
-
-    Args:
-        func: 待执行的无参取数函数。
-
-    Returns:
-        Any: 结果原样透传（类型由 loader/func 约定）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    try:
-        return func()
-    except Exception as exc:  # noqa: BLE001
-        name = type(exc).__name__
-        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
-            raise NonRetryableError(f"上游通道不可用：{name}") from exc
-        raise
-
-
-def _num(value: Any) -> Optional[float]:
-    """安全转 float，空值返回 None（不补 0）。
-
-    Args:
-        value: 待处理值（类型由调用方约定）。
-
-    Returns:
-        float | None: 数值；无法解析时返回 None（不补 0）。
-    """
-    return utils.to_float(value)
-
-
-def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
-    """保留小数位。
-
-    Args:
-        value: 待处理数值。
-        digits: 保留小数位数。
-
-    Returns:
-        float | None: 数值；无法解析时返回 None（不补 0）。
-    """
-    return utils.round_or_none(value, digits)
+# P1 收敛：_call 统一委托 common.call_akshare（原 news/overseas/sector/stock 四处同体副本）；
+# _num / _round 统一委托 utils 唯一实现。保留模块级名字供本文件调用点使用。
+_call = common_call_akshare
+_num = utils.to_float
+_round = utils.round_or_none
 
 
 def _secucode(symbol: str) -> str:

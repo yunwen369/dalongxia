@@ -34,19 +34,8 @@ LHB_EMPTY_NOTE = "当日无龙虎榜披露（周末/盘前可能尚未更新）"
 LHB_RANGE_DAYS = 7
 
 
-def _num(value: Any) -> Optional[float]:
-    """安全转 float（NaN/空串返回 None）。
-
-    Args:
-        value: 原始值。
-
-    Returns:
-        Optional[float]: 数值或 None。
-    """
-    number = utils.to_float(value)
-    if number is None or number != number:  # NaN 自比较为 False
-        return None
-    return number
+# P1 收敛：_num 统一委托 utils.to_float（NaN/±Inf 已在 utils 内过滤）。
+_num = utils.to_float
 
 
 def _yi(value: Any, digits: int = 2) -> Optional[float]:

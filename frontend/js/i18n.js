@@ -14,7 +14,6 @@
   var dict = {
     // ---------- 应用与导航 ----------
     "app.name": "OpenBB 中文投研工作台",
-    "app.tagline": "本地投研 · 真实数据",
     "nav.home": "首页",
     "nav.dashboard": "仪表板",
     "nav.charting": "图表分析",

@@ -592,7 +592,7 @@
   color: #b77f3d;
 }
 
-/* ---------- 1024 断点适配（P0-05 / A-17） ---------- */
+/* ---------- ≤1200 窄屏适配（覆盖 1024×640 最小窗口；P0-05 / A-17） ---------- */
 @media (max-width: 1200px) {
   .pg-grid {
     grid-template-columns: repeat(48, 1fr);
@@ -613,7 +613,7 @@
     height: 260px;
   }
 
-  /* 1024 断点下四 pane 指标图适度压低，保持纵向不溢出 */
+  /* ≤1200 窄屏下四 pane 指标图适度压低，保持纵向不溢出 */
   .pg-chart.tall {
     height: 340px;
   }
@@ -885,7 +885,7 @@
 .fs-modal .m-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .fs-modal .m-link { color: var(--accent); font-size: var(--fs-aux); word-break: break-all; }
 
-/* 1024 断点：搜索框整行（与原型 @media 一致） */
+/* ≤1200 窄屏：搜索框整行（与原型 @media 一致） */
 @media (max-width: 1200px) {
   .fs-search-input { flex: 1 1 100%; }
 }

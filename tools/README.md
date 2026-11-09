@@ -2,11 +2,17 @@
 
 > 一次性脚本（verify_/diag_/reconcile_/阶段验收类）已归档至
 > `B_交付归档\03_测试报告\20261025_clean\tools_归档_一次性脚本\`（27 个，见其 README_归档说明.md）。
-> 本目录只留**跨轮次可复用**工具，共 18 个（下表为常用入口，其余为打包/发版/验收脚本）：
+> 本目录只留**跨轮次可复用**工具（按下表常用入口使用；打包/发版/验收脚本见 `build_and_gate.py`、
+> `release_gate.py`、`probe_endpoints.py`、`cross_validate.py`、`ui_clickthrough.py`）。
 
 | 脚本 | 用途 | 调用 |
 |---|---|---|
 | `check_i18n_keys.py` | i18n 键命中校验 | `python tools/check_i18n_keys.py` |
+| `check_css_theme_vars.py` | CSS 主题变量完整性（两主题齐备/禁背景色 fallback，AR-25） | `python tools/check_css_theme_vars.py` |
+| `check_comment_drift.py` | 注释漂移静态校验（断点数字/AR 编号/Logo 承诺，AR-26） | `python tools/check_comment_drift.py` |
+| `check_nav_tree.py` | **导航单一配置完整性**（侧栏视图全覆盖 NAV_TREE / 面包屑落点合法 / 顶栏分组合法 / 标题齐备，2026-11-10 新增） | `python tools/check_nav_tree.py` |
+| `nav_consistency_probe.py` | **导航三处一致动态探针**（逐侧栏视图读真实渲染的顶栏/侧栏/面包屑；审查报告 §九 #4） | `python tools/nav_consistency_probe.py --base <url> --out nav.json` |
+| `review_recheck.py` | **审查报告 §九 九项复核动态判定**（三视口×双主题 101 项：移动端/F5/四处一致/键盘/对比度/侧栏层级/卡片内容；原 `_ad_hoc` 脚本 2026-11-10 转正） | `python tools/review_recheck.py --base <url> --out <证据目录>` |
 | `comment_rate_check.py` | 注释率快查 | `python tools/comment_rate_check.py` |
 | `docstring_audit.py` | 注释率审计（出 JSON/MD） | `python tools/docstring_audit.py --out-json <p> --out-md <p>` |
 | `docstring_fill.py` | docstring 批量补齐（--dry-run/--apply/--js） | `python tools/docstring_fill.py --dry-run` |
@@ -19,4 +25,8 @@
 | `scan_ui_leaks.py` | UI 泄漏扫描 | `python tools/scan_ui_leaks.py` |
 | `stress_v8.py` | 同花顺 V8 并发回归 | `python tools/stress_v8.py -u` |
 | `yjb_scan.py` | 养基宝扫码助手 | `python tools/yjb_scan.py new\|poll\|status` |
-| `verify_frontier_fixes.py` | 通用 CDP harness（CDP/launch_chrome/page_ws/set_viewport 等） | 被 scan_ui_leaks 等取证脚本引用 |
+| `ui_clickthrough.py` | 通用 CDP harness（CDP/launch_chrome/page_ws/set_viewport/click_at/eval_js）+ 全页真实点击（含就绪闸门，白屏不再记 0 错误） | `python tools/ui_clickthrough.py --base-url http://127.0.0.1:6903` |
+| `probe_endpoints.py` | 端点全量探针（116 条，分类 DATA/EMPTY_OK/DEGRADED/SKIPPED） | `python tools/probe_endpoints.py --base <url> --out <json>` |
+| `cross_validate.py` | 双源交叉验证 12 项（报价/指数/K线/板块/资金流/净值/汇率/时区/拥挤度/美股分时） | `python tools/cross_validate.py --base <url> --out <json>` |
+| `release_gate.py` | 发版门禁（pyflakes + 全量 pytest + 端点扫描 + 界面资源四段） | `python tools/release_gate.py --artifact 正式环境 --port 6916` |
+| `build_and_gate.py` | 打包 + 版本三元派生（`sync_nsi()`）+ 门禁串联 | `python tools/build_and_gate.py` |

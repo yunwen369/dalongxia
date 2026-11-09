@@ -18,7 +18,7 @@
   // =============================================================
   var resizeTimer = null;
 
-  /** 窗口尺寸变化时重算所有图表尺寸（1024 断点不空白，P0-05）。 */
+  /** 窗口尺寸变化时重算所有图表尺寸（缩到 1024×640 最小窗口也不空白，P0-05）。 */
   function bindResize() {
     window.addEventListener("resize", function () {
       window.clearTimeout(resizeTimer);

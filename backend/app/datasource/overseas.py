@@ -24,6 +24,7 @@ from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import tencent, utils
+from backend.app.datasource.common import call_akshare as _common_call_akshare
 
 netfix.apply_netfix()
 import akshare as ak  # noqa: E402
@@ -34,8 +35,11 @@ logger = logging.getLogger(__name__)
 US_PREFIXES = ("105.", "106.", "107.")
 
 
+# P1 收敛：_call 统一委托 common.call_akshare（channel 保留原错误措辞）。
 def _call(func) -> Any:
     """统一包装 akshare 调用：本机 push2 系失败为确定性失效，直接降级。
+
+    P1 收敛：委托 common.call_akshare(channel="东财港美股通道")。
 
     Args:
         func: 待执行的无参取数函数。
@@ -46,13 +50,7 @@ def _call(func) -> Any:
     Raises:
         NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
     """
-    try:
-        return func()
-    except Exception as exc:  # noqa: BLE001
-        name = type(exc).__name__
-        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
-            raise NonRetryableError(f"东财港美股通道不可用（{name}），切换腾讯") from exc
-        raise
+    return _common_call_akshare(func, channel="东财港美股通道")
 
 
 def get_quote_em(symbol: str, market: str) -> Dict[str, Any]:

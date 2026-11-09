@@ -25,7 +25,6 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -35,6 +34,7 @@ from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.datasource import financial_report
+from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,9 @@ def is_configured() -> bool:
     return bool(ai.base_url and ai.model)
 
 
-def _now_text() -> str:
-    """北京时间文本。
+# P1 收敛：_now_text 统一委托 utils.now_text（北京时间，替代手写 datetime.now(UTC+8)）。
+_now_text = utils.now_text
 
-    Returns:
-        str: ``YYYY-MM-DD HH:MM:SS``。
-    """
-    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _key(market: str, code: str, title: str, pub_time: str) -> str:

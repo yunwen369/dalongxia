@@ -39,13 +39,8 @@ _PROBE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _PROBE_LOCK = threading.Lock()
 
 
-def _now_text() -> str:
-    """当前时间字符串（本地时区，秒级）。
-
-    Returns:
-        str: 形如 2026-10-24 00:30:00。
-    """
-    return utils.now_text()
+# P1 收敛：_now_text 统一委托 utils.now_text（北京时间口径）。
+_now_text = utils.now_text
 
 
 def _probe_cls() -> Tuple[bool, str]:

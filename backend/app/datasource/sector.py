@@ -33,12 +33,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app import config
 from backend.app.core import netfix
-from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import ashare, sina_flow, tencent, tencent_board, ths_http, utils
 from backend.app.datasource.common import default_range as _common_default_range
+from backend.app.datasource.common import call_akshare as _common_call_akshare
 
 # 关键顺序：证书/代理修复必须先于 akshare import（与 ashare.py 保持一致）
 netfix.apply_netfix()
@@ -58,28 +58,8 @@ OVERSEAS_REPRESENTATIVES: Dict[str, List[str]] = {
 }
 
 
-def _call(func) -> Any:
-    """统一包装 akshare 调用。
-
-    本机代理环境会让东财 push2 系抛 ProxyError，这类失败属确定性失效，
-    重试只会放大无效请求，因此直接降级到备源。
-
-    Args:
-        func: 待执行的无参取数函数。
-
-    Returns:
-        Any: 结果原样透传（类型由 loader/func 约定）。
-
-    Raises:
-        NonRetryableError: 确定性失效（不重试）时抛出，交由降级链切换下一源。
-    """
-    try:
-        return func()
-    except Exception as exc:  # noqa: BLE001 - 统一转译为可降级异常
-        name = type(exc).__name__
-        if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
-            raise NonRetryableError(f"上游通道不可用：{name}") from exc
-        raise
+# P1 收敛：_call 统一委托 common.call_akshare（原 sector/news/overseas/stock 四处同体副本）。
+_call = _common_call_akshare
 
 
 def _call_ths(func) -> Any:
@@ -98,29 +78,10 @@ def _call_ths(func) -> Any:
     return _call(guard_v8(func))
 
 
-def _num(value: Any) -> Optional[float]:
-    """安全转 float，None/空串/NaN 一律返回 None（空值不补 0）。
-
-    Args:
-        value: 待处理值（类型由调用方约定）。
-
-    Returns:
-        float | None: 数值；无法解析时返回 None（不补 0）。
-    """
-    return utils.to_float(value)
-
-
-def _round(value: Optional[float], digits: int = 4) -> Optional[float]:
-    """统一保留小数位，None 原样返回。
-
-    Args:
-        value: 待处理数值。
-        digits: 保留小数位数。
-
-    Returns:
-        float | None: 数值；无法解析时返回 None（不补 0）。
-    """
-    return utils.round_or_none(value, digits)
+# P1 收敛：以下两个私有工具函数原在 sector/news/overseas/stock/fund/moneyflow/peers
+# 中重复定义，现已统一委托 utils 的唯一实现。保留模块级名字供本文件调用点使用。
+_num = utils.to_float
+_round = utils.round_or_none
 
 
 def _maybe_zero_none(value: Any, threshold: float = 0.0) -> Optional[float]:

@@ -34,6 +34,10 @@ CALIBER = "经理画像 · 长表按基金代码定位后聚合（规模/最佳�
 def _to_float(value: Any) -> float | None:
     """安全转 float（空值/异常返回 None，不补 0）。
 
+    注意：本函数**不检查 NaN/±Inf**，与 common.to_float 的最严口径不同。
+    P1 收敛评估后保留原语义——基金经理任职年限等调用点依赖 NaN 透传后由
+    调用方自身过滤，收紧会改变既有输出（不回填 NaN 的约定）。收敛项记录在案。
+
     Args:
         value: 待转换的原始值（数字/字符串/None）。
 

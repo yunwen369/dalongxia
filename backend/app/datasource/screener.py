@@ -69,13 +69,9 @@ _ensure_netfix()
 import akshare as ak  # noqa: E402
 
 
-def _now_text() -> str:
-    """返回当前北京时间文本（禁止裸 date.today，时区口径收口）。
+# P1 收敛：_now_text 统一委托 utils.now_text（默认已取北京时间，禁止裸 date.today）。
+_now_text = utils.now_text
 
-    Returns:
-        str: ``YYYY-MM-DD HH:MM:SS``。
-    """
-    return utils.now_text(utils.bj_now())
 
 
 # =============================================================

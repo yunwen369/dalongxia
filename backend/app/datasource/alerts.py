@@ -59,13 +59,9 @@ _SLOW_TYPES = ("valuation", "crowding")
 _ANN_TYPES = ("announcement", "report_date", "subscription")
 
 
-def _now_text() -> str:
-    """返回当前北京时间文本。
+# P1 收敛：_now_text 统一委托 utils.now_text（默认已取北京时间）。
+_now_text = utils.now_text
 
-    Returns:
-        str: ``YYYY-MM-DD HH:MM:SS`` 格式的北京时间。
-    """
-    return utils.now_text(utils.bj_now())
 
 
 def _now_ts() -> float:
@@ -270,16 +266,8 @@ def update_rule(rule_id: str, **fields: Any) -> Dict[str, Any]:
     return target_rule
 
 
-def _to_float(value: Any) -> Optional[float]:
-    """安全转 float（第十轮 C17 收敛）：委托 ``common.to_float`` 唯一实现。
-
-    Args:
-        value: 待转换的原始值（数字/字符串/None）。
-
-    Returns:
-        Optional[float]: 转换结果；空值或不可转换返回 None，不补 0。
-    """
-    return _common_to_float(value)
+# P1 收敛：_to_float 统一委托 common.to_float（原 alerts/macro/valuation 薄包装）。
+_to_float = _common_to_float
 
 
 # =============================================================
