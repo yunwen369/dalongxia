@@ -49,8 +49,31 @@ INSTALL_DIR = FROZEN_DIR if (FROZEN_DIR / "OpenBB-CN.exe").exists() else PROJECT
 EXE = INSTALL_DIR / "OpenBB-CN.exe"
 CLOUDFLARED = INSTALL_DIR / "data" / "bin" / "cloudflared.exe"
 PORT = 6900
+# 单实例锁：用「绑定本地端口」充当互斥量（进程退出后操作系统自动释放，
+# 不会留下需要人工清理的僵尸锁文件）。多开守护会互相抢着起服务、抢着建隧道，
+# 实测表现为服务被反复杀掉又重启（2026-11-09 app.log 里 1 小时内 4 次重启）。
+LOCK_PORT = 6901
+_LOCK_SOCK: Optional[socket.socket] = None
 SHORTCUT_NAME = "OpenBB 工作台（公网）.url"
 URL_PATTERN = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
+
+
+def acquire_single_instance() -> bool:
+    """抢占单实例锁。
+
+    Returns:
+        bool: 抢到锁返回 True；已有实例在跑返回 False。
+    """
+    global _LOCK_SOCK
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", LOCK_PORT))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        return False
+    _LOCK_SOCK = sock  # 必须持有引用，否则被回收即释放
+    return True
 
 
 def log(message: str) -> None:
@@ -118,17 +141,21 @@ def start_server() -> Optional[subprocess.Popen]:
         Optional[subprocess.Popen]: 新起的服务进程；已在运行时返回 None。
     """
     if port_open(PORT):
-        log("6900 已在监听，复用现有服务")
+        # 端口在监听不等于可用：进程可能已卡死。这里给一次短探活，结果如实记日志。
+        if wait_health(timeout=5):
+            log("6900 已在监听且健康，复用现有服务")
+        else:
+            log("⚠ 6900 在监听但健康检查未通过，先复用观察")
         return None
     if not EXE.exists():
         log(f"✗ 未找到 {EXE}")
         return None
-    log(f"拉起服务：{EXE.name} --serve-only")
+    log(f"拉起服务：{EXE.name} --serve-only --lan")
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
     proc = subprocess.Popen(
-        [str(EXE), "--serve-only"],
+        [str(EXE), "--serve-only", "--lan"],
         cwd=str(INSTALL_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -247,6 +274,10 @@ def main() -> int:
     if sys.stdout is None:  # pythonw.exe 无控制台，日志落文件
         redirect_output_to_file()
 
+    if not acquire_single_instance():
+        log("✗ 已有守护实例在运行，本次退出（避免多实例互相抢服务与隧道）")
+        return 0
+
     password = (os.environ.get("OPENBB_ACCESS_PASSWORD") or "").strip()
     if len(password) < 4:
         log("✗ 未设置 OPENBB_ACCESS_PASSWORD（公网必须有口令）。先执行：")
@@ -288,6 +319,15 @@ def main() -> int:
         return 0
 
     # 常驻：隧道退出则重连（地址会变，图标随之更新）
+    #
+    # 2026-11-09 修复（真实故障）：原循环写作
+    #     if server is not None and server.poll() is not None: server = start_server()
+    # 而 start_server() 在「6900 已在监听」时返回 None。于是复用端口之后 server 变 None，
+    # 上面的条件恒为假 —— 服务从此彻底脱离监督。故障现场：00:38:09 记下「复用现有服务」，
+    # 之后服务在 00:57 死掉，循环再没打过任何一行日志，公网地址持续 502 到第二天早上。
+    # 现改为「server 为 None 也要定期探活」，并区分「没监听」与「在监听但不健康」。
+    unhealthy_streak = 0
+    next_probe = 0.0
     while True:
         time.sleep(5)
         if tunnel is not None and tunnel.poll() is not None:
@@ -299,9 +339,25 @@ def main() -> int:
                 if not args.no_desktop:
                     write_shortcut(url, password)
                 log(f"新地址：{url}/auth?token={password}")
+
+        if time.time() < next_probe:
+            continue
+        next_probe = time.time() + 10
         if server is not None and server.poll() is not None:
             log("服务进程已退出，尝试重启…")
             server = start_server()
+            unhealthy_streak = 0
+        elif server is None:
+            if not port_open(PORT):
+                log("服务未监听，尝试拉起…")
+                server = start_server()
+                unhealthy_streak = 0
+            elif wait_health(timeout=4):
+                unhealthy_streak = 0
+            else:
+                unhealthy_streak += 1
+                if unhealthy_streak == 1 or unhealthy_streak % 6 == 0:
+                    log(f"⚠ 6900 在监听但健康检查连续失败 {unhealthy_streak} 次（服务可能已卡死）")
 
 
 if __name__ == "__main__":

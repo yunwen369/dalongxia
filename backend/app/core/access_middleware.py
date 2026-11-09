@@ -172,6 +172,13 @@ class AccessPasswordMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"
+        token = _extract_token(request)
+        if token == pwd:
+            # 鉴权通过：清除该 IP 的失败计数并放行，避免「登录前误触节流 → 登录后仍 429」死锁。
+            _fail_counts.pop(client_ip, None)
+            return await call_next(request)
+        # 口令未通过：记录失败并检查节流（同 IP 连续失败 10 次后 60s 内拒绝）。
+        _record_fail(client_ip)
         if not _check_rate_limit(client_ip):
             return JSONResponse(
                 status_code=429,
@@ -180,15 +187,10 @@ class AccessPasswordMiddleware(BaseHTTPMiddleware):
                     "error_code": "RATE_LIMITED",
                 },
             )
-
-        token = _extract_token(request)
-        if token != pwd:
-            _record_fail(client_ip)
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "error": "访问口令错误或未提供",
-                    "error_code": "UNAUTHORIZED",
-                },
-            )
-        return await call_next(request)
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "访问口令错误或未提供",
+                "error_code": "UNAUTHORIZED",
+            },
+        )

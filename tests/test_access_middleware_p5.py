@@ -168,3 +168,34 @@ def test_health_endpoint_allowed_without_token(monkeypatch, _reset_fails):
     client = TestClient(app)
     resp = client.get("/api/health")
     assert resp.status_code == 200
+
+
+def test_correct_token_bypasses_throttle(monkeypatch, _reset_fails):
+    """节流已触发时，正确 token 仍放行并清除该 IP 失败计数。
+
+    修复点：token 校验先于节流检查，避免「登录前误触节流 → 登录后仍 429」死锁。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.core import access_middleware as mod
+    from backend.app.core.access_middleware import AccessPasswordMiddleware
+
+    monkeypatch.setenv("OPENBB_ACCESS_PASSWORD", "secret123")
+    app = FastAPI()
+    app.add_middleware(AccessPasswordMiddleware)
+
+    @app.get("/api/test")
+    def t():
+        return {"ok": True}
+
+    client = TestClient(app)
+    # 先触发节流：连续失败达阈值
+    for _ in range(mod._FAIL_THRESHOLD + 2):
+        client.get("/api/test")
+    assert mod._check_rate_limit("testclient") is False
+    # 正确 token 仍应放行（200），且失败计数被清除
+    resp = client.get("/api/test", headers={"Authorization": "Bearer secret123"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert mod._fail_counts.get("testclient") in (None, [])

@@ -26,7 +26,9 @@
   var SPANS = [12, 16, 20, 24, 28, 32, 48];
   var SPAN_LABEL = { 12: "1/4", 16: "1/3", 20: "5/12", 24: "1/2", 28: "7/12", 32: "2/3", 48: t("dashboard.span.full") };
 
-  var state = { dashboards: [], activeId: "", registry: null };
+  // synced：是否已与后端对齐过至少一次。未对齐时禁止落盘 —— 否则会把浏览器里
+  // 的陈旧快照整表 PUT 覆盖服务端，造成布局丢失（2026-11-08 实测：11 个组件被覆盖成 7 个）。
+  var state = { dashboards: [], activeId: "", registry: null, synced: false, syncPending: null };
 
   // R6-03：图表实例生命周期集中管理
   // 原缺陷：每次 renderChart 都 echarts.init 且从不 dispose，并在渲染函数内
@@ -133,6 +135,9 @@
     // R3-02：异步拉取后端配置（失败时保留本地缓存，不阻断渲染）
     fetchJson("/api/dashboards", {}).then(function (data) {
       var serverList = data && Array.isArray(data.dashboards) ? data.dashboards : [];
+      // 后端已应答：此后本地状态才可安全回写（含后端为空数组的合法情形）
+      state.synced = true;
+      state.syncPending = null;
       if (serverList.length) {
         var changed = JSON.stringify(serverList) !== JSON.stringify(state.dashboards);
         state.dashboards = serverList;
@@ -155,14 +160,27 @@
     }).catch(function () {
       // 后端不可用时静默降级到本地缓存；允许下次再试
       state._serverLoaded = false;
+      state.synced = false;
+      state.syncPending = null;
     });
   }
 
   /** 保存布局：先写本地缓存，再异步落盘后端 data/dashboards.json。
+   *
+   * 安全闸门（2026-11-08）：整表 PUT 意味着「客户端状态即真相」。若尚未与后端对齐
+   * （`state.synced === false`，即 GET 未返回或失败），本地可能只是旧的 localStorage
+   * 快照，此时落盘会覆盖掉服务端更完整的布局。故未对齐时**拒绝落盘**并如实提示。
+   *
    * @param {*} silent 是否静默（true 时不弹提示）
-   * @returns {void} 无返回值（异步落盘，失败以 toast 提示）
+   * @returns {boolean} 是否真正发起了落盘
    */
   function saveState(silent) {
+    if (!state.synced) {
+      if (!silent) {
+        toast(t("dashboard.syncPending"));
+      }
+      return false;
+    }
     var payload = { dashboards: state.dashboards, activeId: state.activeId };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -187,6 +205,7 @@
         toast(t("dashboard.saveLocalOnly"));
       }
     });
+    return true;
   }
 
   /** 重命名当前仪表板（R3-02）。
@@ -345,6 +364,10 @@
    * @returns {*} 处理结果
    */
   function activeDashboard() {
+    // 空列表时返回 null（原先直接取 [0].id 会抛 TypeError，调用方无法兜底）
+    if (!state.dashboards.length) {
+      return null;
+    }
     for (var i = 0; i < state.dashboards.length; i += 1) {
       if (state.dashboards[i].id === state.activeId) {
         return state.dashboards[i];
@@ -2265,7 +2288,11 @@
           } else {
             add.addEventListener("click", function (event) {
               event.stopPropagation();
-              addWidgetById(item.id);
+              // 只有真正加进去了才报成功：重复/未同步/被禁用时 addWidgetById 已各自提示，
+              // 若在这里无条件 toast「已添加」，用户会看到「成功」却毫无变化（2026-11-08 缺陷）
+              if (addWidgetById(item.id) !== "added") {
+                return;
+              }
               if (options.onAdded) {
                 options.onAdded(item);
               }
@@ -2380,6 +2407,10 @@
     });
     toolbar.appendChild(back);
     container.appendChild(toolbar);
+
+    // 去向说明：组件库只管「选」，落点在「自定义工作区」。此前无任何说明，
+    // 用户点完「添加」页面毫无变化，容易误判为按钮失灵（2026-11-08 反馈）。
+    container.appendChild(el("div", "pg-card-sub dash-lib-hint", t("dashboard.libHint")));
 
     var host = el("div", "dash-lib-page");
     container.appendChild(host);
@@ -2874,27 +2905,46 @@
    * @param {*} widgetId 组件 id
    * @param {Object} params 用户传入参数（如 symbol/market，P2-01 透传当前标的）
    */
+  /** 把指定组件加入当前仪表板。
+   *
+   * 2026-11-08 修复：原实现只 toast 不给返回值，调用方（组件库「添加」按钮）无法区分
+   * 「真的加进去了」和「本来就在里面」，于是重复点击时仍弹「已添加组件」——用户看到
+   * 成功提示却毫无变化，误判为按钮失灵。现改为返回结果码，由调用方按结果给提示。
+   *
+   * @param {string} widgetId 组件 id（如 ST-01）
+   * @param {Object} [params] 组件参数
+   * @returns {string} blocked / not-synced / no-dashboard / duplicate / added
+   */
   function addWidgetById(widgetId, params) {
     // R6-04：页面控件 / 禁用通道组件不允许加入仪表板，如实说明原因
     var blocked = UNAVAILABLE[widgetId];
     if (blocked) {
       toast(blocked.reason);
-      return;
+      return "blocked";
     }
     // 命令面板可能在未进入仪表板前调用，此时 state 尚未装载 → 先补 loadState，
     // 否则 activeDashboard() 取空数组会抛 TypeError（P2-01 相关）
     if (!state.dashboards.length) {
       loadState();
     }
+    if (!state.dashboards.length) {
+      toast(t("dashboard.noneHint"));
+      return "no-dashboard";
+    }
+    // 未与后端对齐时不允许改布局：否则随后的一次落盘会把陈旧快照整表覆盖服务端
+    if (!state.synced) {
+      toast(t("dashboard.syncPending"));
+      return "not-synced";
+    }
     var dash = activeDashboard();
     if (!dash) {
       // 兜底：无当前仪表板时不得抛 TypeError（原先 dash.widgets 会直接崩）
       toast(t("dashboard.noneHint"));
-      return;
+      return "no-dashboard";
     }
     if (dash.widgets.some(function (entry) { return entry.id === widgetId; })) {
       toast(t("dashboard.duplicateWidget"));
-      return;
+      return "duplicate";
     }
     var meta = (state.registry && state.registry[widgetId]) || {};
     dash.widgets.push({ id: widgetId, span: meta.span || 24, params: params || {} });
@@ -2902,6 +2952,7 @@
     if (location.hash === "#/dashboard") {
       render();
     }
+    return "added";
   }
 
   /** 渲染侧栏分组树（R3-02）：按 group 归组，未分组排最后。
