@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -129,10 +131,19 @@ SKIP_PATHS = {
 
 
 def _call(base: str, method: str, path: str, params: Dict[str, Any]) -> Tuple[int, float, str]:
-    """发一次 HTTP 请求，返回 (状态码, 耗时秒, 响应文本)。"""
+    """发一次 HTTP 请求，返回 (状态码, 耗时秒, 响应文本)。
+
+    Note:
+        2026-11-10：部署环境用 ``setx`` 设了 ``OPENBB_ACCESS_PASSWORD``，被测实例
+        默认启用访问口令，不带凭证会整片 401 被误判为接口故障。此处读取同名
+        环境变量并附 ``Authorization: Bearer``（未设置则不加）。
+    """
     url = f"{base}{path}"
     data = None
     headers = {"Accept": "application/json"}
+    pwd = os.environ.get("OPENBB_ACCESS_PASSWORD", "").strip()
+    if pwd:
+        headers["Authorization"] = f"Bearer {pwd}"
     if method == "GET":
         if params:
             url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
@@ -178,14 +189,52 @@ def _classify(payload: Any) -> Tuple[str, str]:
     return "DATA", "ok"
 
 
+def _fetch_spec(base: str) -> Dict[str, Any]:
+    """取 OpenAPI 规格；启用访问口令时 /openapi.json 已禁用，退回本地 app 对象。
+
+    2026-11-10：部署实例通过 ``setx OPENBB_ACCESS_PASSWORD`` 启用了口令，
+    ``create_app`` 会同时禁用 ``/docs`` 与 ``/openapi.json``，此时远程取规格
+    必然 200+NOT_FOUND（信封），探针会得到 total=0 的假象。故先尝试远程，
+    失败或拿不到 paths 时改用本进程 ``backend.app.main.app.openapi()``（同一份代码）。
+
+    Args:
+        base: 服务地址。
+
+    Returns:
+        Dict[str, Any]: OpenAPI 规格；两条路径都失败时返回 ``{"paths": {}}``。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        pwd = os.environ.get("OPENBB_ACCESS_PASSWORD", "").strip()
+        request = urllib.request.Request(f"{base}/openapi.json")
+        if pwd:
+            request.add_header("Authorization", f"Bearer {pwd}")
+        with opener.open(request, timeout=30) as resp:
+            spec = json.loads(resp.read().decode("utf-8"))
+        if spec.get("paths"):
+            return spec
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        pass
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    saved = os.environ.pop("OPENBB_ACCESS_PASSWORD", None)
+    try:
+        from backend.app.main import app  # noqa: PLC0415 - 延迟导入避免拖慢纯远程探测
+
+        return app.openapi()
+    finally:
+        if saved is not None:
+            os.environ["OPENBB_ACCESS_PASSWORD"] = saved
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:6903")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    with urllib.request.urlopen(f"{args.base}/openapi.json", timeout=30) as resp:
-        spec = json.loads(resp.read().decode("utf-8"))
+    spec = _fetch_spec(args.base)
 
     results: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}

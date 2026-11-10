@@ -13,6 +13,7 @@
 | `check_nav_tree.py` | **导航单一配置完整性**（侧栏视图全覆盖 NAV_TREE / 面包屑落点合法 / 顶栏分组合法 / 标题齐备，2026-11-10 新增） | `python tools/check_nav_tree.py` |
 | `nav_consistency_probe.py` | **导航三处一致动态探针**（逐侧栏视图读真实渲染的顶栏/侧栏/面包屑；审查报告 §九 #4） | `python tools/nav_consistency_probe.py --base <url> --out nav.json` |
 | `review_recheck.py` | **审查报告 §九 九项复核动态判定**（三视口×双主题 101 项：移动端/F5/四处一致/键盘/对比度/侧栏层级/卡片内容；原 `_ad_hoc` 脚本 2026-11-10 转正） | `python tools/review_recheck.py --base <url> --out <证据目录>` |
+| `diag_frontend_data.py` | **前端数据加载诊断**（登录后逐视图采集 fetch 失败/JS 异常，区分接口 401/404/超时 vs 渲染失败；复用 ui_clickthrough 的 CDP harness） | `python tools/diag_frontend_data.py --base <url> --token <口令> --out diag.json` |
 | `comment_rate_check.py` | 注释率快查 | `python tools/comment_rate_check.py` |
 | `docstring_audit.py` | 注释率审计（出 JSON/MD） | `python tools/docstring_audit.py --out-json <p> --out-md <p>` |
 | `docstring_fill.py` | docstring 批量补齐（--dry-run/--apply/--js） | `python tools/docstring_fill.py --dry-run` |
