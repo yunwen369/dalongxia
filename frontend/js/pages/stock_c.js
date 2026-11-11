@@ -137,7 +137,8 @@
       return;
     }
     if (!profile || !profile.name) {
-      P.setEmpty(body, t("stock.empty.profile"), function () {
+      // 后端对 ETF/LOF 返回 available=false + note，优先展示该说明（2026-11-10）
+      P.setEmpty(body, (profile && profile.note) || t("stock.empty.profile"), function () {
         P.loadStock(true);
       });
       return;
@@ -231,8 +232,8 @@
     if (!body) {
       return;
     }
-    if (!fin.summary) {
-      P.setEmpty(body, t("stock.empty.fin"), function () {
+    if (!fin.summary || fin.summary.available === false) {
+      P.setEmpty(body, (fin.summary && fin.summary.note) || t("stock.empty.fin"), function () {
         P.loadStock(true);
       });
       return;
@@ -434,7 +435,7 @@
       return;
     }
     if (!holders || !holders.top10 || holders.top10.length === 0) {
-      P.setEmpty(body, t("stock.empty.holder"), function () {
+      P.setEmpty(body, (holders && holders.note) || t("stock.empty.holder"), function () {
         P.loadStock(true);
       });
       return;

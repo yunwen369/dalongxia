@@ -46,6 +46,26 @@ MARKET_ALIASES = {"cn": "a"}
 MARKET_WHITELIST_QUOTE = MARKET_WHITELIST
 MARKET_WHITELIST_SECTOR = MARKET_WHITELIST
 
+# 场内基金（ETF/LOF/封闭式）代码前缀：沪市 5xxxxx，深市 15/16/18xxxx。
+# 这类标的**没有**个股 F10 概况、十大股东、三大报表与券商研报覆盖，
+# 个股域接口命中时应返回「空态说明」而不是 UPSTREAM_ERROR（否则前端整页报错）。
+FUND_LIKE_PREFIXES = ("5", "15", "16", "18")
+
+
+def is_fund_like(symbol: str) -> bool:
+    """判断代码是否为场内基金（ETF/LOF/封闭式基金）。
+
+    Args:
+        symbol: 6 位证券代码（可带 sh/sz 前缀，归一时已由 normalize_symbol 剥离）。
+
+    Returns:
+        bool: 命中基金代码前缀为 True。
+    """
+    digits = "".join(ch for ch in str(symbol or "") if ch.isdigit())
+    if len(digits) != 6:
+        return False
+    return digits.startswith(FUND_LIKE_PREFIXES)
+
 
 def normalize_market(value: Optional[str], *, allow_all: bool = False,
                      extra: tuple = (), default: str = "a") -> Optional[str]:
@@ -560,9 +580,9 @@ def normalize_symbol(symbol: str, market: str = "a") -> Tuple[str, str, str]:
         digits = re.sub(r"\D", "", raw)
         if len(digits) != 6:
             raise ValueError("A股代码必须为 6 位数字")
-        if digits.startswith(("6", "9")):
+        if digits.startswith(("6", "9", "5")):
             tencent = f"sh{digits}"
-        elif digits.startswith(("0", "2", "3")):
+        elif digits.startswith(("0", "2", "3", "15", "16", "18")):
             tencent = f"sz{digits}"
         elif digits.startswith(("4", "8")):
             tencent = f"bj{digits}"

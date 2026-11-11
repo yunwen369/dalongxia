@@ -17,10 +17,22 @@
 
   var selectId = "state4-select";
 
-  /** 当前可见页的所有区块容器。 */
+  /** 当前可见页的所有区块容器。
+   *
+   * 缺陷修复（2026-11-11 四态取证暴露）：
+   * 原实现只找 `.pg-body`，但 `#/fund-combo`、`#/widget-library` 等页面
+   * 的根容器直接是 `.page-view` 本身（内部无 `.pg-body`），导致
+   * `State4.apply()` 找不到容器直接 return，四态截图与默认态完全一致。
+   * 现改为：优先取 `.pg-body`；若无则回退到页面根节点，保证「每页四态可用」。
+   * @returns {Array} 容器数组
+   */
   function bodies() {
     var page = document.querySelector(".page-view:not([hidden])");
-    return page ? Array.prototype.slice.call(page.querySelectorAll(".pg-body")) : [];
+    if (!page) {
+      return [];
+    }
+    var list = Array.prototype.slice.call(page.querySelectorAll(".pg-body"));
+    return list.length ? list : [page];
   }
 
   /** 切到指定态：default 走重渲染，其余调用 core 四态函数。 */

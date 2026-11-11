@@ -173,7 +173,14 @@
           type: "value",
           scale: true,
           axisLabel: { color: c.dim, fontSize: 11 },
-          splitLine: { lineStyle: { color: c.border, type: "dashed" } }
+          splitLine: { lineStyle: { color: c.border, type: "dashed" } },
+          // REQ-20261111-01 V6 皮肤：交替亮带（splitArea）让图表区不再整片纯黑。
+          // 参考图 K 线卡 p90=94，纯黑底细线只有 37-45；交替带是主要亮度来源。
+          // 只影响绘制观感，不改变坐标范围、数值与曲线。
+          splitArea: {
+            show: document.documentElement.getAttribute("data-theme") === "v6",
+            areaStyle: { color: ["rgba(46, 82, 118, .28)", "rgba(46, 82, 118, .06)"] }
+          }
         },
         series: [
           {

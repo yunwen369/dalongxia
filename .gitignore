@@ -25,6 +25,9 @@ htmlcov/
 # ---------- 构建产物（PyInstaller onedir） ----------
 build/
 dist/
+# NSIS 安装包输出目录（installer.nsi 的 OUTDIR，2026-11-11 补）
+# 安装包成品归档在 B_交付归档\04_安装包\，工程树内不入库
+dist_setup/
 *.spec.bak
 *.manifest
 *.pkg

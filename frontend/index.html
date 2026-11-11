@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<!-- REQ-20261111-01：V6 为默认皮肤（用户 2026-11-11 10:31 裁决）。
+     三套皮肤并存：v6（默认）/ light（砚）/ dark（:root §7.4 基准）。 -->
+<html lang="zh-CN" data-theme="v6">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -63,6 +65,10 @@
   <!-- 阶段 6：仪表板与全局浮层样式 -->
   <link rel="stylesheet" href="css/dashboard.css">
   <link rel="stylesheet" href="css/p1.css">
+  <!-- REQ-20261111-01：V6 量化看盘台皮肤（第三套，默认）。
+       必须最后加载 —— 全部规则限定 [data-theme="v6"] 作用域，
+       覆盖前四个文件的结构层样式；:root 与 light 皮肤零影响。 -->
+  <link rel="stylesheet" href="css/v6.css">
   <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
   <!-- 阶段 6：国际化与本地化（最先加载，供后续脚本取词） -->
   <script src="js/i18n.js" defer></script>
@@ -147,6 +153,14 @@
           aria-label="全局搜索"
         >
         <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）" data-i18n-title="action.themeToggleTitle">主题</button>
+        <!-- REQ-20261111-01 SK-02：三皮肤切换器（V6 默认 / 现行深色 / 砚浅色）。
+             与 #theme-toggle 并存：#theme-toggle 保持原 Ctrl+M 两态循环语义，
+             本切换器提供显式三态选择，两者共用 applyTheme 同一实现。 -->
+        <div class="skin-switch" id="skin-switch" role="group" aria-label="界面皮肤" title="切换界面皮肤（V6 为默认）">
+          <button type="button" data-skin="v6" class="active" aria-pressed="true">V6</button>
+          <button type="button" data-skin="dark" aria-pressed="false">现行</button>
+          <button type="button" data-skin="light" aria-pressed="false">砚</button>
+        </div>
         <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉" data-i18n-title="copilot.open">AI 助手</button>
         <!-- AR-13（REQ-20261109-01）：铃铛 emoji 改文字按钮，与「主题/AI 助手」风格统一（含未读徽标） -->
         <button class="icon-button" id="alerts-bell" type="button" title="提醒中心" data-i18n-title="alerts.bellTitle" aria-label="提醒中心">提醒<em class="bell-badge" id="alerts-unread" hidden>0</em></button>

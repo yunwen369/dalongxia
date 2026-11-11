@@ -192,6 +192,16 @@ body {
   list-style: none;
 }
 
+/* 缺陷修复（REQ-20261111-01 落地验收 A-04 暴露）：
+   `<details class="sb-group">` 的原生折叠依赖内容在关闭时 `display:none`，
+   但上面 `.sidebar-list { display:flex }` 会覆盖浏览器的
+   `details:not([open]) > *:not(summary) { display:none }` UA 规则，
+   导致 `open=false` 的分组内容仍然全部可见（实测 25 项全显）。
+   此处显式声明关闭态隐藏，恢复折叠语义。三套皮肤共用，无视觉副作用。 */
+.sb-group:not([open]) > .sidebar-list {
+  display: none;
+}
+
 .sidebar-item {
   /* C11（AR-09）：子项缩进 22px 与分组标题（10px+底条）拉开层级 */
   padding: 8px 10px 8px 22px;

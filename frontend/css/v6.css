@@ -1,0 +1,1236 @@
+/* =============================================================
+ * OpenBB 中文投研工作台 · V6 量化看盘台皮肤（第三套 · 默认）
+ *
+ * 依据：REQ-20261111-01 / 设计基准_V6视觉_v1.0_20261111.md
+ * 视觉基准：B_交付归档\01_原型设计\20261111-V6视觉换肤\原型_HTML_v6.0_20261110\
+ *
+ * 硬约束（勿破坏）
+ * ----------------
+ * 1. 全部规则限定 `[data-theme="v6"]` 作用域（属性挂在 <html> 上，
+ *    **不得写成 body[data-theme]** —— 那样一条都不命中）；`:root`（§7.4 基准）与
+ *    `[data-theme="light"]`（砚）零影响 —— 深色主题仍是 §7.4 全等断言基准。
+ * 2. 本文件**只改视觉**：不改 DOM 结构、不改类名、不改任何 JS 逻辑、
+ *    不新增/删除功能。所有选择器均对应 frontend 既有真实类名。
+ * 3. 涨跌语义固定红涨绿跌（§9.4-1）：--up 红系、--down 绿系，禁止反转。
+ * 4. 布局参数覆盖仅在 V6 作用域：--menu-w 44 / --sidebar-w 130 / --toolbar-h 40
+ *    （偏差登记 DEV-V6-01~03，用户 2026-11-11 10:31 裁决 V6 为默认皮肤）。
+ * 5. 层次基线（用户 2026-11-11 01:20 判据）：p50≈21 / p90≈88 / p90-p50≥60。
+ *    做法是「近黑底 + 清晰亮边框 + 高亮文字」，**不是**靠卡片比背景亮
+ *    （v5 曾整体提亮卡片底导致 p50 21→29 整图发灰，已回退，勿重犯）。
+ * ============================================================= */
+
+/* ---------------------------------------------------------------
+ * 一、V6 皮肤变量（作用域内覆盖，不改 :root）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] {
+  /* 布局：偏差登记 DEV-V6-01~03 */
+  --menu-w: 44px;
+  --sidebar-w: 130px;
+  --toolbar-h: 40px;
+
+  /* 背景层次：近黑底，卡片略亮但整体压暗 */
+  --bg-app: #050b18;
+  --bg-widget: #0d1826;
+  --bg-widget-2: #111f2d;
+  --bg-panel: #09131e;
+  --bg-sidebar: #071120;
+  --bg-hover: #172838;
+
+  /* 边框：清晰亮边框是 V6 层次的主要来源 */
+  --border: #4d769c;
+  --border-strong: #3a72a8;
+
+  /* 文字：纯白主文字拉开层次 */
+  --text: #ffffff;
+  --text-dim: #d8e3ee;
+  --text-muted: #a5b5c5;
+
+  /* 品牌色：深蓝量化风格（偏差登记 DEV-V6-04） */
+  --accent: #3c83c4;
+  --accent-strong: #4a95d8;
+  --accent-deep: #225b98;
+
+  /* 涨跌与状态色：红涨绿跌语义不变（偏差登记 DEV-V6-05/06） */
+  --up: #ff3b4e;
+  --down: #00c087;
+  --warn: #f5a623;
+  --info: #3fa0c0;
+  --danger: #ff3b4e;
+
+  /* V6 专属：高光/发光/网格 */
+  --card-line: rgba(150, 175, 200, .10);
+  --card-glow: rgba(20, 50, 80, .16);
+  --grid-line: rgba(130, 160, 190, .03);
+  --halo: radial-gradient(ellipse 70% 55% at 50% 0%, rgba(30, 60, 100, .14), transparent 70%);
+  --v6-card-bg: linear-gradient(155deg, #0d1826 0%, #091421 55%, #060c13 100%);
+  --v6-card-edge: #547eaa;
+  --v6-card-top-light: rgba(205, 228, 250, .80);
+  --v6-shadow: inset 0 1px 0 rgba(200, 222, 242, .28),
+               inset 0 0 30px rgba(20, 50, 80, .10),
+               0 0 18px rgba(20, 50, 80, .32),
+               0 0 0 1px rgba(120, 165, 210, .22),
+               0 0 10px rgba(40, 90, 140, .22);
+}
+
+/* 背景纹理：顶部光晕 + 32px 细网格（仅 V6） */
+[data-theme="v6"] {
+  background-image:
+    var(--halo),
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+  background-attachment: fixed;
+}
+
+/* ---------------------------------------------------------------
+ * 二、顶栏（.topbar / .logo / .nav / .topbar-actions）
+ * --------------------------------------------------------------- */
+/* 顶栏：左右 padding 必须为 0，否则导航起点被 padding 推移，
+   导致 navLeft(146) ≠ mainLeft(130) 错位 16px（A-03 判据）。 */
+[data-theme="v6"] .topbar {
+  background: linear-gradient(180deg, #0a1420, #09131e);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, .35);
+  padding: 0;
+  gap: 0;
+}
+
+/* 品牌区：宽度 = 侧栏宽度，保证导航起点与主内容左边界对齐（A-03 判据）。
+   注意两点：
+ *   1) app.css 的 `.logo { min-width: 208px }` 会撑破 flex 基准，必须显式清零，
+ *      否则 navLeft=232 而 mainLeft=130（错位 102px）；
+ *   2) padding-left 必须为 0 —— 品牌区是顶栏第一列，任何左内边距都会把
+ *      .nav 的起点整体右推（实测 16px → navLeft=146 ≠ mainLeft=130）。
+ *      品牌文字与侧栏的视觉缩进由 .logo-mark 自身尺寸承担。 */
+[data-theme="v6"] .logo {
+  flex: 0 0 var(--sidebar-w);
+  width: var(--sidebar-w);
+  min-width: 0;
+  max-width: var(--sidebar-w);
+  gap: 4px;
+  padding-left: 0;
+  margin-left: 0;
+  overflow: hidden;
+}
+
+/* 品牌区文字：金色渐变标题。
+   注意：`-webkit-background-clip:text` + `color:transparent` 若被后面的
+   `color` 覆盖（例如 .logo:hover 的 color:var(--accent)），文字会整体消失。
+   因此这里同时锁定 hover/focus 态的 color，保证标题始终可见。 */
+[data-theme="v6"] .logo > span:not(.logo-mark),
+[data-theme="v6"] .logo:hover > span:not(.logo-mark),
+[data-theme="v6"] .logo:focus-visible > span:not(.logo-mark) {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: linear-gradient(90deg, #ffe08a, #ffb648, #ffe08a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme="v6"] .logo-mark {
+  width: 23px;
+  height: 23px;
+  flex: none;
+  font-size: 0;
+  border-radius: 4px;
+  background: linear-gradient(140deg, #4a9bff, #ff4b5f 55%, #ffd76a);
+  box-shadow: 0 0 12px rgba(40, 90, 150, .40);
+}
+
+[data-theme="v6"] .nav {
+  gap: 2px;
+  padding-left: 0;
+}
+
+[data-theme="v6"] .nav-item {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 5px 9px;
+  border-radius: 5px;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+[data-theme="v6"] .nav-item:hover {
+  color: #fff;
+  background: rgba(52, 122, 200, .18);
+}
+
+[data-theme="v6"] .nav-item.active {
+  color: #fff;
+  font-weight: 600;
+  background: linear-gradient(180deg, rgba(52, 122, 200, .42), rgba(20, 55, 100, .34));
+  border-color: #3a7fc0;
+  box-shadow: inset 0 0 0 1px rgba(58, 127, 192, .5), 0 0 10px rgba(35, 95, 165, .35);
+}
+
+[data-theme="v6"] .global-search {
+  background: #0b1420;
+  border: 1px solid var(--border);
+  color: var(--text);
+  height: 28px;
+  font-size: 12px;
+}
+
+[data-theme="v6"] .global-search::placeholder {
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .icon-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+[data-theme="v6"] .icon-button:hover {
+  border-color: var(--accent-strong);
+  color: #fff;
+  background: rgba(52, 122, 200, .18);
+}
+
+[data-theme="v6"] .bell-badge {
+  background: var(--up);
+  color: #fff;
+}
+
+/* 皮肤切换器（SK-02，本批新增） */
+.skin-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(8, 20, 34, .7);
+}
+
+.skin-switch button {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.skin-switch button:hover {
+  color: #fff;
+}
+
+.skin-switch button.active {
+  background: linear-gradient(180deg, #3c83c4, #225b98);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28);
+}
+
+/* ---------------------------------------------------------------
+ * 三、侧栏（.sidebar / .sb-group / .sidebar-item）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .sidebar {
+  background: linear-gradient(180deg, #08111b, #070e16);
+  border-right: 1px solid var(--border);
+  padding: 8px 6px;
+  gap: 6px;
+  position: relative;
+}
+
+[data-theme="v6"] .sidebar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 240px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 100%, rgba(40, 90, 150, .38), transparent 72%);
+}
+
+[data-theme="v6"] .sb-search input {
+  background: #0b1420;
+  border: 1px solid var(--border);
+  color: var(--text);
+  height: 26px;
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+[data-theme="v6"] .sb-group-h {
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  padding: 5px 6px;
+}
+
+[data-theme="v6"] .sb-group-h:hover {
+  color: #fff;
+}
+
+[data-theme="v6"] .sidebar-item {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 5px 8px;
+  border-radius: 5px;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-theme="v6"] .sidebar-item:hover {
+  color: #fff;
+  background: rgba(52, 122, 200, .16);
+}
+
+/* 侧栏选中态：亮蓝渐变块 + 左侧高亮条。
+   app.css 的 `.sidebar-item.active` 只给 `--bg-hover`（很淡），
+   V6 下需要更明确的选中块，故显式覆盖 background（含 !important 保护，
+   因为 .sidebar-item:hover 与 .active 同规则，hover 时会回落到 --bg-hover）。 */
+[data-theme="v6"] .sidebar-item.active {
+  color: #fff;
+  font-weight: 600;
+  background: linear-gradient(90deg, #276cb8, #17477e);
+  border-left-color: #4a95d8;
+  box-shadow: inset 0 0 0 1px rgba(58, 127, 192, .45), 0 0 12px rgba(35, 95, 165, .4);
+}
+
+[data-theme="v6"] .sidebar-item.active:hover {
+  background: linear-gradient(90deg, #2d7ac9, #1a5290);
+  color: #fff;
+}
+
+[data-theme="v6"] .sidebar-divider {
+  border-color: var(--border);
+  opacity: .5;
+}
+
+/* ---------------------------------------------------------------
+ * 四、工具栏与面包屑（.toolbar / .page-title / .crumb / .badge）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .toolbar {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+  gap: 8px;
+}
+
+[data-theme="v6"] .page-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: .3px;
+}
+
+[data-theme="v6"] .crumb,
+[data-theme="v6"] .crumb-item {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .crumb-item.current {
+  color: #3a72a8;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .crumb-item[role="link"]:hover {
+  color: #fff;
+}
+
+[data-theme="v6"] .badge {
+  background: linear-gradient(180deg, #1a3450, #12283c);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+[data-theme="v6"] .badge.ok {
+  color: var(--down);
+  border-color: rgba(0, 192, 135, .45);
+}
+
+[data-theme="v6"] .badge.error {
+  color: var(--up);
+  border-color: rgba(255, 59, 78, .45);
+}
+
+[data-theme="v6"] .badge.accent {
+  color: var(--accent-strong);
+  border-color: rgba(74, 149, 216, .45);
+}
+
+[data-theme="v6"] .badge.legal {
+  color: var(--warn);
+  border-color: rgba(245, 166, 35, .45);
+}
+
+[data-theme="v6"] .state4-select {
+  background: #101e2c;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------
+ * 五、卡片（.card / .pg-card / .grid-card）—— V6 视觉核心
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .card,
+[data-theme="v6"] .pg-card,
+[data-theme="v6"] .grid-card,
+[data-theme="v6"] .market-controls {
+  background: var(--v6-card-bg);
+  border: 1px solid var(--v6-card-edge);
+  box-shadow: var(--v6-shadow);
+  position: relative;
+}
+
+/* 卡片内空白区：不加条纹填充。
+   实测（2026-11-11）：`repeating-linear-gradient` 淡条纹对 p90 无改善（67→64），
+   且行高从 34 加到 40 会稀释亮带占比反而降分。保持 v6 复盘结论 ——
+   「近黑底 + 少量高亮内容」，不靠铺底色凑亮度。 */
+
+/* 卡片顶部高光条：V6 层次的关键（1px 冷白描边） */
+[data-theme="v6"] .card::before,
+[data-theme="v6"] .pg-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--v6-card-top-light), transparent);
+  pointer-events: none;
+}
+
+[data-theme="v6"] .card-title,
+[data-theme="v6"] .pg-card-title {
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: .2px;
+}
+
+[data-theme="v6"] .card-body,
+[data-theme="v6"] .pg-body {
+  color: var(--text-dim);
+}
+
+[data-theme="v6"] .pg-card-sub,
+[data-theme="v6"] .pg-hint {
+  color: var(--text-muted);
+}
+
+/* 卡片标题锚点图标（.card-header::before 小色块） */
+[data-theme="v6"] .card-header::before {
+  content: "·";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  font-size: 9px;
+  color: #fff;
+  background: linear-gradient(140deg, #4a96d8, #57b8dc);
+  box-shadow: 0 0 10px rgba(40, 90, 140, .35);
+}
+
+/* 卡片头底色条：把标题区做成一条亮带（参考图的高亮来源之一）。
+   参考图亮度>60 像素占 15.6%，纯表格界面只有 7.7% —— 亮区面积不足是 p90 偏低的根因。
+   这里用**高对比窄亮带**（不是整体提亮卡片），既补足亮区面积又不推高 p50。 */
+[data-theme="v6"] .card-header {
+  background: linear-gradient(90deg, rgba(92, 148, 200, .85), rgba(46, 82, 118, .45) 68%, transparent);
+  border-bottom: 1px solid rgba(150, 195, 235, .42);
+  margin: -2px -6px 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+}
+
+[data-theme="v6"] .card-header .card-title {
+  color: #ffffff;
+  text-shadow: 0 0 10px rgba(180, 215, 250, .55);
+}
+
+[data-theme="v6"] .pg-card-head {
+  background: linear-gradient(90deg, rgba(92, 148, 200, .85), rgba(46, 82, 118, .45) 68%, transparent);
+  border-bottom: 1px solid rgba(150, 195, 235, .42);
+  margin: -2px -6px 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+}
+
+/* 工具栏：提亮成亮带，避免整条暗（badge 样式已在第四节定义，此处不重复） */
+[data-theme="v6"] .toolbar {
+  background: linear-gradient(180deg, #0f2033, #0b1927);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---------------------------------------------------------------
+ * 六、首页行情表 V6 强化（.market-card .data-table）
+ *
+ * 真实结构（2026-11-11 CDP 实测）：首页 `#viewport` 内 7 张 `.market-card`，
+ * 其中 3 张用 `.data-table`：
+ *   核心指数行情 5 行（名称/代码/最新价/涨跌额/涨跌幅/状态）
+ *   报价 14 行、个股概况 14 行（KV 两列）
+ * 参考图观感是「近黑底 + 大面积高亮内容」，原表格行高 28px、纯暗底细字，
+ * 缩略后 p90 仅 38（参考图 88）。以下**只调呈现**：
+ * 行高放大、行底渐变、价格列红色大数字发光、首列加粗白字 + 左侧强调条。
+ * **不改任何数值、列、排序、计算口径与数据来源。**
+ * --------------------------------------------------------------- */
+
+/* 指数表（第 1 张 .data-table，6 列）：行做成亮带。
+   参数经过多轮量化校准（v6 复盘经验）：底不能整体提亮（会推高 p50 变糊），
+   正确做法是「近黑底 + 少量但足够亮的内容」—— 行底保持克制，亮点靠文字与价格列。
+   实测：卡片高 407px 但表格仅 5 行（约 200px），下半部空白是 p90 上不去的根因之一，
+   故适当加大行高与单元格内边距，让亮带覆盖更多面积。 */
+[data-theme="v6"] .market-card .data-table tbody tr {
+  height: 34px;
+}
+
+[data-theme="v6"] .market-card .data-table tbody tr td {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+/* 表格不强行撑满卡片高度。
+   实测（2026-11-11）：给 .table-scroll 设 height:100% 后行被均匀拉高，
+   亮带变稀，p90 反而 68→65。保持自然行高，让亮带密集。 */
+
+/* 行底亮带：**窄而亮**而非「宽而亮」。
+   实测教训（2026-11-11，两次对照）：
+   · 亮带铺满整行且偏暗 → p90 只到 68，gap 44；
+   · 亮带铺满整行且提亮 → p90 81 / gap 52，但 p50 被推到 29（目标 21±3），整图发灰；
+   · 正确解法：亮带只占行左半（渐变在中点前衰减），右半迅速回落近黑，
+     既保住高亮锚点，又不抬高全图底色 p50。 */
+[data-theme="v6"] .market-card .data-table tbody tr:nth-child(odd) td {
+  background: linear-gradient(90deg,
+    rgba(74, 118, 158, .97) 0%,
+    rgba(46, 78, 108, .78) 30%,
+    rgba(14, 28, 44, .26) 62%,
+    transparent 100%);
+}
+
+[data-theme="v6"] .market-card .data-table tbody tr:nth-child(even) td {
+  background: linear-gradient(90deg,
+    rgba(92, 140, 184, .96) 0%,
+    rgba(56, 92, 128, .76) 30%,
+    rgba(16, 32, 50, .24) 62%,
+    transparent 100%);
+}
+
+[data-theme="v6"] .market-card .data-table tbody tr:hover td {
+  background: linear-gradient(90deg,
+    rgba(96, 148, 196, .96) 0%,
+    rgba(52, 92, 132, .80) 40%,
+    rgba(20, 42, 64, .40) 75%,
+    transparent 100%);
+}
+
+/* 首列：加粗纯白 + 左侧强调条（阅读引导锚点） */
+[data-theme="v6"] .market-card .data-table tbody td:first-child {
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 12.5px;
+  border-left: 3px solid #4a95d8;
+  padding-left: 10px;
+}
+
+/* 数值列：等宽 + 加粗，提升可读性 */
+[data-theme="v6"] .market-card .data-table td.num {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .2px;
+}
+
+/* 价格列（6 列指数表的第 3 列）：红色大数字 + 发光 —— V6 最强视觉锚点 */
+[data-theme="v6"] .market-card .data-table td.num:nth-child(3) {
+  color: #ff4b5f;
+  font-size: 15px;
+  font-weight: 700;
+  text-shadow: 0 0 14px rgba(255, 75, 95, .65);
+}
+
+[data-theme="v6"] .market-card .data-table td.num:nth-child(3).down {
+  color: #00d68f;
+  text-shadow: 0 0 14px rgba(0, 214, 143, .55);
+}
+
+/* 涨跌额 / 涨跌幅列：语义色加强 */
+[data-theme="v6"] .market-card .data-table td.num.up {
+  color: #ff5b6b;
+  font-weight: 700;
+}
+
+[data-theme="v6"] .market-card .data-table td.num.down {
+  color: #00d68f;
+  font-weight: 700;
+}
+
+/* KV 表（报价 / 个股概况，两列）：左标签灰蓝、右值纯白加粗 */
+[data-theme="v6"] .market-card .data-table td:first-child:not(.num) {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11.5px;
+  border-left: 0;
+  padding-left: 8px;
+}
+
+[data-theme="v6"] .market-card .data-table tbody td:nth-child(2):not(.num) {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 状态列：弱化小字 */
+[data-theme="v6"] .market-card .data-table tbody td:last-child:not(.num) {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+/* ---------------------------------------------------------------
+ * 七、指数卡与报价（.mk-idx-* / .pg-quote-*）—— #/market 页专用
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .mk-idx-cell {
+  background: linear-gradient(155deg, #0e1a28, #091421);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(185, 205, 225, .16);
+}
+
+[data-theme="v6"] .mk-idx-cell:hover {
+  border-color: var(--border-strong);
+  background: linear-gradient(155deg, #132234, #0b1826);
+}
+
+[data-theme="v6"] .mk-idx-name {
+  color: #f7fbff;
+  font-size: 11px;
+}
+
+[data-theme="v6"] .mk-idx-price {
+  color: #ff4b5f;
+  font-size: clamp(19px, 1.8vw, 26px);
+  font-weight: 700;
+  text-shadow: 0 0 16px rgba(255, 75, 95, .6);
+  line-height: 1.25;
+}
+
+[data-theme="v6"] .mk-idx-price.down {
+  color: #00d68f;
+  text-shadow: 0 0 16px rgba(0, 214, 143, .5);
+}
+
+[data-theme="v6"] .mk-idx-pct {
+  color: #00d68f;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .mk-idx-pct.up {
+  color: #ff4b5f;
+}
+
+[data-theme="v6"] .pg-quote-name {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+[data-theme="v6"] .pg-quote-price {
+  color: #ff4b5f;
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 0 12px rgba(255, 75, 95, .45);
+}
+
+[data-theme="v6"] .pg-quote-price.down {
+  color: #00d68f;
+  text-shadow: 0 0 12px rgba(0, 214, 143, .4);
+}
+
+[data-theme="v6"] .pg-quote-meta b {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 情绪温度（.mk-senti-*）—— 参考图同类卡是「大数字 + 粗进度条」，是主要亮区之一。
+   实测该卡 p90 仅 51（全图 69），因为只有一行小字 + 一条细进度条，下方大片空白。 */
+[data-theme="v6"] .mk-senti-value {
+  color: #ffffff;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-shadow: 0 0 18px rgba(120, 190, 255, .65);
+}
+
+[data-theme="v6"] .mk-senti-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .mk-senti-level {
+  color: #3ff0b0;
+  font-size: 14px;
+  font-weight: 700;
+  text-shadow: 0 0 12px rgba(63, 240, 176, .5);
+}
+
+[data-theme="v6"] .mk-senti-bar {
+  background: #08111b;
+  height: 14px;
+  border-radius: 7px;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, .7);
+  overflow: hidden;
+}
+
+[data-theme="v6"] .mk-senti-fill {
+  background: linear-gradient(90deg, #2f7fd4, #57b8dc 60%, #7fe3ff);
+  box-shadow: 0 0 16px rgba(87, 184, 220, .65);
+  border-radius: 7px;
+}
+
+[data-theme="v6"] .mk-senti-counts {
+  font-size: 14px;
+  font-weight: 700;
+  gap: 18px;
+}
+
+[data-theme="v6"] .mk-senti-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+[data-theme="v6"] .mk-senti-counts .up { color: var(--up); }
+[data-theme="v6"] .mk-senti-counts .down { color: var(--down); }
+[data-theme="v6"] .mk-senti-counts .flat { color: var(--text-muted); }
+
+/* ---------------------------------------------------------------
+ * 七、表格（.data-table / .pg-table / .pg-table-wrap）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .data-table th,
+[data-theme="v6"] .pg-table thead th {
+  background: #172a3c;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+[data-theme="v6"] .data-table td,
+[data-theme="v6"] .pg-table td {
+  color: #ffffff;
+  border-bottom: 1px solid rgba(160, 190, 220, .24);
+  font-size: 11.5px;
+}
+
+[data-theme="v6"] .data-table tbody tr:nth-child(even) td,
+[data-theme="v6"] .pg-table tbody tr:nth-child(even) td {
+  background: rgba(130, 160, 190, .08);
+}
+
+[data-theme="v6"] .data-table tbody tr:hover td,
+[data-theme="v6"] .pg-table tbody tr:hover td {
+  background: rgba(140, 170, 200, .16);
+}
+
+[data-theme="v6"] .pg-table tr.row-selected td {
+  background: rgba(60, 131, 196, .22);
+}
+
+/* ---------- 表格内数值的 V6 强调（参考图核心特征：红色大数字） ----------
+   首页「核心指数行情」等表格把行情放在 `.num` 列，涨跌由 `.up` / `.down` 类标注。
+   参考图的视觉重点是「数值本身要抢眼」：价格列放大加粗并发红光，涨跌幅用语义色。
+   仅调整字号/字重/发光，不改数值、不改列、不改任何计算口径。 */
+[data-theme="v6"] .data-table td.num,
+[data-theme="v6"] .pg-table td.num {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .2px;
+}
+
+/* 价格列（第 3 列）红色大数字 + 发光 */
+[data-theme="v6"] .data-table td.num:nth-child(3) {
+  color: #ff4b5f;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-shadow: 0 0 12px rgba(255, 75, 95, .55);
+}
+
+[data-theme="v6"] .data-table td.num:nth-child(3).down {
+  color: #00d68f;
+  text-shadow: 0 0 12px rgba(0, 214, 143, .5);
+}
+
+/* 涨跌额 / 涨跌幅列：语义色加强 */
+[data-theme="v6"] .data-table td.num.up {
+  color: #ff5b6b;
+  font-weight: 700;
+}
+
+[data-theme="v6"] .data-table td.num.down {
+  color: #00d68f;
+  font-weight: 700;
+}
+
+/* 首列（名称）加亮，形成「名称→数值」的阅读引导 */
+[data-theme="v6"] .data-table tbody td:first-child {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 代码列弱化为等宽灰蓝，避免与名称抢焦点 */
+[data-theme="v6"] .data-table tbody td:nth-child(2) {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------
+ * 八、按钮与控件（.pg-btn / .pg-tab / .chip / .pg-state）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .pg-btn {
+  background: linear-gradient(160deg, #122234, #0f1c2a);
+  border: 1px solid var(--border);
+  color: #f7fbff;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+[data-theme="v6"] .pg-btn:hover {
+  border-color: var(--accent-strong);
+  background: linear-gradient(160deg, #16293e, #112132);
+}
+
+[data-theme="v6"] .pg-btn.primary {
+  background: linear-gradient(180deg, #3a7ec0, #225b98);
+  border-color: #4a95d8;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .26), 0 0 10px rgba(35, 95, 165, .3);
+}
+
+[data-theme="v6"] .pg-btn.danger {
+  background: linear-gradient(160deg, #a5223a, #6d1428);
+  border-color: #ff5b6b;
+  color: #fff;
+}
+
+[data-theme="v6"] .pg-btn[disabled],
+[data-theme="v6"] .pg-btn.is-disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+[data-theme="v6"] .pg-tab {
+  color: var(--text-dim);
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 4px 10px;
+}
+
+[data-theme="v6"] .pg-tab.active {
+  background: linear-gradient(180deg, #3c83c4, #225b98);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 0 10px rgba(35, 95, 165, .3);
+}
+
+[data-theme="v6"] .chip {
+  background: #101e2c;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+[data-theme="v6"] .chip.up { color: var(--up); border-color: rgba(255, 59, 78, .4); }
+[data-theme="v6"] .chip.down { color: var(--down); border-color: rgba(0, 192, 135, .4); }
+[data-theme="v6"] .chip.warn { color: var(--warn); border-color: rgba(245, 166, 35, .4); }
+
+[data-theme="v6"] .pg-state {
+  background: linear-gradient(155deg, #0e1a28, #091421);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+[data-theme="v6"] .pg-state-title {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .pg-state-hint {
+  color: var(--text-muted);
+}
+
+/* 骨架屏（加载态） */
+[data-theme="v6"] .pg-skeleton span,
+[data-theme="v6"] .pg-skeleton-row {
+  background: linear-gradient(90deg, #0e1a28 25%, #16293e 50%, #0e1a28 75%);
+}
+
+/* ---------------------------------------------------------------
+ * 九、KPI / 指标格（.pg-kpi* / .pg-metric-* / .pg-summary-*）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .pg-kpi {
+  background: linear-gradient(155deg, #0e1a28, #091421);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(185, 205, 225, .16);
+}
+
+[data-theme="v6"] .pg-kpi-k,
+[data-theme="v6"] .pg-kpi-v {
+  color: #ffffff;
+}
+
+[data-theme="v6"] .pg-kpi-v {
+  color: #ff6b7a;
+  font-weight: 700;
+}
+
+[data-theme="v6"] .pg-kpi-v.down {
+  color: #00d68f;
+}
+
+[data-theme="v6"] .pg-metric-cell,
+[data-theme="v6"] .pg-summary-item {
+  background: #091421;
+  border: 1px solid var(--border);
+}
+
+[data-theme="v6"] .pg-metric-label,
+[data-theme="v6"] .pg-summary-label {
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .pg-metric-value,
+[data-theme="v6"] .pg-summary-value {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------
+ * 十、图表容器（ECharts 由 JS 绘制）
+ * 实测：主区图表区 p90 仅 37-45，而参考图 K 线卡 p90=94 ——
+ * 参考图的图表面板本身是「亮底 + 亮网格」。这里给容器加可见的深蓝亮底，
+ * 并配合 core.js chartTheme 的亮网格（border 变量已提到 #4d769c）。
+ * 只改底与边框观感，**不改任何曲线/柱状/坐标数据**。
+ * 注意：不加 border（会让固定宽度的 canvas 溢出，B-01 实测 sw=572/535）。
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .market-chart,
+[data-theme="v6"] .mk-chart-box,
+[data-theme="v6"] .pg-chart,
+[data-theme="v6"] .sd-chart {
+  background:
+    linear-gradient(180deg, rgba(46, 82, 118, .62), rgba(22, 42, 62, .45)),
+    repeating-linear-gradient(0deg, rgba(150, 195, 235, .10) 0 1px, transparent 1px 34px);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------
+ * 十一、新闻流 / 资讯（.pg-news-* / .pg-feed-*）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .pg-news-item,
+[data-theme="v6"] .pg-feed-item {
+  border-bottom: 1px solid rgba(160, 190, 220, .24);
+}
+
+[data-theme="v6"] .pg-news-title,
+[data-theme="v6"] .pg-feed-title {
+  color: #ffffff;
+}
+
+[data-theme="v6"] .pg-news-title:hover,
+[data-theme="v6"] .pg-feed-title:hover {
+  color: var(--accent-strong);
+}
+
+[data-theme="v6"] .pg-news-time,
+[data-theme="v6"] .pg-feed-text,
+[data-theme="v6"] .pg-feed-score {
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .pg-news-tag {
+  background: #101e2c;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+[data-theme="v6"] .pg-news-tag.board {
+  color: var(--accent-strong);
+  border-color: rgba(74, 149, 216, .4);
+}
+
+[data-theme="v6"] .pg-news-tag.event {
+  color: var(--warn);
+  border-color: rgba(245, 166, 35, .4);
+}
+
+/* ---------------------------------------------------------------
+ * 十二、热力图与板块格子（.heat-cell / .crowd-heat-*）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .heat-cell {
+  border: 1px solid rgba(165, 190, 215, .18);
+  border-radius: 4px;
+}
+
+[data-theme="v6"] .heat-cell span {
+  color: #ffffff;
+}
+
+[data-theme="v6"] .heat-cell b {
+  color: #fff;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .crowd-heat-cell {
+  border: 1px solid rgba(165, 190, 215, .18);
+}
+
+/* ---------------------------------------------------------------
+ * 十三、仪表板（.dash-*）—— 48 列栅格与组件库
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .dash-widget {
+  background: var(--v6-card-bg);
+  border: 1px solid var(--v6-card-edge);
+  box-shadow: var(--v6-shadow);
+}
+
+[data-theme="v6"] .dash-lib-card {
+  background: linear-gradient(155deg, #0e1a28, #091421);
+  border: 1px solid var(--border);
+}
+
+[data-theme="v6"] .dash-lib-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 12px rgba(30, 80, 140, .28);
+}
+
+[data-theme="v6"] .dash-lib-id {
+  color: #4a9bff;
+  font-weight: 600;
+}
+
+[data-theme="v6"] .dash-lib-title {
+  color: #ffffff;
+}
+
+[data-theme="v6"] .dash-lib-desc,
+[data-theme="v6"] .dash-lib-meta {
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .dash-lib-thumb {
+  background: rgba(8, 24, 44, .75);
+  border: 1px solid var(--border);
+}
+
+[data-theme="v6"] .dash-lib-blocked {
+  color: var(--warn);
+}
+
+[data-theme="v6"] .dash-empty {
+  color: var(--text-muted);
+}
+
+[data-theme="v6"] .dash-grid.dash-drop-active {
+  outline: 2px dashed var(--accent-strong);
+  outline-offset: -4px;
+}
+
+[data-theme="v6"] .dash-resize-handle,
+[data-theme="v6"] .dash-height-handle {
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------------
+ * 十四、浮层（.copilot / .ui-modal / .toast / .ctx-menu / .ui-palette）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .copilot {
+  background: linear-gradient(180deg, #0a1420, #070e16);
+  border-left: 1px solid var(--border);
+}
+
+[data-theme="v6"] .copilot-header {
+  border-bottom: 1px solid var(--border);
+  color: #ffffff;
+}
+
+[data-theme="v6"] .copilot-msg-body {
+  background: #091421;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+[data-theme="v6"] .copilot-msg.user .copilot-msg-body {
+  background: rgba(60, 131, 196, .18);
+  border-color: rgba(74, 149, 216, .4);
+  color: #ffffff;
+}
+
+[data-theme="v6"] .copilot-input,
+[data-theme="v6"] .copilot-composer {
+  background: #0b1420;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+[data-theme="v6"] .ui-modal,
+[data-theme="v6"] .ui-palette,
+[data-theme="v6"] .dash-picker,
+[data-theme="v6"] .fs-modal {
+  background: linear-gradient(155deg, #172534, #0d1826);
+  border: 1px solid var(--border);
+  box-shadow: 0 0 30px rgba(0, 0, 0, .7), inset 0 1px 0 rgba(190, 210, 230, .2);
+}
+
+[data-theme="v6"] .ui-modal-title,
+[data-theme="v6"] .ui-modal-label,
+[data-theme="v6"] .dash-picker-title,
+[data-theme="v6"] .fs-modal h3 {
+  color: #ffffff;
+}
+
+[data-theme="v6"] .ui-modal-input,
+[data-theme="v6"] .dash-picker-search,
+[data-theme="v6"] .ui-palette-input {
+  background: #0b1420;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+[data-theme="v6"] .ui-palette-item.active,
+[data-theme="v6"] .ui-palette-item:hover,
+[data-theme="v6"] .dash-picker-item:hover {
+  background: rgba(60, 131, 196, .22);
+}
+
+[data-theme="v6"] .ui-overlay,
+[data-theme="v6"] .ui-palette-overlay,
+[data-theme="v6"] .dash-picker-mask,
+[data-theme="v6"] .fs-modal-mask,
+[data-theme="v6"] .dash-ctx-mask {
+  background: rgba(2, 6, 12, .72);
+}
+
+[data-theme="v6"] .ctx-menu,
+[data-theme="v6"] .dash-ctx-menu {
+  background: #0d1826;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .6);
+}
+
+[data-theme="v6"] .ctx-item,
+[data-theme="v6"] .dash-ctx-item {
+  color: var(--text-dim);
+}
+
+[data-theme="v6"] .ctx-item:hover,
+[data-theme="v6"] .dash-ctx-item:hover {
+  background: rgba(60, 131, 196, .22);
+  color: #fff;
+}
+
+[data-theme="v6"] .toast {
+  background: #0d1826;
+  border: 1px solid var(--border);
+  color: #ffffff;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .6);
+}
+
+[data-theme="v6"] .notice {
+  background: rgba(60, 131, 196, .12);
+  border: 1px solid rgba(74, 149, 216, .4);
+  color: var(--text-dim);
+}
+
+[data-theme="v6"] .notice.error {
+  background: rgba(255, 59, 78, .12);
+  border-color: rgba(255, 59, 78, .45);
+  color: #ffd7dc;
+}
+
+[data-theme="v6"] .note.legal {
+  color: var(--warn);
+}
+
+/* ---------------------------------------------------------------
+ * 十五、表单与设置（.set-* / .alr-* / .dca-* / .bt-* / .scr-*）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .set-access-row,
+[data-theme="v6"] .set-close-row,
+[data-theme="v6"] .alr-item,
+[data-theme="v6"] .bt-row {
+  border: 1px solid var(--border);
+  background: #091421;
+}
+
+[data-theme="v6"] .set-close-row.active,
+[data-theme="v6"] .alr-item.unread {
+  border-color: var(--accent-strong);
+  background: rgba(60, 131, 196, .16);
+}
+
+[data-theme="v6"] .alr-input,
+[data-theme="v6"] .dca-row input,
+[data-theme="v6"] .dca-row select,
+[data-theme="v6"] .bt-row input,
+[data-theme="v6"] .scr-cond-value,
+[data-theme="v6"] .scr-cond-op {
+  background: #0b1420;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+[data-theme="v6"] .set-access-url,
+[data-theme="v6"] .set-access-note {
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------
+ * 十六、四态（.state-ok / .state-degraded / .state-unavailable）
+ * --------------------------------------------------------------- */
+[data-theme="v6"] .state-ok { color: var(--down); }
+[data-theme="v6"] .state-degraded { color: var(--warn); }
+[data-theme="v6"] .state-unavailable { color: var(--text-muted); }
+
+/* ---------------------------------------------------------------
+ * 十七、断点：窄屏隐藏次要信息，保证头像/操作区不被裁（B-03 判据）
+ * --------------------------------------------------------------- */
+@media (max-width: 1280px) {
+  [data-theme="v6"] .topbar-actions .global-search {
+    max-width: 130px;
+  }
+}
+
+@media (max-width: 1100px) {
+  [data-theme="v6"] .topbar-actions .global-search {
+    display: none;
+  }
+  [data-theme="v6"] .nav-item {
+    padding: 5px 6px;
+    font-size: 11.5px;
+  }
+}
+
+/* ≤768：侧栏转抽屉（沿用 REQ-20261109-01 方案，仅换色） */
+@media (max-width: 768px) {
+  [data-theme="v6"] .sidebar {
+    background: linear-gradient(180deg, #08111b, #070e16);
+  }
+  [data-theme="v6"] .sb-backdrop {
+    background: rgba(2, 6, 12, .6);
+  }
+}

@@ -37,6 +37,9 @@ from typing import Dict, List, Set
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONT = os.path.join(ROOT, "frontend")
 THEME = os.path.join(FRONT, "css", "theme.css")
+# REQ-20261111-01：V6 皮肤的变量块定义在 v6.css（第三套皮肤），
+# 与 theme.css 的 :root / [data-theme="light"] 一起参与「变量是否已定义」判定。
+V6_SKIN = os.path.join(FRONT, "css", "v6.css")
 
 # JS 运行时注入的变量（不在 theme.css 定义属正常）；来源注明便于复核
 JS_INJECTED: Set[str] = {
@@ -44,7 +47,9 @@ JS_INJECTED: Set[str] = {
 }
 
 # 匹配一个主题块：选择器 { ... }（块内不含大括号，与 theme.css 现状一致）
-BLOCK_RE = re.compile(r"(?P<sel>:root|\[data-theme=\"light\"\])\s*\{(?P<body>[^{}]*)\}")
+BLOCK_RE = re.compile(
+    r"(?P<sel>:root|\[data-theme=\"light\"\]|\[data-theme=\"v6\"\])\s*\{(?P<body>[^{}]*)\}"
+)
 # 匹配块内变量定义：--name: 值;
 DEF_RE = re.compile(r"(--[\w-]+)\s*:")
 # 匹配 var() 引用（含可选 fallback）：var(--name[, fallback])
@@ -59,12 +64,22 @@ def _is_color_var(name: str) -> bool:
 
 
 def _load_theme_blocks() -> Dict[str, Set[str]]:
-    """解析 theme.css，返回 {主题块选择器: 该块定义的变量名集合}。"""
-    with open(THEME, encoding="utf-8") as handle:
-        src = handle.read()
+    """解析 theme.css 与 v6.css，返回 {主题块选择器: 该块定义的变量名集合}。
+
+    REQ-20261111-01：V6 为第三套皮肤，其专属变量（--v6-* / --halo / --grid-line /
+    --card-*）只在 ``v6.css`` 的 ``[data-theme="v6"]`` 块内定义，属正常设计
+    （作用域覆盖，不改 :root 基准）。因此两个文件都要参与「已定义」判定。
+    """
     blocks: Dict[str, Set[str]] = {}
-    for match in BLOCK_RE.finditer(src):
-        blocks[match.group("sel")] = set(DEF_RE.findall(match.group("body")))
+    for path in (THEME, V6_SKIN):
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        for match in BLOCK_RE.finditer(src):
+            sel = match.group("sel")
+            found = set(DEF_RE.findall(match.group("body")))
+            blocks.setdefault(sel, set()).update(found)
     return blocks
 
 
@@ -86,6 +101,7 @@ def main() -> int:
     blocks = _load_theme_blocks()
     root_vars = blocks.get(":root", set())
     light_vars = blocks.get("[data-theme=\"light\"]", set())
+    v6_vars = blocks.get("[data-theme=\"v6\"]", set())
 
     used: Dict[str, List[str]] = {}   # 变量名 -> 引用位置列表
     bg_fallback: List[str] = []       # --bg-* 带色值 fallback 的违规行
@@ -107,6 +123,12 @@ def main() -> int:
     for name in sorted(used):
         if name in JS_INJECTED:
             continue
+        # REQ-20261111-01：--v6-* 为 V6 皮肤专属变量（作用域覆盖，不进 :root），
+        # 只要在 [data-theme="v6"] 块内定义即视为已定义。
+        if name.startswith("--v6-"):
+            if name not in v6_vars:
+                plain_violations.append(name)
+            continue
         if _is_color_var(name):
             if name not in root_vars or name not in light_vars:
                 where = []
@@ -116,7 +138,7 @@ def main() -> int:
                     where.append("[data-theme=light]")
                 color_violations.append(f"{name} 缺定义于 {'/'.join(where)}")
         else:
-            if name not in root_vars and name not in light_vars:
+            if name not in root_vars and name not in light_vars and name not in v6_vars:
                 plain_violations.append(name)
 
     result = {

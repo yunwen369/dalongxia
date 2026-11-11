@@ -71,23 +71,97 @@
     }, 2600); // P2-09：统一 toast 超时为 2600ms
   }
 
+  /** 支持的皮肤白名单（REQ-20261111-01）。
+   *  - `v6`    ：V6 量化看盘台皮肤（**默认**，用户 2026-11-11 10:31 裁决）
+   *  - `light` ：砚浅色（DS-R10-v2.1 §7 定稿色板）
+   *  - `dark`  ：`:root` 深色基准（§7.4 OpenBB 官方色板，全等断言基准）
+   * 非白名单值一律回落 `v6`，防止把未知值写进 `data-theme` 导致三套样式全部失效。
+   */
+  const THEMES = ["v6", "light", "dark"];
+  const DEFAULT_THEME = "v6";
+
+  /** 把任意输入归一化为白名单内的皮肤名。
+   * @param {string} theme 候选皮肤名
+   * @returns {string} 白名单内的皮肤名（非法值回落默认）
+   */
+  function normalizeTheme(theme) {
+    return THEMES.indexOf(theme) >= 0 ? theme : DEFAULT_THEME;
+  }
+
+  /** 同步皮肤切换器的选中态与 aria-pressed。
+   * @param {string} theme 当前生效皮肤
+   * @returns {void} 无返回值
+   */
+  function syncSkinSwitch(theme) {
+    const buttons = document.querySelectorAll("#skin-switch button");
+    Array.prototype.forEach.call(buttons, function (button) {
+      const on = button.getAttribute("data-skin") === theme;
+      button.classList.toggle("active", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
   /** 应用主题并持久化到 localStorage。
-   * @param {Object} theme 主题色对象
+   * @param {string} theme 皮肤名（v6 / light / dark，非法值回落 v6）
+   * @returns {void} 无返回值
    */
   function applyTheme(theme) {
-    const nextTheme = theme === "light" ? "light" : "dark";
+    const nextTheme = normalizeTheme(theme);
     document.documentElement.setAttribute("data-theme", nextTheme);
     try {
       window.localStorage.setItem("openbb-theme", nextTheme);
     } catch (error) {
       // 隐私模式下 localStorage 不可用时忽略，主题仍在当前页面生效
     }
+    syncSkinSwitch(nextTheme);
+    // 换肤后立即重排图表（同步，不等下一帧）。
+    // 原因：--sidebar-w / --menu-w 变化会让容器宽度立刻改变，而 ECharts canvas
+    // 宽度是固定像素值，必须同步 resize 才不会出现横向溢出（B-01 实测 sw=572/535）。
+    resizeCharts();
+    // 下一帧再补一次：字体/滚动条等异步布局稳定后再校正
+    window.setTimeout(resizeCharts, 60);
   }
 
-  /** 切换深浅主题（对应 Ctrl+M）。 */
+  /** 让已挂载的图表重新适配尺寸与主题（换肤后调用）。
+   *  缺陷修复（REQ-20261111-01 落地验收 B-01 暴露）：
+   *  换肤会改变 --menu-w / --sidebar-w / --toolbar-h，容器宽度随之变化，
+   *  但 ECharts canvas 不会自动跟随，导致 `sw=572/535` 横向溢出。
+   *  这里对所有已初始化的 ECharts 实例统一 resize（不改任何数据/曲线）。
+   * @returns {void} 无返回值
+   */
+  function resizeCharts() {
+    // 1) 本应用自管的实例（core.js P.charts）
+    const charts = (window.Pages && window.Pages.charts) || [];
+    charts.forEach(function (instance) {
+      try {
+        instance.resize();
+      } catch (error) {
+        /* 已释放则忽略 */
+      }
+    });
+    // 2) 兜底：按 DOM 反查所有 ECharts 实例（market.js 等独立初始化的实例）
+    if (typeof window.echarts !== "undefined" && echarts.getInstanceByDom) {
+      document.querySelectorAll(".market-chart, .mk-chart-box, .pg-chart, .sd-chart").forEach(function (node) {
+        try {
+          const instance = echarts.getInstanceByDom(node);
+          if (instance) {
+            instance.resize();
+          }
+        } catch (error) {
+          /* 非图表容器则忽略 */
+        }
+      });
+    }
+  }
+
+  /** 切换深浅主题（对应 Ctrl+M）。
+   *  REQ-20261111-01：V6 成为默认后，Ctrl+M 在 `v6` ↔ `light` 之间切换；
+   *  `dark`（§7.4 深色基准）保留为第三态，由顶栏皮肤切换器显式进入。
+   * @returns {void} 无返回值
+   */
   function toggleTheme() {
-    const current = document.documentElement.getAttribute("data-theme") || "light";
-    applyTheme(current === "dark" ? "light" : "dark");
+    const current = normalizeTheme(document.documentElement.getAttribute("data-theme"));
+    applyTheme(current === "light" ? "v6" : "light");
   }
 
   /** 打开 Copilot 抽屉。 */
@@ -679,11 +753,14 @@
   }
 
   /** 页面初始化。 */
-  function init() {    let savedTheme = "dark";
+  function init() {
+    // REQ-20261111-01：默认皮肤改为 V6；localStorage 里的旧值（light/dark）仍被尊重，
+    // 非法值由 applyTheme 内部的 normalizeTheme 回落 v6。
+    let savedTheme = DEFAULT_THEME;
     try {
-      savedTheme = window.localStorage.getItem("openbb-theme") || "light";
+      savedTheme = window.localStorage.getItem("openbb-theme") || DEFAULT_THEME;
     } catch (error) {
-      savedTheme = "dark";
+      savedTheme = DEFAULT_THEME;
     }
     applyTheme(savedTheme);
 
@@ -704,6 +781,19 @@
     const themeButton = document.getElementById("theme-toggle");
     if (themeButton) {
       themeButton.addEventListener("click", toggleTheme);
+    }
+
+    // REQ-20261111-01 SK-02：三皮肤切换器（V6 / 现行 / 砚）。
+    // 与 #theme-toggle 共用 applyTheme 同一实现，不重复主题逻辑。
+    const skinSwitch = document.getElementById("skin-switch");
+    if (skinSwitch) {
+      skinSwitch.addEventListener("click", function (event) {
+        const button = event.target.closest("button[data-skin]");
+        if (!button) {
+          return;
+        }
+        applyTheme(button.getAttribute("data-skin"));
+      });
     }
 
     const copilotButton = document.getElementById("copilot-toggle");
@@ -766,7 +856,14 @@
     syncNavActive: syncNavActive,
     VIEW_GROUP: VIEW_GROUP,
     VIEW_TITLES: VIEW_TITLES,
-    viewTitle: viewTitle
+    viewTitle: viewTitle,
+    // REQ-20261111-01：换肤与图表重排对外暴露（三皮肤切换器与验收探针共用）
+    applyTheme: applyTheme,
+    toggleTheme: toggleTheme,
+    resizeCharts: resizeCharts,
+    THEMES: THEMES,
+    DEFAULT_THEME: DEFAULT_THEME,
+    normalizeTheme: normalizeTheme
   };
 
   // defer 脚本执行时 DOM 已解析完成，可直接初始化

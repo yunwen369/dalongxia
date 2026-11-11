@@ -133,6 +133,18 @@
     });
   }
 
+  /** 单请求失败折算为 null，避免 Promise.all 一处失败拖垮整页（2026-11-10）。
+   * @param {Promise} task 接口 Promise
+   * @returns {Promise} 永不 reject 的 Promise
+   */
+  function soft(task) {
+    return task.then(function (value) {
+      return value;
+    }).catch(function () {
+      return null;
+    });
+  }
+
   function loadStock(force) {
     var symbol = state.stock.symbol;
     var market = state.stock.market;
@@ -166,11 +178,15 @@
       tasks.push(Promise.resolve(null));
     }
 
-    Promise.all(tasks)
+    Promise.all(tasks.map(soft))
       .then(function (result) {
+        // 全部失败才视为真故障；单块失败已由后端返回空态（available=false），逐卡渲染。
+        if (result.every(function (item) { return item === null; })) {
+          throw new Error(t("state.errorHint"));
+        }
         stockCache = { key: key, panel: result[0], estimates: result[2] };
         P.paintStock({
-          panel: result[0],
+          panel: result[0] || {},
           profile: result[1],
           estimates: result[2],
           holders: result[3],

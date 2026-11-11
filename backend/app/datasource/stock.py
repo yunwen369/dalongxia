@@ -82,6 +82,11 @@ def _secucode(symbol: str) -> str:
 def _sina_prefix(symbol: str) -> str:
     """6 位代码 → 新浪前缀（sh/sz/bj），供 stock_financial_report_sina 使用。
 
+    2026-11-10 修复：原实现只认 6/9→sh、0/2/3→sz，其余一律 bj，
+    导致沪市 ETF（515880 等 5xxxxx）、深市 ETF/LOF（15/16/18xxxx）被错判为北交所，
+    新浪接口返回 ``null``，资金分布因此恒抛 ValueError。现补齐基金与可转债前缀，
+    与 :func:`utils.normalize_symbol` 的腾讯代码口径保持一致。
+
     Args:
         symbol: 证券代码（A股 6 位 / 港股 5 位 / 美股字母代码）。
 
@@ -89,9 +94,9 @@ def _sina_prefix(symbol: str) -> str:
         str: 新浪市场前缀（sh/sz/bj）。
     """
     code = str(symbol).strip()
-    if code.startswith(("6", "9")):
+    if code.startswith(("6", "9", "5", "11")):
         return f"sh{code}"
-    if code.startswith(("0", "2", "3")):
+    if code.startswith(("0", "2", "3", "15", "16", "18", "12")):
         return f"sz{code}"
     return f"bj{code}"
 
@@ -903,7 +908,13 @@ def get_realtime_panel(symbol: str, market: str = "a") -> Dict[str, Any]:
             blocks["forecast"] = "ok"
         except Exception as exc:  # noqa: BLE001
             panel["forecast"] = None
-            blocks["forecast"] = f"failed:{type(exc).__name__}"
+            # 场内基金（ETF/LOF）没有券商个股研报，属「不适用」而非「通道故障」，
+            # 标注 unsupported 以免被前端当作数据源异常（2026-11-10）。
+            blocks["forecast"] = (
+                "unsupported:场内基金无个股研报覆盖"
+                if utils.is_fund_like(symbol)
+                else f"failed:{type(exc).__name__}"
+            )
     else:
         panel["fund_dist"] = None
         panel["news"] = []

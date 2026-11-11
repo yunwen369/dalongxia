@@ -608,6 +608,19 @@
   P.buildCard = buildCard;
   P.chartTheme = chartTheme;
   P.disposeCharts = disposeCharts;
+  /** 让已挂载图表重排并重取主题色（换肤后由 app.js applyTheme 调用）。
+   * @returns {void} 无返回值
+   */
+  P.resizeCharts = function resizeCharts() {
+    P.charts.forEach(function (instance) {
+      try {
+        instance.resize();
+      } catch (error) {
+        /* 已释放则忽略 */
+      }
+    });
+  };
+  P.charts = P.charts;
   P.el = el;
   P.fmt = fmt;
   P.fmtAmount = fmtAmount;

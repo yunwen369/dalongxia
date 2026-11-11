@@ -70,6 +70,43 @@ def _quote_status(quote: Optional[Dict[str, Any]]) -> tuple[Optional[str], str, 
 
 
 # =============================================================
+# 〇、场内基金（ETF/LOF）个股通道空态
+# =============================================================
+# 2026-11-10：ETF/LOF 没有个股 F10 概况、十大股东、中文财报与券商个股研报。
+# 原实现让这些接口落进降级链并以 UPSTREAM_ERROR 收尾，
+# 前端 stock_b.js 的 Promise.all 因此整体 reject，把本可用的
+# 报价/K线/分时/新闻/舆情一起置为「加载失败」。
+# 现改为返回成功信封 + available=false + 中文说明（空态），只影响个股专属卡片。
+_FUND_EMPTY_NOTES = {
+    "profile": "ETF/LOF 无个股 F10 概况，请查看基金档案或标的指数",
+    "holders": "ETF/LOF 无十大股东口径，份额持有人见基金定期报告",
+    "financial": "ETF/LOF 无公司财报口径，净值与跟踪误差见基金页",
+    "fcf": "ETF/LOF 无公司现金流口径，FCF 检查不适用",
+}
+
+
+def _fund_empty(code: str, kind: str, shape: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """构造场内基金（ETF/LOF）个股通道的空态响应。
+
+    Args:
+        code: 归一化后的 6 位代码。
+        kind: 通道类型，取值 profile / holders / financial / fcf。
+        shape: 前端渲染所需的最小空结构骨架，如 {"top10": [], "free_top10": []}。
+
+    Returns:
+        dict: 统一成功信封，data 含 available=False 与口径说明。
+    """
+    data: Dict[str, Any] = {
+        "symbol": code,
+        "available": False,
+        "note": _FUND_EMPTY_NOTES.get(kind, "该标的无个股口径数据"),
+    }
+    if shape:
+        data.update(shape)
+    return pack_success(data, "本系统", "场内基金无个股口径", None, "本地态", False)
+
+
+# =============================================================
 # 一、概况 / 股东
 # =============================================================
 @router.get("/profile")
@@ -93,6 +130,8 @@ def stock_profile(
     if normalized is None:
         return bad_request("证券代码格式不正确，请输入 6 位 A股代码或有效港美股代码")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "profile")
 
     def loader() -> Dict[str, Any]:
         """概况取数（东财 F10 主源；港美股退化为腾讯行情）。
@@ -131,6 +170,8 @@ def stock_holders(symbol: str = Query(..., description="6 位 A股代码")) -> D
     if normalized is None:
         return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "holders", {"top10": [], "free_top10": []})
 
     def loader() -> Dict[str, Any]:
         """股东取数（东财 F10，最新一期）。
@@ -222,6 +263,8 @@ def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代�
     if normalized is None:
         return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "financial", {"periods": [], "metrics": []})
 
     def loader() -> Dict[str, Any]:
         """新浪财务摘要取数。
@@ -321,6 +364,8 @@ def stock_financial_trend(
     if normalized is None:
         return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "financial", {"periods": [], "series": []})
 
     def loader() -> Dict[str, Any]:
         """新浪利润表取数并计算同比。
@@ -369,6 +414,8 @@ def stock_financial_indicator(
     if normalized is None:
         return bad_request("证券代码格式不正确，请检查代码或市场后重试")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "financial", {"items": []})
     if market_text in ("hk", "us"):
         def loader_overseas() -> Dict[str, Any]:
             """雪球港美股中文财务指标取数。
@@ -435,6 +482,8 @@ def stock_financial_report(
     if statement not in ("资产负债表", "利润表", "现金流量表"):
         return bad_request("statement 仅支持资产负债表/利润表/现金流量表")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "financial", {"statement": statement, "rows": []})
 
     def loader() -> Dict[str, Any]:
         """新浪三表取数。
@@ -486,6 +535,8 @@ def stock_fcf_health(
     if normalized is None:
         return bad_request("证券代码格式不正确，请输入 6 位 A股代码")
     code = normalized[0]
+    if utils.is_fund_like(code):
+        return _fund_empty(code, "fcf", {"applicable": False})
 
     def loader() -> Dict[str, Any]:
         """三表取数并计算（季报数据，缓存 6 小时）。

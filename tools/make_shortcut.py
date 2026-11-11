@@ -14,7 +14,7 @@ from ctypes import POINTER, byref, c_int, c_ulong, c_ushort, c_void_p, c_wchar_p
 EXE = r"F:\workbuddy记录\OpenBB Terminal Pro\A_运行资产\正式环境\OpenBB-CN.exe"
 WORKDIR = r"F:\workbuddy记录\OpenBB Terminal Pro\A_运行资产\正式环境"
 LNK = os.path.join(os.environ["USERPROFILE"], "Desktop", "OpenBB 中文投研工作台.lnk")
-DESC = "OpenBB 中文投研工作台 v2.2.0（网页版 · 正式环境）"
+DESC = "OpenBB 中文投研工作台 v3.0.0（网页版 · 正式环境 · V6 量化看盘台皮肤）"
 
 CLSCTX_INPROC_SERVER = 1
 
