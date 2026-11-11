@@ -134,6 +134,8 @@ def _start_app(exe: Path, port: int) -> subprocess.Popen:
     """
     env = dict(os.environ)
     env["OPENBB_NO_BROWSER"] = "1"
+    # 实测：打包产物 --serve-only 不解析 --port，端口由 OPENBB_PORT 决定（规范 §13.3 需要真实 /api/health）
+    env["OPENBB_PORT"] = str(port)
     return subprocess.Popen([str(exe), "--serve-only", "--port", str(port)],
                             cwd=str(exe.parent), stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, env=env)
@@ -161,6 +163,7 @@ def main() -> int:
     parser.add_argument("--setup", required=True, help="安装包 exe 路径")
     parser.add_argument("--port", type=int, default=6917, help="测试端口（避开 6900/6903）")
     parser.add_argument("--out", default="install_test_result.json", help="结果 JSON 路径")
+    parser.add_argument("--keep-sandbox", action="store_true", help="保留沙箱目录（排障用，默认按 §2.11 清理）")
     args = parser.parse_args()
 
     setup = Path(args.setup).resolve()
@@ -170,6 +173,12 @@ def main() -> int:
 
     shortcut_bak = _backup_shortcut()
     results = {"setup": str(setup), "setup_size": setup.stat().st_size, "scenarios": []}
+
+    # 服务守护（2026-11-12 实测缺陷）：NSIS 卸载器按进程名结束 OpenBB-CN.exe，
+    # 会连带杀掉正式环境 6900 实例。测试前记录其状态，测试后若被误杀则自动拉起。
+    formal_exe = Path(r"F:\workbuddy记录\OpenBB Terminal Pro\A_运行资产\正式环境\OpenBB-CN.exe")
+    formal_was_up = not _port_free(6900)
+    results["formal_env_was_up"] = formal_was_up
 
     def record(name: str, ok: bool, detail: dict) -> None:
         """记录一个场景结果并打印。
@@ -192,20 +201,14 @@ def main() -> int:
     health: dict = {}
     health_mode = "serve-only"
     if installed:
-        if _port_free(6900):
-            # --serve-only 固定用 config.PORT=6900（不支持 --port）
-            proc = _start_app(exe, 6900)
-            try:
-                health = _wait_health(6900, timeout=120)
-            finally:
-                _stop_app(proc)
-        else:
-            # 6900 被正式环境占用（不杀既有进程）：改用 --check 自检，如实登记
-            health_mode = "check(端口 6900 被正式环境占用)"
-            check = subprocess.run([str(exe), "--check"], cwd=str(exe.parent),
-                                   capture_output=True, timeout=120, text=True)
-            if check.returncode == 0:
-                health = {"app": {"version": "check-ok"}, "build": (check.stdout or "").strip()[:60]}
+        # v3.1.0：始终用 --port 独立端口取真实 /api/health，不再因 6900 被正式环境占用
+        # 退化为 `--check`（那只能证明能启动，不能证明 HTTP 服务可用）
+        proc = _start_app(exe, args.port)
+        try:
+            health = _wait_health(args.port, timeout=120)
+        finally:
+            _stop_app(proc)
+        health_mode = "serve-only(OPENBB_PORT=%d)" % args.port
     shortcut_desktop = any(DESKTOP.glob("*投研*.lnk"))
     shortcut_menu = any(START_MENU.glob("*投研*"))
     app_version = (health.get("app") or {}).get("version")
@@ -273,11 +276,43 @@ def main() -> int:
         "data_kept_by_design": (upgrade / "data").exists(),
     })
 
+    # 服务守护：卸载器按进程名杀进程可能误杀正式环境；只在实际被误杀时才拉起
+    restored = False
+    if formal_was_up:
+        if not _port_free(6900):
+            restored = True
+            print("✅ 正式环境服务守护：测试后仍在运行，未被误杀")
+        elif formal_exe.exists():
+            env = dict(os.environ)
+            env["OPENBB_NO_BROWSER"] = "1"
+            try:
+                subprocess.Popen([str(formal_exe), "--serve-only", "--lan"],
+                                 cwd=str(formal_exe.parent), stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, env=env)
+                restored = bool(_wait_health(6900, timeout=150))
+            except Exception:  # noqa: BLE001 - 拉起失败不影响三场景结论，但必须记录
+                restored = False
+            print(("✅" if restored else "❌") + " 正式环境服务守护：" +
+                  ("已被卸载器误杀，已自动拉起" if restored else "拉起失败，需人工介入"))
+    results["formal_env_restored"] = restored
+
     _restore_shortcut(shortcut_bak)
 
     results["passed"] = all(item["ok"] for item in results["scenarios"])
     out_path = Path(args.out)
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # §2.11：安装测试实例必须在本次测试结束后清理（保留结果 JSON，不保留沙箱目录）
+    if not args.keep_sandbox:
+        try:
+            if SANDBOX_DIR.exists():
+                shutil.rmtree(SANDBOX_DIR, ignore_errors=True)
+            results["sandbox_cleaned"] = not SANDBOX_DIR.exists()
+        except Exception:  # noqa: BLE001 - 清理失败不影响结论，但如实记录
+            results["sandbox_cleaned"] = False
+        out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("沙箱清理：" + ("已清理" if results.get("sandbox_cleaned") else "清理失败，需人工处理"))
+
     print("\n结论：" + ("三场景全部通过" if results["passed"] else "存在未通过场景，见 JSON"))
     print(f"报告：{out_path}")
     return 0 if results["passed"] else 1
