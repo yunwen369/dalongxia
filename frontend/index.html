@@ -1,446 +1,204 @@
 <!DOCTYPE html>
-<!-- REQ-20261111-01：V6 为默认皮肤（用户 2026-11-11 10:31 裁决）。
-     三套皮肤并存：v6（默认）/ light（砚）/ dark（:root §7.4 基准）。 -->
-<html lang="zh-CN" data-theme="v6">
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenBB 中文投研工作台</title>
-  <link rel="icon" href="favicon.ico" type="image/x-icon">
-  <!-- v2.1.0 网页化：远端访问口令兜底 —— API 返回 401 即跳 /auth 登录页。
-       必须同步执行且早于各页面脚本，故不加 defer。未配置口令时不触发。
-       AR-14（REQ-20261109-01）拆分归因：429=同 IP 失败节流（≥10 次/60s），不是未登录——
-       改为指数退避自动重试（0.8s→1.6s→3.2s 共 3 次）并顶部提示，不再误跳登录页；
-       服务端已改为「未登录访问 / 直接 302 /auth」，首次加载的并发 401 已被 302 前置消除。 -->
-  <script>
-    (function () {
-      var rawFetch = window.fetch;
-      // 顶部提示条（429 场景），避免用户卡在满屏加载失败无解释
-      function showRetryHint() {
-        var bar = document.getElementById("openbb-429-hint");
-        if (bar) { bar.hidden = false; return; }
-        bar = document.createElement("div");
-        bar.id = "openbb-429-hint";
-        bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;" +
-          "padding:6px 14px;font:12px/1.6 sans-serif;color:#8a6d00;background:#fff8e1;" +
-          "border-bottom:1px solid #e6c84a;text-align:center;";
-        bar.textContent = "请求过于频繁（失败节流），正在自动重试……请稍候，不要反复刷新";
-        (document.body || document.documentElement).appendChild(bar);
-      }
-      function hideRetryHint() {
-        var bar = document.getElementById("openbb-429-hint");
-        if (bar) { bar.hidden = true; }
-      }
-      window.fetch = function () {
-        var args = arguments;
-        function attempt(remain, delayMs) {
-          return rawFetch.apply(this, args).then(function (resp) {
-            if (resp.status === 401 && !window.__openbbAuthRedirect) {
-              window.__openbbAuthRedirect = true;
-              window.location.replace("/auth");
-              return resp;
-            }
-            if (resp.status === 429 && remain > 0) {
-              showRetryHint();
-              return new Promise(function (resolve) {
-                setTimeout(function () {
-                  attempt(remain - 1, delayMs * 2).then(resolve);
-                }, delayMs);
-              });
-            }
-            if (resp.status !== 429) { hideRetryHint(); }
-            return resp;
-          });
-        }
-        // 指数退避：0.8s / 1.6s / 3.2s 共 3 次重试
-        return attempt(3, 800);
-      };
-    })();
-  </script>
-  <!-- 主题变量与布局样式：尺寸与色板来自规范 v7.0 §7.4 -->
-  <link rel="stylesheet" href="css/theme.css">
-  <link rel="stylesheet" href="css/app.css">
-  <!-- 阶段 5.1 三视图样式：48 列栅格、四态、双徽章、≤1200 窄屏适配 -->
-  <link rel="stylesheet" href="css/pages.css">
-  <!-- 阶段 6：仪表板与全局浮层样式 -->
-  <link rel="stylesheet" href="css/dashboard.css">
-  <link rel="stylesheet" href="css/p1.css">
-  <!-- REQ-20261111-01：V6 量化看盘台皮肤（第三套，默认）。
-       必须最后加载 —— 全部规则限定 [data-theme="v6"] 作用域，
-       覆盖前四个文件的结构层样式；:root 与 light 皮肤零影响。 -->
-  <link rel="stylesheet" href="css/v6.css">
-  <!-- 本地 ECharts，无 CDN 依赖；本阶段仅预加载，图表在后续阶段接入 -->
-  <!-- 阶段 6：国际化与本地化（最先加载，供后续脚本取词） -->
-  <script src="js/i18n.js" defer></script>
-  <!-- P1-13：前段共享工具模块（el/t/toast/fmt/fmtPct/api/renderTable/buildCandlestickOption） -->
-  <script src="js/utils.js" defer></script>
-  <script src="vendor/echarts.min.js" defer></script>
-  <script src="js/market.js" defer></script>
-  <script src="js/app.js" defer></script>
-  <!-- 阶段 5.1：#/sectors、#/stock、#/sector-val 三视图与 hash 路由 -->
-  <script src="js/pages/core.js" defer></script>
-  <script src="js/pages/sectors.js" defer></script>
-  <script src="js/pages/stock_a.js" defer></script>
-  <script src="js/pages/stock_b.js" defer></script>
-  <script src="js/pages/stock_c.js" defer></script>
-  <script src="js/pages/combo.js" defer></script>
-  <script src="js/pages/crowding.js" defer></script>
-  <script src="js/pages/sectorval.js" defer></script>
-  <script src="js/pages/fins.js" defer></script>
-  <script src="js/pages/news.js" defer></script>
-  <script src="js/pages/fund.js" defer></script>
-  <script src="js/pages/portfolio.js" defer></script>
-  <script src="js/pages/connectors.js" defer></script>
-  <script src="js/pages/yjb.js" defer></script>
-  <script src="js/pages/charting.js" defer></script>
-  <script src="js/pages/settings.js" defer></script>
-  <script src="js/pages/macro.js" defer></script>
-  <script src="js/pages/valuation.js" defer></script>
-  <script src="js/pages/watchlist.js" defer></script>
-  <script src="js/pages/screener.js" defer></script>
-  <script src="js/pages/alerts.js" defer></script>
-  <script src="js/core/tree.js" defer></script>
-  <script src="js/core/ctxmenu.js" defer></script>
-  <script src="js/core/grid.js" defer></script>
-  <script src="js/core/state4.js" defer></script>
-  <script src="js/pages/sector_detail.js" defer></script>
-  <script src="js/pages/stock_detail.js" defer></script>
-  <script src="js/pages/fund_extras.js" defer></script>
-  <script src="js/pages/p1_views.js" defer></script>
-  <script src="js/pages/init.js" defer></script>
-  <!-- 批次 5.5：Copilot 抽屉对话（AI 助手） -->
-  <script src="js/copilot.js" defer></script>
-  <!-- 阶段 6：全局交互（命令面板/模态框）与组件化仪表板 -->
-  <script src="js/ui.js" defer></script>
-  <script src="js/dashboard.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V6 视觉稿 · OpenBB 中文投研工作台（独立评审稿）</title>
+<link rel="stylesheet" href="css/app.css">
 </head>
-<body>
-  <div class="app-shell">
-    <!-- ① 主菜单条：高 64px，通栏顶部 -->
-    <header class="topbar" role="banner">
-      <!-- AR-01（REQ-20261109-01）：移动端汉堡按钮——≤768px 显示，唤出侧栏抽屉 -->
-      <button class="menu-toggle" id="menu-toggle" type="button" aria-label="打开导航菜单" aria-expanded="false" aria-controls="sidebar">
-        <span aria-hidden="true">☰</span>
-      </button>
-      <div class="logo" id="logo-home" role="link" tabindex="0" title="返回首页（点击 Logo 回到 市场总览）">
-        <span class="logo-mark" aria-hidden="true">OB</span>
-        <span data-i18n="app.name">OpenBB 中文投研工作台</span>
-      </div>
+<body data-theme="v6">
 
-      <!-- R6-13 / F6-13：顶栏只放 8 个一级项（原 12 个平级视图）。
-           每个一级项带 data-group，进入该组任一视图都会高亮对应一级项；
-           二级视图在侧栏对应分组下呈现（层级关系，不再互相重复）。
-           首页不再是平级入口：点左上角 Logo 回首页（hash 路由 #/home 保持不变）。 -->
-      <nav class="nav" id="main-nav" aria-label="主菜单">
-        <button class="nav-item" type="button" data-view="dashboard" data-group="dashboard" data-i18n="nav.dashboard">仪表板</button>
-        <button class="nav-item" type="button" data-view="watchlist" data-group="watchlist" data-i18n="nav.watchlist">自选股</button>
-        <button class="nav-item" type="button" data-view="news" data-group="news" data-i18n="nav.newsGroup">资讯</button>
-        <button class="nav-item" type="button" data-view="sectors" data-group="market" data-i18n="nav.market">市场</button>
-        <button class="nav-item" type="button" data-view="lhb" data-group="money" data-i18n="nav.money">资金</button>
-        <button class="nav-item" type="button" data-view="portfolio" data-group="portfolio" data-i18n="nav.portfolioGroup">组合</button>
-        <button class="nav-item" type="button" data-view="yjb" data-group="yjb" data-i18n="nav.yjb">养基宝</button>
-        <button class="nav-item" type="button" data-view="settings" data-group="system" data-i18n="nav.system">系统</button>
-      </nav>
-
-      <div class="topbar-actions">
-        <input
-          class="global-search"
-          id="global-search"
-          type="search"
-          placeholder="搜索代码或名称" data-i18n-placeholder="search.placeholder"
-          title="全局搜索：股票 / 基金 / 板块（Ctrl+K）" data-i18n-title="search.globalTitle"
-          autocomplete="off"
-          aria-label="全局搜索"
-        >
-        <button class="icon-button" id="theme-toggle" type="button" title="切换深浅主题（Ctrl+M）" data-i18n-title="action.themeToggleTitle">主题</button>
-        <!-- REQ-20261111-01 SK-02：三皮肤切换器（V6 默认 / 现行深色 / 砚浅色）。
-             与 #theme-toggle 并存：#theme-toggle 保持原 Ctrl+M 两态循环语义，
-             本切换器提供显式三态选择，两者共用 applyTheme 同一实现。 -->
-        <div class="skin-switch" id="skin-switch" role="group" aria-label="界面皮肤" title="切换界面皮肤（V6 为默认）">
-          <button type="button" data-skin="v6" class="active" aria-pressed="true">V6</button>
-          <button type="button" data-skin="dark" aria-pressed="false">现行</button>
-          <button type="button" data-skin="light" aria-pressed="false">砚</button>
-        </div>
-        <button class="icon-button" id="copilot-toggle" type="button" title="打开 AI 助手抽屉" data-i18n-title="copilot.open">AI 助手</button>
-        <!-- AR-13（REQ-20261109-01）：铃铛 emoji 改文字按钮，与「主题/AI 助手」风格统一（含未读徽标） -->
-        <button class="icon-button" id="alerts-bell" type="button" title="提醒中心" data-i18n-title="alerts.bellTitle" aria-label="提醒中心">提醒<em class="bell-badge" id="alerts-unread" hidden>0</em></button>
-      </div>
-    </header>
-
-    <div class="body">
-      <!-- AR-01：移动端侧栏抽屉遮罩（≤768px 且抽屉打开时显示，点击关闭） -->
-      <div class="sb-backdrop" id="sb-backdrop" hidden></div>
-      <!-- ② 可折叠仪表板侧栏：宽 236px -->
-      <aside class="sidebar" role="complementary" aria-label="主导航" id="sidebar">
-        <div class="sb-search">
-          <input id="sb-search" type="search" placeholder="搜索页面 / 功能…" autocomplete="off" aria-label="搜索页面">
-        </div>
-        <nav class="sb-tree" id="sb-tree" aria-label="页面目录">
-
-          <!-- 组1 总览 -->
-          <details class="sb-group" data-group="overview" open>
-            <summary class="sb-group-h" data-i18n="grp.overview">总览</summary>
-            <ul class="sidebar-list">
-              <!-- AR-04（REQ-20261109-01）：首页「市场总览」入侧栏 —— 此前首页是导航孤儿（无任何入口） -->
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="home" data-view-target="home" data-i18n="nav.marketOverview">市场总览</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="today" data-view-target="today" data-i18n="nav.today">今日研判</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="dashboard" data-view-target="dashboard" data-i18n="nav.workspace">自定义工作区</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="dashboard-manage" data-view-target="dashboard-manage" data-i18n="nav.dashboardManage">仪表板管理</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="widget-library" data-view-target="widget-library" data-i18n="sidebar.library">组件库</li>
-            </ul>
-          </details>
-
-          <!-- 组2 行情市场 -->
-          <details class="sb-group" data-group="market" open>
-            <summary class="sb-group-h" data-i18n="grp.market">行情市场</summary>
-            <ul class="sidebar-list">
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="market" data-view-target="market" data-i18n="nav.marketOverview">市场概览</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="macro" data-view-target="macro" data-i18n="nav.macroData">宏观数据</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="sectors" data-view-target="sectors" data-i18n="nav.sectorsMap">板块云图</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="sector-val" data-view-target="sector-val" data-i18n="nav.sectorDetail">板块详情</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="lhb" data-view-target="lhb" data-i18n="nav.moneyFlow">资金流向</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fund" data-view-target="fund" data-i18n="nav.fundDetail">基金详情</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fund-combo" data-view-target="fund-combo" data-i18n="nav.fundCombo">基金组合诊断</li>
-            </ul>
-          </details>
-
-          <!-- 组3 投研分析 -->
-          <details class="sb-group" data-group="research" open>
-            <summary class="sb-group-h" data-i18n="grp.research">投研分析</summary>
-            <ul class="sidebar-list">
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="stock" data-view-target="stock" data-i18n="nav.stockResearch">个股研究</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="news" data-view-target="news" data-i18n="nav.newsSenti">新闻情绪</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="fin" data-view-target="fin" data-i18n="nav.finSummary">财报摘要</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="ann" data-view-target="ann" data-i18n="nav.annLib">公告库·正文</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="tools" data-view-target="tools" data-i18n="nav.tools">工具</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="cand" data-view-target="cand" data-i18n="nav.cand">候选池</li>
-            </ul>
-          </details>
-
-          <!-- 组4 我的投资 -->
-          <details class="sb-group" data-group="my" open>
-            <summary class="sb-group-h" data-i18n="grp.my">我的投资</summary>
-            <ul class="sidebar-list">
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="portfolio" data-view-target="portfolio" data-i18n="nav.myInvest">我的投资</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="watchlist" data-view-target="watchlist" data-i18n="sidebar.myWatchlist">自选股</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="yjb" data-view-target="yjb" data-i18n="nav.yjbHoldings">养基宝</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="mgr" data-view-target="mgr" data-i18n="nav.mgr">经理画像</li>
-            </ul>
-            <ul class="sidebar-list sidebar-subtree" id="sidebar-watchlist-groups"></ul>
-          </details>
-
-          <!-- 组5 系统 -->
-          <details class="sb-group" data-group="sys" open>
-            <summary class="sb-group-h" data-i18n="grp.sys">系统</summary>
-            <ul class="sidebar-list">
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="settings" data-view-target="settings" data-i18n="nav.sysSettings">系统设置</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="connectors" data-view-target="connectors" data-i18n="nav.connectors">连接器</li>
-              <li class="sidebar-item" role="link" tabindex="0" data-action="view" data-view="alerts" data-view-target="alerts" data-i18n="nav.alerts">提醒中心</li>
-            </ul>
-          </details>
-
-        </nav>
-      </aside>
-
-      <!-- ③ 主工作区：工具栏 52px + 视图区 -->
-      <main class="workspace" role="main">
-        <div class="toolbar">
-          <!-- 标题由路由独占控制（app.js viewTitle）：不带 data-i18n，
-               否则 i18n.apply() 会把已切换的标题重写回「首页 · 市场总览」 -->
-          <span class="page-title" id="page-title">仪表板</span>
-          <!-- R6-13 / F6-13：面包屑（一级 / 二级 / 三级，逐级可点回） -->
-          <nav class="crumb" id="crumb" aria-label="面包屑"></nav>
-          <span class="badge" id="build-badge" data-i18n="health.buildLoading">构建标识加载中</span>
-          <span class="badge" id="health-badge" data-i18n="health.checking">健康检查中</span>
-          <span class="toolbar-spacer"></span>
-          <button class="icon-button" id="layout-toggle" type="button" title="布局模式：拖拽排序 / 4·6·12 列宽度">◧ 布局</button>
-          <button class="icon-button" id="layout-reset" type="button" title="重置本页布局">↺ 重置</button>
-          <select id="state4-select" class="state4-select" title="四态演示（验收用，不影响业务渲染）">
-            <option value="default">◧ 四态：正常</option>
-            <option value="loading">◧ 加载中</option>
-            <option value="empty">◧ 空数据</option>
-            <option value="error">◧ 错误态</option>
-          </select>
-          <button class="icon-button" id="refresh-button" type="button" title="刷新当前视图（F5）" data-i18n-title="action.refreshTitle">刷新</button>
-        </div>
-
-        <section class="viewport" id="viewport">
-          <div class="market-panel">
-            <div class="market-controls">
-              <label data-i18n="market.label">市场
-                <select id="mk-market">
-                  <option value="a">A股</option>
-                  <option value="hk">港股</option>
-                  <option value="us">美股</option>
-                </select>
-              </label>
-              <label data-i18n="mk.codeLabel">代码
-                <input id="mk-symbol" value="600519" autocomplete="off" aria-label="股票代码">
-              </label>
-              <button class="icon-button" id="mk-refresh" type="button" data-i18n="action.refresh">刷新</button>
-              <button class="icon-button" id="mk-chart-link" type="button" data-i18n="stock.chartLink">图表分析 ↗</button>
-              <span class="toolbar-spacer"></span>
-              <span class="badge" id="mk-source" data-i18n="mk.badgeSource">数据源：—</span>
-              <!-- AR-11（REQ-20261109-01）：口径/状态/时间三徽章合并为「口径 ℹ」浮层按钮，
-                   消除「服务正常/四态/状态」三处重复与 1024 折行；详情悬停 title 展示 -->
-              <button class="badge badge-info" id="mk-caliber-info" type="button" title="口径 / 状态 / 时间详见浮层">口径 ℹ</button>
-            </div>
-
-            <div class="market-grid">
-              <article class="card market-card">
-                <div class="card-header">
-                  <span class="card-title" data-i18n="market.coreIndex">核心指数行情</span>
-                  <span class="badge" id="mk-index-badge" data-i18n="state.loadingShort">加载中</span>
-                </div>
-                <div class="card-body table-scroll" id="mk-index-table">—</div>
-              </article>
-
-              <!-- FN-01：市场情绪温度 + 涨跌家数（复用 /api/sentiment/market，与仪表板 N-03 同源，不另造接口） -->
-              <article class="card market-card">
-                <div class="card-header">
-                  <span class="card-title" data-i18n="market.sentiTitle">市场情绪 · 涨跌家数</span>
-                  <span class="badge" id="mk-senti-badge" data-i18n="state.loadingShort">加载中</span>
-                </div>
-                <div class="card-body" id="mk-senti-body">—</div>
-              </article>
-
-              <article class="card market-card">
-                <div class="card-header">
-                  <span class="card-title" data-i18n="market.indexTrend">上证指数走势</span>
-                  <span class="badge" id="mk-index-kline-badge" data-i18n="state.loadingShort">加载中</span>
-                </div>
-                <div class="card-body">
-                  <div class="market-chart" id="mk-index-chart"></div>
-                </div>
-              </article>
-
-              <article class="card market-card">
-                <div class="card-header">
-                  <span class="card-title" data-i18n="stock.quoteCard">实时报价</span>
-                  <span class="badge" id="mk-quote-badge" data-i18n="state.loadingShort">加载中</span>
-                </div>
-                <div class="card-body table-scroll" id="mk-quote-table">—</div>
-              </article>
-
-              <!-- AR-10（REQ-20261109-01）：引导卡改为可关闭的一次性提示（localStorage 记忆） -->
-              <article class="card market-card dismissible" id="mk-kline-card" hidden>
-                <div class="card-header">
-                  <span class="card-title" data-i18n="market.klineMinute">K线 / 分时</span>
-                  <button class="icon-button dismiss-btn" id="mk-kline-dismiss" type="button" title="关闭本提示（不再显示）" aria-label="关闭 K线分时引导卡">✕</button>
-                </div>
-                <div class="card-body">
-                  <div class="pg-state" id="mk-chart-hint">
-                    <div class="pg-state-title" data-i18n="market.unifiedTitle">K 线与分时统一在「图表分析」页提供</div>
-                    <div class="pg-state-hint" data-i18n="market.unifiedHint">功能唯一：周期、复权、指标与画线都在图表页操作，避免两处重复渲染同一数据。</div>
-                    <button class="pg-btn" id="mk-chart-hint-link" type="button" data-i18n="stock.chartLink">前往图表分析</button>
-                  </div>
-                </div>
-              </article>
-
-              <article class="card market-card dismissible" id="mk-search-card" hidden>
-                <div class="card-header">
-                  <span class="card-title" data-i18n="market.search">搜索</span>
-                  <button class="icon-button dismiss-btn" id="mk-search-dismiss" type="button" title="关闭本提示（不再显示）" aria-label="关闭搜索引导卡">✕</button>
-                  <span class="badge" id="mk-search-badge" data-i18n="market.tencentSuggest">腾讯智能联想</span>
-                </div>
-                <div class="card-body">
-                  <div class="search-row">
-                    <input id="mk-search-input" placeholder="输入代码 / 名称 / 拼音" data-i18n-placeholder="market.searchPlaceholder" autocomplete="off">
-                    <button class="icon-button" id="mk-search-button" type="button" data-i18n="action.search">搜索</button>
-                  </div>
-                  <div class="search-list" id="mk-search-list">—</div>
-                </div>
-              </article>
-
-              <article class="card market-card wide">
-                <div class="card-header">
-                  <span class="card-title" data-i18n="mk.profile">个股概况</span>
-                  <span class="badge" id="mk-profile-badge" data-i18n="state.loadingShort">加载中</span>
-                </div>
-                <div class="card-body table-scroll" id="mk-profile-table">—</div>
-              </article>
-            </div>
-
-            <div class="notice" id="mk-notice" data-i18n="market.notice">
-              本页所有数值均来自真实接口；数据源与口径徽章显示实际命中通道。
-              字段显示「—」表示该来源本次未返回（休市 / 限频 / 未披露），并非程序错误；
-              休市/盘后显示“收盘快照”，不伪装盘中实时；搜索与概况字段以源站返回为准。
-            </div>
-          </div>
-        </section>
-
-        <!-- ===== 阶段 5.1 三视图容器：由 pages.js 按 hash 路由填充 ===== -->
-        <!-- #/sectors 板块分析（S-01~S-07） -->
-        <!-- #/dashboard 组件化仪表板（阶段 6） -->
-        <section class="page-view" id="page-dashboard" hidden aria-label="仪表板"></section>
-        <!-- DS-01/DS-02：仪表板管理与组件库独立路由容器 -->
-        <section class="page-view" id="page-dashboard-manage" hidden aria-label="仪表板管理"></section>
-        <section class="page-view" id="page-widget-library" hidden aria-label="组件库"></section>
-        <section class="page-view" id="page-sectors" hidden aria-label="板块分析"></section>
-        <!-- #/stock 个股详情 FinScope（ST-01~ST-10） -->
-        <section class="page-view" id="page-stock" hidden aria-label="个股详情"></section>
-        <!-- #/sector-val 单板块估值（V-01~V-04） -->
-        <section class="page-view" id="page-sector-val" hidden aria-label="单板块估值"></section>
-        <!-- #/news 新闻与利好利空（批次 5.2） -->
-        <section class="page-view" id="page-news" hidden aria-label="新闻资讯"></section>
-        <!-- #/fund 场外基金详情（批次 5.3） -->
-        <section class="page-view" id="page-fund" hidden aria-label="场外基金"></section>
-        <!-- #/watchlist 自选股（W-01/W-02，新增功能 20261022） -->
-        <section class="page-view" id="page-watchlist" hidden aria-label="自选股"></section>
-        <!-- #/lhb 龙虎榜·北向资金（L-01~L-03，新增功能 20261022） -->
-        <section class="page-view" id="page-lhb" hidden aria-label="龙虎榜北向资金"></section>
-        <!-- #/portfolio 持仓管理（批次 5.3） -->
-        <section class="page-view" id="page-portfolio" hidden aria-label="持仓管理"></section>
-        <!-- #/connectors 数据连接器（批次 5.4） -->
-        <section class="page-view" id="page-connectors" hidden aria-label="数据连接器"></section>
-        <!-- #/yjb 养基宝绑定（阶段 7） -->
-        <section class="page-view" id="page-yjb" hidden aria-label="养基宝绑定"></section>
-        <!-- 第七轮 M1/M2：宏观与周期、估值分位 -->
-        <section class="page-view" id="page-macro" hidden aria-label="宏观与周期"></section>
-        <section class="page-view" id="page-valuation" hidden aria-label="估值分位"></section>
-        <!-- 第七轮：板块拥挤度（从板块页 S-08 卡提升为独立页） -->
-        <section class="page-view" id="page-crowding" hidden aria-label="板块拥挤度"></section>
-        <!-- 第七轮 M5：基金组合（诊断 / 候选池评估） -->
-        <section class="page-view" id="page-fund-combo" hidden aria-label="基金组合"></section>
-        <!-- #/charting 图表分析（阶段 8：K线/周期/复权/指标/分时/画线） -->
-        <section class="page-view" id="page-charting" hidden aria-label="图表分析"></section>
-        <!-- #/settings 设置（阶段 8：AI 配置/主题/缓存引导/关于） -->
-        <section class="page-view" id="page-settings" hidden aria-label="设置"></section>
-        <!-- 第七轮 M9：全市场筛选器（#/screener） -->
-        <section class="page-view" id="page-screener" hidden aria-label="筛选器"></section>
-        <!-- 第七轮 M6：提醒中心（#/alerts） -->
-        <section class="page-view" id="page-alerts" hidden aria-label="提醒中心"></section>
-
-        <!-- P1 新 IA：7 个新页容器（其余 12 页复用既有 page-view，路由层做映射） -->
-        <section class="page-view" id="page-today" hidden aria-label="今日研判"></section>
-        <section class="page-view" id="page-market" hidden aria-label="市场概览"></section>
-        <section class="page-view" id="page-fin" hidden aria-label="财报摘要"></section>
-        <section class="page-view" id="page-ann" hidden aria-label="公告库正文"></section>
-        <section class="page-view" id="page-mgr" hidden aria-label="经理画像"></section>
-        <section class="page-view" id="page-tools" hidden aria-label="工具"></section>
-        <section class="page-view" id="page-cand" hidden aria-label="候选池"></section>
-        <section class="page-view" id="page-backtest" hidden aria-label="组合回测"></section>
-        <section class="page-view" id="page-dca" hidden aria-label="定投计算器"></section>
-      </main>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 28 28" width="23" height="23" aria-hidden="true">
+        <rect x="2" y="15" width="5" height="11" rx="1" fill="#4a9bff"/>
+        <rect x="9" y="9" width="5" height="17" rx="1" fill="#ff4b5f"/>
+        <rect x="16" y="3" width="5" height="23" rx="1" fill="#4a9bff"/>
+        <path d="M3 12 L11 7 L18 2 L25 5" stroke="#ffd76a" stroke-width="1.7" fill="none"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand-title">V6 量化看盘系统</div>
+      <div class="brand-sub">AI赋能选股 · 量化策略 · 风控社交辅助</div>
     </div>
   </div>
-
-  <!-- ④ 右侧 Copilot 抽屉：宽 400px，默认隐藏 -->
-  <aside class="copilot" id="copilot" aria-label="AI 助手抽屉" aria-hidden="true">
-    <div class="copilot-header">
-      <span data-i18n="copilot.headerTitle">AI 助手 · Copilot</span>
-      <button class="icon-button" id="copilot-close" type="button" title="关闭抽屉（Esc）" data-i18n-title="action.closeTitle">关闭</button>
+  <nav class="topnav">
+    <button data-group="dashboard" data-label="总览" class="active"><span class="nav-ico">⌂</span>总览</button>
+    <button data-group="market" data-label="市场"><span class="nav-ico">◈</span>市场</button>
+    <button data-group="news" data-label="资讯"><span class="nav-ico">▦</span>资讯</button>
+    <button data-group="portfolio" data-label="组合"><span class="nav-ico">◷</span>组合</button>
+    <button data-group="money" data-label="资金"><span class="nav-ico">◎</span>资金</button>
+    <button data-group="watchlist" data-label="自选"><span class="nav-ico">▤</span>自选</button>
+    <button data-group="yjb" data-label="养基宝"><span class="nav-ico">⛨</span>养基宝</button>
+    <button data-group="system" data-label="系统"><span class="nav-ico">▥</span>系统</button>
+  </nav>
+  <div class="topright">
+    <span class="hide-sm">数据源 <b id="src-name">本地真实接口</b></span>
+    <span class="hide-sm">状态 <i class="dot"></i> <b id="conn-state">已连接</b></span>
+    <span class="top-ico" title="通知">◔</span>
+    <span class="top-ico" title="设置">⚙</span>
+    <span class="dev-badge"><i class="dot"></i>开发者</span>
+    <div class="skin-switch" title="新增第三套皮肤，原两套基准保持不变">
+      <button data-skin="v6" class="active">V6</button>
+      <button data-skin="dark">现行</button>
+      <button data-skin="light">砚</button>
     </div>
-    <div class="copilot-body">
-      <p data-i18n="copilot.initializing">AI 助手正在初始化…</p>
+    <div class="avatar">循</div>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside class="sidebar" id="side-nav"></aside>
+
+  <main class="main" id="home-main">
+    <div class="statusbar">
+      <span><b id="today-text">—</b> <b class="trade-day">A股交易日</b></span>
+      <span class="status-right">数据：<b>本地 /api 真实数据</b> · 状态：<i class="dot"></i><b>已连接</b> · 线路：<b>稳定</b> <span class="src" id="as-of">as_of: —</span></span>
     </div>
-    <div class="copilot-footer" data-i18n="copilot.footer">非投资建议 · 数据以真实接口为准</div>
-  </aside>
 
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <!-- 第一行：四指数 + 情绪 + 环境 -->
+    <section class="row row-1" id="index-row">
+      <div class="card"><div class="loading">指数加载中…</div></div>
+      <div class="card"><div class="loading">指数加载中…</div></div>
+      <div class="card"><div class="loading">指数加载中…</div></div>
+      <div class="card"><div class="loading">指数加载中…</div></div>
+      <div class="card" id="sentiment-card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">◉</span>市场情绪</span></div>
+        <div class="gauge-wrap">
+          <svg class="gauge" viewBox="0 0 120 68" id="gauge-svg"></svg>
+          <div class="gauge-meta">
+            <div class="gauge-num" id="gauge-num">—</div>
+            <div id="gauge-level">—</div>
+            <div id="gauge-breadth">—</div>
+          </div>
+        </div>
+        <div class="src-tag" id="src-sentiment">/api/sentiment/market</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">◈</span>市场环境判断</span></div>
+        <div class="env-box" id="env-level">—</div>
+        <div class="env-desc" id="env-desc">—</div>
+        <div class="src-tag" id="src-env">/api/sentiment/market + /api/macro/overview</div>
+      </div>
+    </section>
 
-  <noscript>
-    <div style="padding:16px;color:#f6f6f6;" data-i18n="alert.noScript">当前浏览器禁用了 JavaScript，请启用后重新打开本页。</div>
-  </noscript>
+    <!-- 第二行：信号 / 策略 / 风控 / 表现 -->
+    <section class="row row-2">
+      <div class="card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">AI</span>AI 综合选股信号</span><span class="card-note">按板块涨跌分档派生</span></div>
+        <div class="signal-grid" id="signal-grid"><div class="loading">统计中…</div></div>
+        <div class="src-tag" id="src-signal">/api/sector/industry（90 板块实时派生）</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">▥</span>拥挤度分档信号数量</span><span class="card-note">四档 · 真实接口</span></div>
+        <div class="bar-list" id="bar-list"><div class="loading">统计中…</div></div>
+        <div class="src-tag" id="src-bar">/api/sector/crowding/rankings</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">⛨</span>风控概览</span></div>
+        <div class="stat-list" id="risk-list"><div class="loading">加载中…</div></div>
+        <div class="src-tag" id="src-risk">/api/sector/crowding/rankings + /api/alerts/events</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title"><span class="badge-ico">↗</span>今日领涨 / 领跌</span><span class="card-note">板块涨跌 · 真实接口</span></div>
+        <div class="stat-list" id="perf-list"><div class="loading">加载中…</div></div>
+        <div class="src-tag" id="src-perf">/api/sector/summary</div>
+      </div>
+    </section>
+
+    <!-- 第三行：排行榜 + 右列 -->
+    <section class="row row-3">
+      <div class="card">
+        <div class="rank-toolbar">
+          <span class="rank-tab active"><span class="rank-ico">♛</span>AI 选股排行榜</span>
+          <span class="rank-tab"><span class="rank-ico">◇</span>重点关注</span>
+          <span class="rank-tab"><span class="rank-ico">⊕</span>买卖信号</span>
+          <span class="rank-tab"><span class="rank-ico">▤</span>策略表现</span>
+          <span class="rank-sort">综合评分排序 ▾</span>
+          <span class="rank-note" id="table-note">真实接口 · 90 板块取前 10</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <colgroup>
+              <col style="width:32px"><col style="width:16%"><col style="width:11%">
+              <col style="width:11%"><col style="width:11%"><col style="width:11%">
+              <col style="width:13%"><col style="width:10%"><col style="width:8%">
+            </colgroup>
+            <thead><tr>
+              <th>#</th><th>板块名称</th><th>代码</th><th class="num">涨跌幅</th>
+              <th class="num">成交额(亿)</th><th class="num">净流入(亿)</th><th>领涨股</th><th>综合评分</th><th>操作</th>
+            </tr></thead>
+            <tbody id="rank-body"><tr><td colspan="9" class="loading">榜单加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="src-tag" id="src-rank">/api/sector/industry · 真实 90 板块取前 10</div>
+      </div>
+
+      <div class="right-col">
+        <div class="card">
+          <div class="card-head">
+            <div class="tabs">
+              <button class="active">K线走势</button><button>资金流向</button><button>技术指标</button><button>诊断分析</button>
+            </div>
+            <span class="card-note">本地 ECharts</span>
+          </div>
+          <div class="kline-head">
+            <span class="kline-code mono" id="kline-code">000001</span>
+            <span class="kline-name" id="kline-name">—</span>
+            <span class="kline-price mono" id="kline-price">—</span>
+            <span class="mono" id="kline-pct">—</span>
+          </div>
+          <div class="ma-legend" id="ma-legend"></div>
+          <div id="kline-chart"></div>
+          <div class="src-tag" id="src-kline">/api/market/index-kline</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title"><span class="badge-ico">▤</span>AI 信号解释（真实结论）</span><span class="card-note ai-detail">详细分析 ›</span></div>
+          <div class="ai-buy-pill">数据结论（非交易指令）</div>
+          <div class="ai-points" id="ai-points"><div class="loading">生成中…</div></div>
+          <div class="src-tag" id="src-ai">/api/macro/overview + /api/sentiment/market</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="generic-view" id="view-generic" hidden>
+    <div class="view-head">
+      <div class="crumb" id="view-crumb"></div>
+      <div class="view-title-row">
+        <h1 id="view-title">—</h1>
+        <span class="view-meta" id="view-meta"></span>
+      </div>
+    </div>
+    <div class="view-body" id="view-body"><div class="loading">视图加载中…</div></div>
+    <div class="view-src" id="view-src"></div>
+  </section>
+</div>
+
+<div class="v6-modal" id="v6-add-modal" hidden>
+  <div class="v6-modal-box">
+    <div class="v6-modal-head">添加组件到页面 <button id="v6-add-close" aria-label="关闭">×</button></div>
+    <div class="v6-modal-body">
+      <div class="v6-modal-widget" id="v6-add-widget">—</div>
+      <label for="v6-add-target">选择目标界面</label>
+      <select id="v6-add-target"></select>
+      <div class="v6-modal-note" id="v6-add-hint">请选择要把该组件添加到哪个界面；演示稿不写入正式配置。</div>
+    </div>
+    <div class="v6-modal-foot">
+      <button id="v6-add-cancel">取消</button>
+      <button id="v6-add-ok" class="primary">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/echarts.min.js"></script>
+<script src="data/demoData.js"></script>
+<script src="data/registry_data.js"></script>
+<script src="js/views.js"></script>
+<script src="js/registry_view.js"></script>
+<script src="js/app.js"></script>
+<!-- 桌面快捷键与主题持久化补丁（《设计说明书》§5.5 / §八）：必须在 app.js 之后 -->
+<script src="js/v6_keys.js"></script>
 </body>
 </html>

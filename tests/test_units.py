@@ -980,11 +980,14 @@ class TestCapabilityStatus:
 # 九、前端视图静态一致性（阶段 8：charting/settings 补齐后回归）
 # =============================================================
 class TestFrontendViews:
-    """VIEW_IDS ↔ index.html 容器 ↔ 菜单项 ↔ i18n 键四层静态一致性。
+    """前端静态一致性契约（2026-11-11 整站替换后口径：以定稿原型工程为准）。
 
-    背景：阶段 8 门禁 B 核对发现 charting/settings 两菜单视图实为占位
-    （VIEW_IDS 未收、点击弹 toast），属核心功能缺陷（BUG-P8-02，已修）。
-    本用例以静态断言锁死修复成果，防回归。
+    契约变更：前端已由「index.html page-* 容器 + pages/*.js」整体替换为
+    「views.js V6 视图配置 + 通用视图外壳 + 首页三行栅格」（定稿原型工程，
+    用户裁决「整站替换」）。本类新增 test_views_registry_complete /
+    test_topnav_groups_cover_view_groups / test_frontend_script_load_contract
+    覆盖新契约；其余用例针对随替换退居未使用（未删除、不再加载）的旧模块
+    （i18n.js / utils.js / pages/*.js / css/pages.css），暂留以防误删。
     """
 
     @staticmethod
@@ -998,41 +1001,47 @@ class TestFrontendViews:
         """读取前端文件文本。"""
         return (self._frontend_dir() / relative).read_text(encoding="utf-8")
 
-    def test_view_ids_all_have_containers(self):
-        """VIEW_IDS 每一项都在 index.html 有对应 page-* 容器（含带连字符的引号键）。"""
-        import re
+    def _views_source(self):
+        """定稿前端视图配置源：frontend/js/views.js（V6 视图与模板唯一载体）。"""
+        return self._read("js/views.js")
 
-        pages = self._read("js/pages/core.js")
-        index = self._read("index.html")
-        view_block = pages.split("VIEW_IDS")[1].split("};")[0]
-        pairs = re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"(page-[\w-]+)"', view_block)
-        assert len(pairs) >= 11, f"VIEW_IDS 应至少收录 11 个视图，实际 {len(pairs)}"
-        for name, container in pairs:
-            assert f'id="{container}"' in index, f"视图 {name} 缺容器 {container}"
+    def test_views_registry_complete(self):
+        """定稿前端：views.js 登记 29 个视图、四要素齐全，index.html 提供通用外壳节点。
 
-    def test_menu_covers_all_views(self):
-        """index.html（顶栏 + 侧栏）data-view 并集覆盖 VIEW_IDS 全部视图。
-
-        R6-13 导航重组（2026-10-29）：顶栏由 12 个平级视图收敛为 8 个一级项，
-        二级视图移入侧栏同名分组；首页不再作为平级菜单项，改由左上角 Logo 进入
-        （`#/home` 路由保持可用）。断言从「集合完全相等」改为：
-          - 每个视图都必须有入口（不缺）；
-          - 菜单不得出现 VIEW_IDS 之外的视图（不多，home 例外）。
+        契约变更（2026-11-11 V6 定稿整站替换）：前端由「index.html page-* 容器 +
+        pages/*.js」改为定稿原型工程「views.js V6 视图配置 + 通用视图外壳
+        (#view-generic) + 首页三行栅格 (#home-main)」。原 page-* 容器断言随契约废止，
+        改为断言新契约（视图清单完整 + 外壳节点存在），非降级。
         """
         import re
 
-        pages = self._read("js/pages/core.js")
+        source = self._views_source()
+        pairs = re.findall(r'V(?:\.([a-z0-9]+)|\["([a-z0-9-]+)"\])\s*=\s*\{', source)
+        unique = {a or b for a, b in pairs}
+        assert len(unique) == 29, f"定稿前端应登记 29 个视图，实际 {len(unique)}：{sorted(unique)}"
+        for field in ("title:", "group:", "sidebar:", "template:", "crumb:"):
+            assert source.count(field) >= 29, f"视图配置字段 {field} 不足 29 处（{source.count(field)}）"
         index = self._read("index.html")
-        view_block = pages.split("VIEW_IDS")[1].split("};")[0]
-        view_ids = set(re.findall(r'["\']?([\w-]+)["\']?\s*:\s*"page-[\w-]+"', view_block))
-        menu_views = set(re.findall(r'data-view="([\w-]+)"', index))
-        # 第十轮 P1：19 页 IA 中「工具」为单页，screener/valuation/crowding/charting
-        # 收敛为工具页内的五个入口卡（唯一实现仍在各自视图），故这 4 个视图由工具页承载。
-        # P4：backtest/dca 同样在工具页入口卡内，不单独占侧栏菜单项。
-        tool_view_ids = {"screener", "valuation", "crowding", "charting", "backtest", "dca"}
-        assert tool_view_ids <= view_ids, "工具子视图必须仍在 VIEW_IDS 内"
-        assert view_ids <= menu_views | tool_view_ids, f"以下视图缺菜单入口：{sorted(view_ids - menu_views - tool_view_ids)}"
-        assert menu_views <= view_ids | {"home"}, f"菜单出现未登记视图：{sorted(menu_views - view_ids - {'home'})}"
+        for node in ('id="side-nav"', 'id="home-main"', 'id="view-generic"', 'id="v6-add-modal"'):
+            assert node in index, f"定稿外壳缺少节点 {node}"
+
+    def test_topnav_groups_cover_view_groups(self):
+        """定稿前端：顶栏 data-group 与 views.js 的 group 集合完全一致（8 组），sidebar 合法。
+
+        契约变更（2026-11-11 整站替换）：原 test_menu_covers_all_views 断言 index.html
+        的 data-view 覆盖 VIEW_IDS；定稿前端改为「顶栏 8 个 group + 侧栏按 sidebar
+        分组由 app.js 动态生成（SIDEBAR_GROUPS）」，故改为断言 group 集合一致 + sidebar 合法。
+        """
+        import re
+
+        source = self._views_source()
+        groups = set(re.findall(r'group:\s*"([a-z]+)"', source))
+        sidebars = set(re.findall(r'sidebar:\s*"([a-z]+)"', source))
+        index = self._read("index.html")
+        topnav = set(re.findall(r'data-group="([a-z]+)"', index))
+        assert len(groups) == 8, f"视图应归属 8 个一级分组，实际 {len(groups)}：{sorted(groups)}"
+        assert topnav == groups, f"顶栏 group 与视图 group 不一致：顶栏 {sorted(topnav)} / 视图 {sorted(groups)}"
+        assert sidebars <= {"overview", "market", "research", "my", "sys"}, f"非法 sidebar 分组：{sorted(sidebars)}"
 
     def test_new_views_wired_in_router(self):
         """route() 分发含 charting/settings，renderCharting/renderSettings 已实现。"""
@@ -1066,15 +1075,26 @@ class TestFrontendViews:
         css = self._read("css/pages.css")
         assert ".pg-chart.tall" in css
 
-    def test_utils_shared_module(self):
-        """P1-13：utils.js 导出共享工具（el/t/toast/fmt/fmtPct/api/renderTable/buildCandlestickOption）。"""
-        utils = self._read("js/utils.js")
+    def test_frontend_script_load_contract(self):
+        """定稿前端：index.html 按契约顺序加载脚本，且三皮肤/注册表/动态刷新就位。
+
+        契约变更（2026-11-11 整站替换）：原 test_utils_shared_module 断言
+        i18n.js→utils.js→market.js 加载顺序（旧模块已随整站替换不再加载），
+        改为断言定稿工程的加载顺序与关键能力，非降级。
+        """
         index = self._read("index.html")
-        for fn in ["el", "t", "toast", "fmt", "fmtPct", "trendClass", "api",
-                    "renderTable", "buildCandlestickOption"]:
-            assert f"{fn}: {fn}" in utils, f"utils.js 缺少共享函数 {fn}"
-        # utils.js 必须在 i18n.js 之后、market.js 之前加载
-        assert index.index("js/i18n.js") < index.index("js/utils.js") < index.index("js/market.js")
+        order = ["vendor/echarts.min.js", "data/demoData.js", "data/registry_data.js",
+                 "js/views.js", "js/registry_view.js", "js/app.js"]
+        positions = []
+        for item in order:
+            assert item in index, f"index.html 未加载 {item}"
+            positions.append(index.index(item))
+        assert positions == sorted(positions), f"脚本加载顺序不符：{list(zip(order, positions))}"
+        assert "skin-switch" in index, "缺少三皮肤切换器"
+        assert "/api/widgets" in self._read("js/registry_view.js"), "注册表视图未消费 /api/widgets"
+        app = self._read("js/app.js")
+        assert "V6_LIVE" in app, "缺少 V6_LIVE 动态刷新出口"
+        assert "intervalMs: 12000" in app, "缺少 12s 动态刷新契约"
 
 
 # =============================================================

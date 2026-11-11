@@ -14,7 +14,22 @@ from ctypes import POINTER, byref, c_int, c_ulong, c_ushort, c_void_p, c_wchar_p
 EXE = r"F:\workbuddy记录\OpenBB Terminal Pro\A_运行资产\正式环境\OpenBB-CN.exe"
 WORKDIR = r"F:\workbuddy记录\OpenBB Terminal Pro\A_运行资产\正式环境"
 LNK = os.path.join(os.environ["USERPROFILE"], "Desktop", "OpenBB 中文投研工作台.lnk")
-DESC = "OpenBB 中文投研工作台 v3.0.3（网页版 · 正式环境 · V6 量化看盘台皮肤）"
+
+
+def _app_version() -> str:
+    """从后端 config 读取版本号（版本号单一来源），避免描述写死后与发版脱节。"""
+    import re
+    cfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "backend", "app", "config.py")
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            match = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', fh.read())
+        return match.group(1) if match else "unknown"
+    except OSError:
+        return "unknown"
+
+
+DESC = "OpenBB 中文投研工作台 v%s（网页版 · 正式环境 · V6 量化看盘台皮肤）" % _app_version()
 
 CLSCTX_INPROC_SERVER = 1
 
