@@ -105,4 +105,5 @@ C_历史备份/
 data/_tmp/
 tools/_ad_hoc/
 # CDP 自测产生的 Edge 临时用户目录（v3.1.0 起，均由脚本 rmtree 清理，不入库）
-tools/_v6_*_profile/
+# CDP 自测产生的 Edge 临时用户目录（脚本自清理，不入库）
+tools/_*_profile/

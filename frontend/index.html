@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>V6 视觉稿 · OpenBB 中文投研工作台（独立评审稿）</title>
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/v7.css">
 </head>
 <body data-theme="v6">
 
@@ -36,7 +37,25 @@
   <div class="topright">
     <span class="hide-sm">数据源 <b id="src-name">本地真实接口</b></span>
     <span class="hide-sm">状态 <i class="dot"></i> <b id="conn-state">已连接</b></span>
-    <span class="top-ico" title="通知">◔</span>
+    <div class="v7-search">
+      <input id="v7-search" placeholder="代码 / 名称，如 600519" autocomplete="off" aria-label="搜索标的">
+      <div class="v7-search-list" id="v7-search-list" hidden></div>
+    </div>
+    <span class="top-ico v7-bell" id="v7-bell" title="提醒中心">◔<i id="v7-bell-dot" hidden></i></span>
+    <span class="v7-badge" id="v7-health" title="数据健康（/api/health）"><i class="dot"></i>数据正常</span>
+    <span class="v7-badge" id="v7-build" title="构建标识">—</span>
+    <span class="v7-layout">
+      <button id="v7-layout-btn" type="button">⇔ 布局：舒适</button>
+      <div class="v7-layout-menu" id="v7-layout-menu" hidden>
+        <button type="button" data-layout="compact">紧凑</button>
+        <button type="button" data-layout="comfort">舒适（默认）</button>
+        <button type="button" data-layout="custom">自定义 ✎</button>
+        <hr>
+        <button type="button" data-layout="reset">↺ 重置为默认</button>
+      </div>
+    </span>
+    <button class="top-ico" id="v7-collapse" type="button" title="收起侧栏">«</button>
+    <button class="top-ico" id="v7-ai" type="button" title="AI 助手">AI</button>
     <span class="top-ico" title="设置">⚙</span>
     <span class="dev-badge"><i class="dot"></i>开发者</span>
     <div class="skin-switch" title="新增第三套皮肤，原两套基准保持不变">
@@ -200,5 +219,6 @@
 <script src="js/app.js"></script>
 <!-- 桌面快捷键与主题持久化补丁（《设计说明书》§5.5 / §八）：必须在 app.js 之后 -->
 <script src="js/v6_keys.js"></script>
+<script src="js/v7_app.js"></script>
 </body>
 </html>

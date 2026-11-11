@@ -817,6 +817,121 @@
     if (V[id]) { V[id].chart = CHART_SPECS[id]; }
   });
 
+  /* v7.0 新增：独立编辑页（REQ-20261112-01 P0-1；用户裁决 = 独立编辑页，不进导航） */
+  V["watchlist-edit"] = {
+    title: "编辑自选", group: "watchlist", sidebar: null, template: "form",
+    crumb: ["自选股", "编辑自选"],
+    render: function () {
+      return card("自选信息",
+        '<div class="v7-form">' +
+          '<div class="full"><label>标的代码 / 名称 <b class="v7-req">*</b></label>' +
+            '<input id="v7-f-code" placeholder="如 600519 或 贵州茅台" autocomplete="off"></div>' +
+          '<div><label>分组</label><select id="v7-f-group">' +
+            '<option>核心</option><option>成长</option><option>基金</option></select></div>' +
+          '<div><label>备注</label><input id="v7-f-note" placeholder="选填"></div>' +
+          '<div class="full"><label>到价提醒（可选）</label>' +
+            '<input id="v7-f-alert" placeholder="如 ≤ 1400，保存后可在提醒中心编辑"></div>' +
+        '</div>' +
+        '<div class="v7-form-foot">' +
+          '<button class="v7-btn primary" data-act="edit-save" data-kind="watchlist" type="button">保存</button>' +
+          '<button class="v7-btn" data-act="edit-cancel" type="button">取消</button>' +
+          '<span class="v7-hint" id="v7-form-hint"></span>' +
+        '</div>',
+        "POST /api/watchlist · PUT /api/watchlist/{symbol}", "编");
+    }
+  };
+
+  V["alerts-edit"] = {
+    title: "编辑提醒", group: "system", sidebar: null, template: "form",
+    crumb: ["系统", "提醒中心", "编辑提醒"],
+    render: function () {
+      return card("提醒规则",
+        '<div class="v7-form">' +
+          '<div><label>规则名称</label><input id="v7-f-name" placeholder="如 茅台跌破 1400"></div>' +
+          '<div><label>标的</label><input id="v7-f-symbol" placeholder="如 600519"></div>' +
+          '<div><label>条件类型</label><select id="v7-f-cond">' +
+            '<option>价格 ≥</option><option>价格 ≤</option><option>涨跌幅 ≥</option>' +
+            '<option>涨跌幅 ≤</option><option>估值分位 ≥</option><option>拥挤度 ≥</option></select></div>' +
+          '<div><label>阈值</label><input id="v7-f-threshold" placeholder="1400.00"></div>' +
+          '<div><label>频率</label><select id="v7-f-freq">' +
+            '<option>每分钟</option><option>每 5 分钟</option><option>每日收盘</option></select></div>' +
+          '<div><label>通知方式</label><select id="v7-f-channel">' +
+            '<option>应用内</option><option>邮件（预留）</option><option>Webhook（预留）</option></select></div>' +
+          '<div><label>启停</label><select id="v7-f-enabled"><option>启用</option><option>停用</option></select></div>' +
+        '</div>' +
+        '<div class="v7-form-foot">' +
+          '<button class="v7-btn primary" data-act="edit-save" data-kind="alerts" type="button">保存</button>' +
+          '<button class="v7-btn" data-act="edit-test" type="button">测试触发</button>' +
+          '<button class="v7-btn danger" data-act="edit-delete" data-kind="alerts" type="button">删除规则</button>' +
+          '<button class="v7-btn" data-act="edit-cancel" type="button">取消</button>' +
+          '<span class="v7-hint" id="v7-form-hint"></span>' +
+        '</div>',
+        "POST /api/alerts · PUT/DELETE /api/alerts/{id}", "提");
+    }
+  };
+
+  V["portfolio-edit"] = {
+    title: "编辑持仓", group: "portfolio", sidebar: null, template: "form",
+    crumb: ["组合", "我的持仓", "编辑持仓"],
+    render: function () {
+      return card("手工录入",
+        '<div class="v7-form">' +
+          '<div><label>标的</label><input id="v7-f-symbol" placeholder="如 600519"></div>' +
+          '<div><label>市场</label><select id="v7-f-market">' +
+            '<option>A股</option><option>港股</option><option>美股</option><option>基金</option></select></div>' +
+          '<div><label>数量</label><input id="v7-f-qty" placeholder="100"></div>' +
+          '<div><label>成本</label><input id="v7-f-cost" placeholder="1680.00"></div>' +
+          '<div><label>买入日</label><input id="v7-f-date" placeholder="2026-11-01"></div>' +
+        '</div>' +
+        '<div class="v7-form-foot">' +
+          '<button class="v7-btn primary" data-act="edit-save" data-kind="portfolio" type="button">保存</button>' +
+          '<button class="v7-btn" data-act="edit-cancel" type="button">取消</button>' +
+          '<span class="v7-hint" id="v7-form-hint"></span>' +
+        '</div>',
+        "POST /api/portfolio · PUT /api/portfolio/{id}", "仓") +
+      card("xlsx / csv 导入（真实拖拽 → 校验预览 → 确认导入）",
+        '<div class="v7-drop" id="v7-drop" tabindex="0" role="button" aria-label="选择或拖拽导入文件">' +
+          '<input type="file" id="v7-file" accept=".xlsx,.csv,.tsv" hidden>' +
+          '<div class="v7-drop-main">拖拽 .xlsx / .csv 到此处，或点击选择文件</div>' +
+          '<div class="v7-hint">模板列：代码 / 名称 / 数量 / 成本 / 日期</div>' +
+          '<div class="v7-file-info" id="v7-file-info"></div>' +
+        '</div>' +
+        '<div class="v7-preview-table" id="v7-import-preview" hidden></div>' +
+        '<div class="v7-form-foot">' +
+          '<button class="v7-btn" data-act="import-check" type="button">重新校验</button>' +
+          '<button class="v7-btn primary" data-act="import-confirm" type="button" disabled>确认导入</button>' +
+          '<span class="v7-hint" id="v7-import-hint"></span>' +
+        '</div>',
+        "POST /api/portfolio/import-xlsx", "导");
+    }
+  };
+
+  /* v7.0 新增：AI 助手独立视图（REQ-20261112-01 P0-4；用户裁决 = 独立视图页） */
+  V.ai = {
+    title: "AI 助手", group: "system", sidebar: "sys", template: "detail", crumb: ["系统", "AI 助手"],
+    render: function () {
+      var quick = ["解读大盘", "诊断持仓", "同业对比", "生成复盘", "翻译"];
+      var chat =
+        '<div class="v7-chat">' +
+          '<div class="v7-msg me">帮我解读今天大盘，并对比我的持仓</div>' +
+          '<div class="v7-msg ai">' +
+            '<div class="v7-ai-txt">（原型演示）真实回答由 <span class="mono">POST /api/ai/chat</span> 生成；' +
+            "回答必须附下方「引用数据」卡，数据不可追溯时明确说明。</div>" +
+            '<div class="v7-cite">📎 引用数据：上证指数 · 市场情绪 · 持仓 5 只（可点击跳转）</div>' +
+            '<div class="v7-warn">⚠️ 非投资建议 · 数据以真实接口为准</div>' +
+          "</div>" +
+        "</div>" +
+        '<div class="v7-ask"><input id="v7-ai-input" placeholder="输入问题…（Ctrl+Enter 发送）">' +
+        '<button class="v7-btn primary" id="v7-ai-send">发送</button></div>' +
+        '<div class="v7-quick">' + quick.map(function (q) {
+          return '<span class="v7-pill">' + esc(q) + "</span>";
+        }).join("") + "</div>";
+      return card("AI 助手 · Copilot", chat, "独立视图 · /api/ai/chat", "AI") +
+        card("能力与口径", kpis([["上下文", "当前视图"], ["数据口径", "真实接口"],
+          ["模型", "默认"], ["会话留存", "本机"]]), "/api/ai/config", "置");
+    }
+  };
+
   window.V6_VIEWS = V;
   window.V6_HELPERS = { esc: esc, num: num, cls: cls, pct: pct, card: card, table: table, kpis: kpis, feed: feed, chartCard: chartCard };
 })();

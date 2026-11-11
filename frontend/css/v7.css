@@ -1,0 +1,149 @@
+/* v7.0 功能补齐 · 壳层与新增界面样式（高保真轮）
+   仅作用于原型副本，采用 V6 既有色板变量，不新增 :root 基准。 */
+
+/* ---------- 顶栏：搜索 / 铃铛 / 徽章 / 布局 / AI ---------- */
+/* 原始 .topbar/.topright 带 overflow:hidden，会裁掉下拉浮层，此处放开 */
+.topbar,.topright{overflow:visible!important;}
+.v7-search{position:relative;display:flex;align-items:center;}
+.v7-search input{width:220px;height:26px;border-radius:13px;border:1px solid var(--line,#2a4763);
+  background:var(--field,#09131e);color:inherit;font-size:12px;padding:0 10px;outline:none;}
+.v7-search input:focus{border-color:var(--accent,#4a9bff);width:280px;transition:width .15s;}
+.v7-search-list{position:absolute;top:30px;right:0;width:300px;max-height:260px;overflow:auto;
+  background:var(--panel,#0d1b2e);border:1px solid var(--line,#2a4763);border-radius:6px;
+  box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:60;}
+.v7-search-item{padding:6px 10px;font-size:12px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;}
+.v7-search-item:hover{background:var(--hover,#16324c);}
+.v7-search-item span{opacity:.7;font-size:11px;}
+
+.v7-bell{position:relative;}
+.v7-bell i{position:absolute;top:-2px;right:-4px;min-width:13px;height:13px;border-radius:7px;
+  background:#ff4b5f;color:#fff;font-size:9px;line-height:13px;text-align:center;padding:0 3px;font-style:normal;}
+
+.v7-badge{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:11px;
+  border:1px solid var(--line,#2a4763);font-size:11px;}
+.v7-badge .dot{width:6px;height:6px;border-radius:50%;background:#3ecf8e;}
+.v7-badge.warn .dot{background:#f5a623;}
+.v7-badge.bad .dot{background:#ff4b5f;}
+
+.v7-layout{position:relative;}
+.v7-layout > button{cursor:pointer;background:none;border:0;color:inherit;font-size:12px;}
+.v7-layout-menu{position:absolute;top:26px;right:0;width:170px;background:var(--panel,#0d1b2e);
+  border:1px solid var(--line,#2a4763);border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.45);
+  z-index:60;padding:4px;}
+.v7-layout-menu button{display:block;width:100%;text-align:left;padding:6px 9px;border:0;background:none;
+  color:inherit;font-size:12px;border-radius:4px;cursor:pointer;}
+.v7-layout-menu button:hover{background:var(--hover,#16324c);}
+.v7-layout-menu hr{border:0;border-top:1px solid var(--line,#2a4763);margin:4px 2px;}
+
+/* ---------- 侧栏整栏折叠 ---------- */
+body.v7-side-collapsed .sidebar{width:0!important;padding:0!important;overflow:hidden;border:0;}
+body.v7-side-collapsed .v7-collapse{transform:rotate(180deg);}
+.v7-collapse{cursor:pointer;border:1px solid var(--line,#2a4763);background:none;color:inherit;
+  width:20px;height:20px;border-radius:4px;font-size:11px;line-height:1;}
+
+/* ---------- 布局三档 ---------- */
+body.v7-compact .card{padding:6px 8px;}
+body.v7-compact .card-head{margin-bottom:4px;}
+body.v7-compact .row{gap:6px;}
+body.v7-compact .view-body{gap:8px;}
+
+/* 自定义档：由 JS 写 CSS 变量 */
+body.v7-custom{--v7-side-width:176px;--v7-gap:10px;--v7-kline-h:300px;--v7-row-h:34px;--v7-font:13px;}
+body.v7-custom .sidebar{width:var(--v7-side-width);}
+body.v7-custom .row{gap:var(--v7-gap);}
+body.v7-custom #kline-chart{height:var(--v7-kline-h);}
+body.v7-custom table td,body.v7-custom table th{height:var(--v7-row-h);}
+body.v7-custom{font-size:var(--v7-font);}
+
+/* ---------- W9 自定义面板 ---------- */
+/* 面板内统一 border-box，避免 padding 撑破栅格列 */
+.v7-panel,.v7-panel *{box-sizing:border-box;}
+.v7-preview,.v7-preview *{max-width:100%;}
+
+.v7-panel-mask{position:fixed;inset:0;background:rgba(4,8,16,.55);z-index:9990;display:flex;
+  align-items:center;justify-content:center;}
+.v7-panel{width:660px;max-width:92vw;background:var(--panel,#0d1b2e);border:1px solid var(--line,#2a4763);
+  border-radius:8px;box-shadow:0 20px 48px rgba(0,0,0,.55);}
+.v7-panel-head{padding:10px 14px;border-bottom:1px solid var(--line,#2a4763);font-weight:600;font-size:13px;
+  display:flex;justify-content:space-between;}
+.v7-panel-body{padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:14px;}
+.v7-panel-body>div{min-width:0;}
+.v7-field{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px;}
+.v7-field select,.v7-field input{background:var(--field,#09131e);color:inherit;border:1px solid var(--line,#2a4763);
+  border-radius:4px;padding:3px 6px;font-size:12px;}
+.v7-preview{border:1px solid var(--line,#2a4763);border-radius:4px;padding:6px;font-size:11px;
+  overflow:hidden;min-width:0;}
+.v7-preview .pv-top{height:14px;background:var(--hover,#16324c);margin-bottom:4px;}
+.v7-preview .pv-row{display:flex;gap:4px;margin-bottom:4px;}
+.v7-preview .pv-row div{flex:1;background:var(--hover,#16324c);height:22px;}
+.v7-preview .pv-kline{background:var(--hover,#16324c);}
+.v7-panel-foot{padding:10px 14px;border-top:1px solid var(--line,#2a4763);display:flex;gap:8px;
+  justify-content:flex-end;font-size:12px;}
+.v7-btn{border:1px solid var(--line,#2a4763);background:none;color:inherit;border-radius:4px;
+  padding:4px 12px;font-size:12px;cursor:pointer;}
+.v7-btn.primary{background:var(--accent,#4a9bff);border-color:var(--accent,#4a9bff);color:#fff;}
+
+/* ---------- AI 视图 ---------- */
+.v7-chat{display:flex;flex-direction:column;gap:8px;min-height:160px;}
+.v7-msg{max-width:82%;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.65;}
+.v7-msg.me{align-self:flex-end;background:var(--accent,#4a9bff);color:#fff;}
+.v7-msg.ai{align-self:flex-start;background:var(--hover,#16324c);}
+.v7-cite{margin-top:6px;padding:6px 8px;border:1px dashed var(--line,#2a4763);border-radius:4px;font-size:11px;}
+.v7-warn{margin-top:4px;font-size:11px;opacity:.75;}
+.v7-ask{display:flex;gap:6px;margin-top:8px;}
+.v7-ask input{flex:1;height:28px;border-radius:4px;border:1px solid var(--line,#2a4763);
+  background:var(--field,#09131e);color:inherit;padding:0 8px;font-size:12px;outline:none;}
+.v7-quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.v7-pill{border:1px solid var(--line,#2a4763);border-radius:12px;padding:2px 9px;font-size:11px;cursor:pointer;}
+.v7-pill:hover{border-color:var(--accent,#4a9bff);}
+
+/* ---------- 编辑页表单（W3/W4/W5 预留） ---------- */
+.v7-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+.v7-form .full{grid-column:1 / -1;}
+.v7-form label{display:block;font-size:11px;opacity:.8;margin-bottom:3px;}
+.v7-form input,.v7-form select{width:100%;height:28px;border-radius:4px;border:1px solid var(--line,#2a4763);
+  background:var(--field,#09131e);color:inherit;padding:0 8px;font-size:12px;}
+.v7-form-foot{display:flex;gap:8px;margin-top:12px;}
+
+/* ---------- Toast ---------- */
+.v7-toast{position:fixed;right:24px;bottom:24px;background:var(--panel,#0d1b2e);
+  border:1px solid #3ecf8e;color:#3ecf8e;padding:8px 14px;border-radius:6px;font-size:12px;z-index:9999;}
+
+/* ---------- v7.0 列表写操作 / 表单 / 导入 ---------- */
+.v7-list-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.v7-hint{font-size:11px;opacity:.7;}
+.v7-btn.sm{padding:2px 8px;font-size:11px;}
+.v7-btn.danger{border-color:#ff4b5f;color:#ff4b5f;}
+.v7-btn[disabled]{opacity:.45;cursor:not-allowed;}
+.v7-req{color:#ff4b5f;}
+.v7-drop{border:1px dashed var(--line,#2a4763);border-radius:6px;padding:18px;text-align:center;
+  font-size:12px;cursor:pointer;}
+.v7-drop:hover{border-color:var(--accent,#4a9bff);}
+.v7-preview-table{margin-top:8px;font-size:11px;}
+.v7-preview-table table{width:100%;border-collapse:collapse;}
+.v7-preview-table th,.v7-preview-table td{border:1px solid var(--line,#2a4763);padding:4px 6px;text-align:left;}
+.v7-preview-table .ok{color:#3ecf8e;}
+.v7-preview-table .bad{color:#ff4b5f;}
+
+/* 详情页内标的切换 */
+.v7-sym{display:inline-flex;align-items:center;gap:6px;margin-left:10px;}
+.v7-sym input{width:110px;height:24px;border-radius:4px;border:1px solid var(--line,#2a4763);
+  background:var(--field,#09131e);color:inherit;padding:0 8px;font-size:12px;}
+
+/* 组件参数块 */
+.v7-params{border-top:1px dashed var(--line,#2a4763);margin-top:10px;padding-top:10px;}
+.v7-params .v7-field select{min-width:120px;}
+
+/* 自选管理工具栏（保留 W-01/W-02 双卡，操作集中到页脚） */
+.v7-toolbar{grid-column:1 / -1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;
+  padding:8px 10px;border:1px solid var(--line,#2a4763);border-radius:6px;background:var(--hover,#16324c);}
+.v7-toolbar select{height:26px;border-radius:4px;border:1px solid var(--line,#2a4763);
+  background:var(--field,#09131e);color:inherit;font-size:12px;padding:0 6px;}
+.v7-drop-main{font-size:12px;}
+.v7-drop.drag{border-color:var(--accent,#4a9bff);background:rgba(74,155,255,.08);}
+.v7-file-info{margin-top:6px;font-size:11px;opacity:.8;}
+
+/* 加载骨架（D-09）：.loading 走微光动画，避免长时间空白 */
+@keyframes v7shimmer{0%{opacity:.4}50%{opacity:.9}100%{opacity:.4}}
+.loading{animation:v7shimmer 1.2s ease-in-out infinite;}
+.v7-export{margin-left:auto;}

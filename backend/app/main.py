@@ -416,7 +416,7 @@ def create_app() -> FastAPI:
 
         return await post_auth_response(request)
 
-    @application.get("/auth/logout", include_in_schema=False)
+    @application.post("/auth/logout", include_in_schema=False)
     def _auth_logout(request: Request):
         """主动登出：吊销当前会话并清除 Cookie，回登录页。
 
