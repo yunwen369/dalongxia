@@ -192,8 +192,8 @@
       button.classList.toggle("active", layoutMode);
       button.textContent = layoutMode ? "◧ 布局中" : "◧ 布局";
     }
-    if (window.Utils && window.Utils.toast) {
-      window.Utils.toast(layoutMode ? "布局模式：拖拽卡片调序，点数字切 4/6/12 列" : "已退出布局模式");
+    if (window.OB && OB.ui && OB.ui.toast) {
+      OB.ui.toast(layoutMode ? "布局模式：拖拽卡片调序，点数字切 4/6/12 列" : "已退出布局模式");
     }
   }
 
@@ -207,8 +207,8 @@
     saveAll(all);
     var cards = topCards(host);
     cards.forEach(function (card) { applySpan(card, 12); });
-    if (window.Utils && window.Utils.toast) {
-      window.Utils.toast("已重置本页布局");
+    if (window.OB && OB.ui && OB.ui.toast) {
+      OB.ui.toast("已重置本页布局");
     }
   }
 
@@ -290,8 +290,8 @@
       var current = Number(card.getAttribute("data-span") || 12);
       applySpan(card, current === 12 ? 6 : 12);
       persist();
-      if (window.Utils && window.Utils.toast) {
-        window.Utils.toast("宽度：" + (current === 12 ? "半宽（6 列）" : "全宽（12 列）"));
+      if (window.OB && OB.ui && OB.ui.toast) {
+        OB.ui.toast("宽度：" + (current === 12 ? "半宽（6 列）" : "全宽（12 列）"));
       }
     });
   }

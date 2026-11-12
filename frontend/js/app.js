@@ -382,7 +382,7 @@
       series.push({ name: "J", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: jn, symbol: "none", lineStyle: { width: 1.2, color: "#c07ae8" } });
     }
 
-    var chart = window.echarts.init($("kline-chart"), null, { renderer: "canvas" });
+    var chart = OB.chart.init($("kline-chart"), { renderer: "canvas" });
     chart.setOption({
       animation: false,
       backgroundColor: "transparent",
@@ -665,7 +665,7 @@
     var volumes = rows.map(function (r) {
       return { value: r.volume, itemStyle: { color: r.close >= r.open ? "#ff3b4e" : "#00c087" } };
     });
-    var chart = window.echarts.init(host, null, { renderer: "canvas" });
+    var chart = OB.chart.init(host, { renderer: "canvas" });
     chart.setOption({
       animation: false, backgroundColor: "transparent",
       grid: [{ left: 52, right: 16, top: 12, height: "58%" }, { left: 52, right: 16, top: "76%", height: "16%" }],

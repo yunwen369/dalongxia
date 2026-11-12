@@ -18,9 +18,11 @@
 (function () {
   "use strict";
 
+  /* 阶段3（BUG-20261112-07）：原 window.Utils 从未定义，toast 一直静默失效；
+   * 现接通 lib/ui.js 单例。t/el 维持原 fallback（i18n 与 el 在本文件未实际使用 el）。 */
   var t = window.Utils ? window.Utils.t : function (k) { return k; };
   var el = window.Utils ? window.Utils.el : null;
-  var toast = window.Utils ? window.Utils.toast : function () {};
+  var toast = (window.OB && OB.ui) ? OB.ui.toast : function () {};
 
   var menuNode = null;
   var boardNames = null;   // 板块名录（90 行业 + 概念），用于旧表格的兜底识别

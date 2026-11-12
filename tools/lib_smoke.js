@@ -217,6 +217,52 @@ t("opts 覆盖默认 cache", function () {
   return OB.http.getJSON("/api/x", { cache: "force-cache" });
 });
 
+/* ---- chart（阶段3）：mock window.echarts ---- */
+require(LIB + "chart.js");
+var registry = {};           // domEl -> instance
+var initCalls = 0, clearCalls = 0, disposeCalls = 0;
+global.echarts = {
+  getInstanceByDom: function (el) { return registry[el.id] || null; },
+  init: function (el, theme, opts) {
+    initCalls++;
+    var inst = {
+      id: el.id,
+      cleared: false,
+      disposed: false,
+      clear: function () { clearCalls++; this.cleared = true; },
+      dispose: function () { disposeCalls++; this.disposed = true; delete registry[el.id]; }
+    };
+    registry[el.id] = inst;
+    return inst;
+  }
+};
+
+console.log("[chart] 单例口径");
+t("无 echarts/无 el → null", function () {
+  assert.strictEqual(OB.chart.init(null), null);
+});
+t("首次 init 走 echarts.init 并透传 opts", function () {
+  var el = { id: "c1" };
+  var inst = OB.chart.init(el, { renderer: "canvas" });
+  assert.strictEqual(initCalls, 1);
+  assert.ok(inst);
+});
+t("同 DOM 二次 init 复用实例 + clear（不新建）", function () {
+  var el = { id: "c1" };
+  var again = OB.chart.init(el);
+  assert.strictEqual(initCalls, 1);          // 未新增 init
+  assert.strictEqual(clearCalls, 1);         // clear 一次
+  assert.strictEqual(again.id, "c1");
+});
+t("dispose 释放后 init 重建", function () {
+  var el = { id: "c2" };
+  OB.chart.init(el);                          // 第2次 init（c1 占第1次）
+  OB.chart.dispose(el);
+  assert.strictEqual(disposeCalls, 1);
+  OB.chart.init(el);
+  assert.strictEqual(initCalls, 3);           // 释放后重新 init（第3次）
+});
+
 /* ---- 串行 runner（同步/返回 Promise 的用例通吃） ---- */
 (async function run() {
   for (var i = 0; i < tests.length; i++) {

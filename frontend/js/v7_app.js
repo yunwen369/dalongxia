@@ -15,13 +15,9 @@
     { symbol: "017811", name: "易方达蓝筹精选", market: "基金" }
   ];
 
-  /** 右下角轻提示。 */
+  /** 右下角轻提示。（阶段3：唯一实现迁 lib/ui.js，此处委托别名） */
   function toast(text) {
-    var el = document.createElement("div");
-    el.className = "v7-toast";
-    el.textContent = text;
-    document.body.appendChild(el);
-    setTimeout(function () { el.remove(); }, 2200);
+    OB.ui.toast(text);
   }
 
   /* ---------- 1. Logo 回首页 ---------- */
@@ -1721,7 +1717,7 @@
       btCache = { html: btHtml, dates: dates, curve: curve };
       box.innerHTML = btHtml;
       if (window.echarts) {
-        var chart = window.echarts.init($("bt-chart"));
+        var chart = OB.chart.init($("bt-chart"));
         chart.setOption({
           animation: false, grid: { left: 8, right: 12, top: 12, bottom: 8, containLabel: true },
           xAxis: { type: "category", data: dates, axisLabel: { fontSize: 9 } },
@@ -1831,7 +1827,7 @@
       if (box && !box.querySelector(".v-kpi")) {
         box.innerHTML = btCache.html;
         if (window.echarts && $("bt-chart")) {
-          var chart = window.echarts.init($("bt-chart"));
+          var chart = OB.chart.init($("bt-chart"));
           chart.setOption({
             animation: false, grid: { left: 8, right: 12, top: 12, bottom: 8, containLabel: true },
             xAxis: { type: "category", data: btCache.dates, axisLabel: { fontSize: 9 } },
@@ -2147,7 +2143,7 @@
     var box = $("v7-quote-chart");
     if (!box || !window.echarts) { return; }
     box.innerHTML = "";
-    var chart = window.echarts.init(box);
+    var chart = OB.chart.init(box);
     chart.setOption({
       animation: false,
       grid: { left: 8, right: 12, top: 12, bottom: 8, containLabel: true },
