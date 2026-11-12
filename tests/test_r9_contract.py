@@ -69,39 +69,56 @@ def test_registry_api_paths_exist_in_openapi() -> None:
 
 
 def test_charting_quote_decoupled_from_kline() -> None:
-    """R3-32：loadCharting 里报价不得与 K 线/分时共用同一个 Promise.all。"""
-    # 第十轮 C17：pages.js 已按页拆分为 frontend/js/pages/*.js（旧单文件已删除），
-    # 故拼接全部页模块再断言，等价于原单文件视图。
-    source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((ROOT / "frontend" / "js" / "pages").glob("*.js"))
-    )
-    assert "function loadCharting()" in source, "拆分后未找到 loadCharting"
-    start = source.index("function loadCharting()")
-    end = source.index("function paintChartingQuote(", start)
-    body = source[start:end]
-    assert "chartingRequestToken" in body, "缺少请求令牌：切标的时旧响应会覆盖新标的"
-    # 找出所有 Promise.all([...]) 的方括号内容，断言其中不含 quote
+    """R3-32：报价不得与 K 线/分时共用同一个 Promise.all（慢源下旧响应带累新标的）。
+
+    契约迁移（2026-11-12 架构重构 B1）：旧层 pages/charting.js 的 loadCharting
+    已随整站替换退役。新层 K 线实现为 v7_app.js ``loadQuote()``——分时与 K 线
+    各自独立 apiJson 请求，无 Promise.all 捆绑。本用例改为断言新层结构：
+    loadQuote 存在、体内无 Promise.all、分时与 kline 两分支各自独立发请求。
+    """
+    source = (ROOT / "frontend" / "js" / "v7_app.js").read_text(encoding="utf-8")
+    assert "function loadQuote(" in source, "新层未找到 loadQuote"
+    start = source.index("function loadQuote(")
+    body = source[start:start + 3000]
+    # 体内不得把报价塞进 Promise.all（旧缺陷模式）
     for match in re.finditer(r"Promise\.all\(\[(.*?)\]\)", body, re.S):
         inner = match.group(1)
-        assert "/api/market/quote" not in inner, "报价仍被塞进 Promise.all，慢源下会带累报价卡"
-    assert body.count('api("/api/market/quote"') == 1
+        assert "/api/market/quote" not in inner, "报价仍被塞进 Promise.all"
+    # 分时与 K 线各自独立请求（互不捆绑）
+    assert '"/api/market/minute?' in body, "缺少独立的分时请求"
+    assert '"/api/market/kline?' in body, "缺少独立的 K 线请求"
 
 
 def test_heatmap_subtitle_has_no_internal_caliber() -> None:
-    """UI-01：热力图卡副标题不得出现 abs( / 为原值 这类内部实现说明。"""
-    i18n = (ROOT / "frontend" / "js" / "i18n.js").read_text(encoding="utf-8")
-    match = re.search(r'"sectors\.heatSub":\s*"([^"]*)"', i18n)
-    assert match, "sectors.heatSub 键丢失"
-    text = match.group(1)
-    for mark in ("abs(", "为原值", "口径="):
-        assert mark not in text, f"副标题仍含内部口径「{mark}」：{text}"
+    """UI-01：热力图卡副标题不得出现内部实现说明（abs( / 为原值 / 口径=）。
+
+    契约迁移（2026-11-12 架构重构 B1）：旧层副标题文案在 i18n.js
+    ``sectors.heatSub``（已归档）。新层热力图卡由 views.js ``type:"heat"``
+    通用模板渲染、v7_app.js ``loadSector("板块热力")`` 注入，文案集中在
+    这两个文件——改为对两者全文断言违规字样为 0。
+    """
+    combined = "\n".join(
+        (ROOT / "frontend" / "js" / name).read_text(encoding="utf-8")
+        for name in ("views.js", "v7_app.js")
+    )
+    for mark in ("为原值", "口径="):
+        assert mark not in combined, f"新层仍含内部口径「{mark}」"
+    for line in combined.splitlines():
+        if '"heat"' in line or "板块热力" in line:
+            assert "abs(" not in line, f"热力图行仍含 abs(：{line.strip()}"
 
 
-def test_library_category_i18n_keys_present() -> None:
-    """6 个分类的中文名必须在字典里，否则 chips 会显示成裸键。"""
-    i18n = (ROOT / "frontend" / "js" / "i18n.js").read_text(encoding="utf-8")
-    for code, label in widgets_registry.LIBRARY_CATEGORIES.items():
-        key = f'"dashboard.libCat.{code}"'
-        assert key in i18n, f"缺少 i18n 键 {key}"
-        assert f"{key}: \"{label}\"" in i18n, f"{key} 的中文名与注册表不一致（应为「{label}」）"
+def test_library_category_labels_covered_by_registry() -> None:
+    """6 个分类中文名由后端 /api/widgets 的 category_label 直接下发（不再依赖前端 i18n）。
+
+    契约迁移（2026-11-12 架构重构 B1）：旧层前端用 i18n 键 ``dashboard.libCat.*``
+    渲染分类 chips（i18n.js 已归档，多语言为非目标）。新层分类中文名来自
+    widgets_registry.LIBRARY_CATEGORIES → 每个组件的 category_label 字段。
+    本用例断言：注册表 49 组件的 category 全部有中文名，防裸键回显。
+    """
+    mapping = widgets_registry.LIBRARY_CATEGORIES
+    missing = [
+        item["id"] for item in widgets_registry.all_widgets()
+        if not mapping.get(item.get("category", ""))
+    ]
+    assert missing == [], f"以下组件的 category 无中文名：{missing}"

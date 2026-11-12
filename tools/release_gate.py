@@ -45,13 +45,17 @@ DEFAULT_ARTIFACT = PROJECT_DIR.parent / "正式环境"  # EXE 同级目录（one
 GATE_PORT = 6916  # 门禁专用端口，避开用户正在使用的 6900
 BJ_TZ = timezone(timedelta(hours=8))  # 北京时间（报告时间戳口径）
 
-# 前端必须命中的标记（旧包 grep 为 0，是本轮事故的直接判据）
+# 前端必须命中的标记（旧包 grep 为 0，是本轮事故的直接判据）。
+# 2026-11-12 架构重构 B1：原 5 项中 loadYjbCollect/loadYjbHoldings//api/fund/yjb/secret
+# 仅存在于旧层 pages/yjb.js（已归档退役），判据曾靠死代码命中——本轮换为
+# v7_app.js / views.js 活层真实标记（绑定/toggle/collect/holdings/poll 五链路），
+# 判据语义不变：活层不含这些串即非本版产物。
 PAGES_JS_MARKERS = [
-    "loadYjbCollect",
-    "loadYjbHoldings",
     "/api/fund/yjb/collect",
     "/api/fund/yjb/holdings",
-    "/api/fund/yjb/secret",
+    "/api/fund/yjb/toggle",
+    "/api/fund/yjb/bind",
+    "/api/fund/yjb/poll",
 ]
 
 
@@ -432,7 +436,7 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
             },
         })
         report["steps"].append({
-            "step": "4. 界面资源取证（pages.js 5 项标记）",
+            "step": "4. 界面资源取证（活层 yjb 五链路标记）",
             "ok": bool((report["checks"].get("frontend") or {}).get("ok")),
             "detail": {"bytes": (report["checks"].get("frontend") or {}).get("bytes")},
         })

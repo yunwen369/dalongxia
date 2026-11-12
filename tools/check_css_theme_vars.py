@@ -36,13 +36,11 @@ from typing import Dict, List, Set
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONT = os.path.join(ROOT, "frontend")
-THEME = os.path.join(FRONT, "css", "theme.css")
-# REQ-20261111-01：V6 皮肤的变量块定义在 v6.css（第三套皮肤），
-# 与 theme.css 的 :root / [data-theme="light"] 一起参与「变量是否已定义」判定。
-V6_SKIN = os.path.join(FRONT, "css", "v6.css")
-# REQ-20261112-01：V7 壳层样式（frontend/css/v7.css）自带 ``--v7-*`` 布局变量，
-# 且只作用在 ``body.v7-custom``（自定义布局档）上。与 v6.css 同理，定义处不在
-# theme.css 的 :root 属正常设计，需一并参与「是否已定义」判定。
+# 2026-11-12 架构重构 B1：theme.css / v6.css 已随旧层归档退役，
+# 变量块集中在 app.css（:root / [data-theme="light"] / [data-theme="v6"]），
+# 主题块解析改为全 css 目录扫描（见 _load_theme_blocks），不再按文件名硬编码。
+# V7 壳层（v7.css）自带 --v7-* 布局变量且只作用在 body.v7-custom 上，
+# 全目录扫描后自动纳入「是否已定义」判定。
 V7_SKIN = os.path.join(FRONT, "css", "v7.css")
 
 # JS 运行时注入的变量（不在 theme.css 定义属正常）；来源注明便于复核
@@ -68,16 +66,15 @@ def _is_color_var(name: str) -> bool:
 
 
 def _load_theme_blocks() -> Dict[str, Set[str]]:
-    """解析 theme.css 与 v6.css，返回 {主题块选择器: 该块定义的变量名集合}。
+    """扫描 frontend/css 全部样式表，返回 {主题块选择器: 该块定义的变量名集合}。
 
-    REQ-20261111-01：V6 为第三套皮肤，其专属变量（--v6-* / --halo / --grid-line /
-    --card-*）只在 ``v6.css`` 的 ``[data-theme="v6"]`` 块内定义，属正常设计
-    （作用域覆盖，不改 :root 基准）。因此两个文件都要参与「已定义」判定。
+    2026-11-12 架构重构 B1：原实现固定读 theme.css / v6.css / v7.css 三文件，
+    前两者已随旧层归档退役（变量块现集中在 app.css 的 :root /
+    ``[data-theme="light"]`` / ``[data-theme="v6"]`` 三块）。改为全目录扫描后，
+    无论变量块落在哪个样式表都能参与「已定义」判定，不再与具体文件名耦合。
     """
     blocks: Dict[str, Set[str]] = {}
-    for path in (THEME, V6_SKIN, V7_SKIN):
-        if not os.path.exists(path):
-            continue
+    for path in _iter_css_files():
         with open(path, encoding="utf-8") as handle:
             src = handle.read()
         for match in BLOCK_RE.finditer(src):

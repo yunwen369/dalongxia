@@ -986,8 +986,9 @@ class TestFrontendViews:
     「views.js V6 视图配置 + 通用视图外壳 + 首页三行栅格」（定稿原型工程，
     用户裁决「整站替换」）。本类新增 test_views_registry_complete /
     test_topnav_groups_cover_view_groups / test_frontend_script_load_contract
-    覆盖新契约；其余用例针对随替换退居未使用（未删除、不再加载）的旧模块
-    （i18n.js / utils.js / pages/*.js / css/pages.css），暂留以防误删。
+    覆盖新契约；2026-11-12 架构重构 B1 起旧模块（i18n.js / utils.js /
+    pages/*.js / css/pages.css 等 37 文件）已归档至 C_历史备份/20261112/前端旧层归档，
+    针对旧模块的用例随契约废止删除（见下方登记注释）。
     """
 
     @staticmethod
@@ -1044,37 +1045,13 @@ class TestFrontendViews:
         assert topnav == groups, f"顶栏 group 与视图 group 不一致：顶栏 {sorted(topnav)} / 视图 {sorted(groups)}"
         assert sidebars <= {"overview", "market", "research", "my", "sys"}, f"非法 sidebar 分组：{sorted(sidebars)}"
 
-    def test_new_views_wired_in_router(self):
-        """route() 分发含 charting/settings，renderCharting/renderSettings 已实现。"""
-        pages = self._read("js/pages/core.js")
-        assert 'name === "charting"' in pages and "renderCharting(parsed.params)" in pages
-        assert 'name === "settings"' in pages and "renderSettings()" in pages
-        # R17 拆分后实现分散在各页模块，函数定义到对应文件里查
-        assert "function renderCharting(" in self._read("js/pages/charting.js")
-        assert "function renderCharting(params)" in self._read("js/pages/charting.js")
-        assert "function renderSettings(" in self._read("js/pages/settings.js")
-
-    def test_chart_settings_i18n_keys_defined(self):
-        """charting/settings 用到的全部 i18n 键都已在语言包定义（防 key 漂移）。"""
-        import re
-
-        pages = self._read("js/pages/charting.js") + self._read("js/pages/settings.js")
-        i18n = self._read("js/i18n.js")
-        used = set(re.findall(r't\("((?:chart|set)\.[\w.]+)"', pages))
-        assert len(used) >= 40, f"新视图 i18n 键用量异常：{len(used)}"
-        missing = {key for key in used if f'"{key}"' not in i18n}
-        assert not missing, f"语言包缺键：{sorted(missing)}"
-
-    def test_fmt_delegates_to_l10n(self):
-        """阶段 6 交协议径：fmt/fmtPct 统一走 L10N（保留无 L10N 时的兜底）。
-        经 P1-13 重构，fmt/fmtPct 归入 utils.js 的 window.Utils，委托 L10N.num/pct。"""
-        utils = self._read("js/utils.js")
-        assert "window.L10N.num" in utils and "window.L10N.pct" in utils
-
-    def test_charting_css_present(self):
-        """图表容器 .pg-chart.tall 样式存在（含 1024 断点降高）。"""
-        css = self._read("css/pages.css")
-        assert ".pg-chart.tall" in css
+    # 2026-11-12 架构重构 B1：以下 4 个旧契约用例随旧前端模块归档废止删除
+    # （test_new_views_wired_in_router / test_chart_settings_i18n_keys_defined /
+    #   test_fmt_delegates_to_l10n / test_charting_css_present）。
+    # 依据：旧层 js/pages/*.js、js/i18n.js、js/utils.js、css/pages.css 已退役
+    # （C_历史备份/20261112/前端旧层归档），新契约由
+    # test_views_registry_complete / test_topnav_groups_cover_view_groups /
+    # test_frontend_script_load_contract 覆盖；i18n 多语言为《设计基准》§2 非目标。
 
     def test_frontend_script_load_contract(self):
         """定稿前端：index.html 按契约顺序加载脚本，且三皮肤/注册表/动态刷新就位。

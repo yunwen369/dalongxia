@@ -154,37 +154,36 @@ def test_yjb_account_assets_field() -> None:
 
 # ------------------------------------------------------- 组件渲染器覆盖率
 def _recipe_ids() -> set:
-    """从 dashboard.js 抽取 RECIPES 与 UNAVAILABLE 声明的组件编号。
+    """新层渲染覆盖判定（2026-11-12 架构重构 B1 契约迁移）。
+
+    旧层 dashboard.js 的 RECIPES/UNAVAILABLE 逐组件声明已随旧模块归档退役
+    （C_历史备份/20261112/前端旧层归档）。新层改为 ``registry_view.js``
+    通用渲染：按组件真实 category + 接口返回结构自动选择模板（表格/新闻流/
+    走势/KPI/空态），不编造数据；分类中文名由后端 widgets_registry 的
+    LIBRARY_CATEGORIES 下发（category_label 字段）。
 
     Returns:
-        tuple[set, set]: (RECIPES 键集合, UNAVAILABLE 键集合)。
+        tuple[set, set]: (已登记 category 集合, 空集)——第二位保留旧签名兼容，
+        新层无「不可用登记」概念（缺数组件渲染「真实空数据」空态，非静默禁用）。
     """
-    text = (FRONTEND / "js" / "dashboard.js").read_text(encoding="utf-8")
-    recipes = text.split("var RECIPES = {")[1].split("\n  };")[0]
-    recipe_ids = set(re.findall(r'"([A-Z]{1,2}-\d{2})"\s*:\s*\{', recipes))
-    blocked = text.split("var UNAVAILABLE = {")[1].split("\n  };")[0]
-    blocked_ids = set(re.findall(r'"([A-Z]{1,2}-\d{2})"\s*:\s*\{', blocked))
-    return recipe_ids, blocked_ids
+    source = (FRONTEND / "js" / "registry_view.js").read_text(encoding="utf-8")
+    assert "function widgetBody(" in source, "新层缺通用渲染入口 widgetBody"
+    categories = set(re.findall(r'category:\s*"([\w-]+)"', source))
+    return categories, set()
 
 
 def test_every_registered_widget_is_renderable_or_blocked(client: TestClient) -> None:
     """注册表每个组件必须有渲染器，或被登记为「页面控件 / 不可用」并附原因。
 
     R6-04 原缺陷：49 个组件只有 17 个有渲染器，其余添加后只显示「无内置渲染器」。
+    契约迁移（B1）：新层按 category 通用渲染，本用例改为断言
+    ① 注册表全部组件都带非空 category（通用模板的路由键）；
+    ② 新层存在通用渲染入口 widgetBody（渲染器不缺位）。
     """
     registry = client.get("/api/widgets").json()["data"]["items"]
-    recipe_ids, blocked_ids = _recipe_ids()
-    covered = recipe_ids | blocked_ids
-    missing = sorted({item["id"] for item in registry} - covered)
-    assert not missing, f"以下组件既无渲染器也未登记不可用：{missing}"
-
-
-def test_blocked_widgets_all_have_reason() -> None:
-    """每个不可用组件都必须带中文原因（禁止静默禁用）。"""
-    text = (FRONTEND / "js" / "dashboard.js").read_text(encoding="utf-8")
-    blocked = text.split("var UNAVAILABLE = {")[1].split("\n  };")[0]
-    entries = re.findall(r'"([A-Z]{1,2}-\d{2})"\s*:\s*\{([^}]*)\}', blocked)
-    assert entries, "UNAVAILABLE 未解析到条目"
-    for widget_id, body in entries:
-        assert "reason:" in body, f"{widget_id} 缺少 reason"
-        assert re.search(r'reason:\s*"[^"]{4,}"', body), f"{widget_id} 的 reason 过短或不合法"
+    no_category = sorted(item["id"] for item in registry if not item.get("category"))
+    assert not no_category, f"以下组件缺 category（通用渲染无路由键）：{no_category}"
+    covered, _ = _recipe_ids()
+    # registry_view.js 未显式列出的 category 视为模板层兜底（table/list 通用分支），
+    # 此处仅要求至少解析到渲染分支，防渲染器整体缺位。
+    assert covered, "registry_view.js 未解析到任何 category 渲染分支"
