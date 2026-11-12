@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import cache, memcache, netfix
 from backend.app.core.source_prefs import ensure_enabled
-from backend.app.core.resilient import polite_sleep, retry_call
+from backend.app.core.resilient import polite_sleep, retry_call, retry_until
 from backend.app.core.v8_guard import guard_v8
 from backend.app.datasource import ashare, sina_flow, tencent, tencent_board, ths_http, utils
 from backend.app.datasource.common import default_range as _common_default_range
@@ -993,28 +993,30 @@ def _cons_sw(board: str) -> List[Dict[str, Any]]:
         raise ValueError(f"申万行业未找到：{board}")
 
     # 申万成分页对连续请求敏感（返回空表）：akshare 空表**不抛异常**，
-    # 单靠 retry_call 无法覆盖，故对「空表」单独退避重试（1.0s / 2.5s），
-    # 三次仍空才判定通道异常（R2-03 回归中被真实触发，属数据可用性缺陷）。
-    rows: List[Dict[str, Any]] = []
-    for attempt, wait in enumerate((0.0, 1.0, 2.5)):
-        if wait:
-            time.sleep(wait)
-        polite_sleep()
-        try:
-            frame = retry_call(
-                lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0)
-            )
-            rows = utils.clean_records(frame)
-        except (KeyError, IndexError, AttributeError) as exc:
-            # 第五轮阶段 5：akshare 解析申万空表/结构变动时会抛 KeyError(slice) 等
-            # （实测首次冷启动偶发一次，第二次即恢复）。这类异常属"本次无数据"，
-            # 不能穿透到降级链顶层当作整体失败，否则会把夜间单源抖动放大成全链路不可用。
-            logger.warning("申万成分解析异常（第 %d/3 次）：%s（%s）",
-                           attempt + 1, board, type(exc).__name__)
-            rows = []
-        if rows:
-            break
-        logger.warning("申万成分为空（第 %d/3 次尝试）：%s", attempt + 1, board)
+    # 单靠 retry_call 无法覆盖，故用 retry_until（RF-20261112-01 阶段 1 收编，
+    # 原手写 (0.0, 1.0, 2.5) 外层退避等价迁移）按「行数非空」重试，三次仍空
+    # 才判定通道异常（R2-03 回归中被真实触发，属数据可用性缺陷）。
+    def _fetch_sw_cons() -> List[Dict[str, Any]]:
+        polite_sleep()  # 限频：每次外层尝试前（原手写循环同位保留）
+        return utils.clean_records(
+            retry_call(lambda: ak.sw_index_third_cons(symbol=target), retries=3, backoff=(1.0, 2.5, 5.0))
+        )
+
+    rows: List[Dict[str, Any]] = retry_until(
+        _fetch_sw_cons,
+        ok=bool,
+        retries=2,
+        backoff=(1.0, 2.5),
+        on_fail=lambda exc, n: logger.warning(
+            "申万成分解析异常（第 %d/3 次）：%s（%s）", n, board, type(exc).__name__
+        ),
+    ) or []
+    # 第五轮阶段 5：akshare 解析申万空表/结构变动时会抛 KeyError(slice) 等
+    # （实测首次冷启动偶发一次，第二次即恢复）。这类异常属"本次无数据"，
+    # 不能穿透到降级链顶层当作整体失败，否则会把夜间单源抖动放大成全链路不可用
+    # ——现由 retry_until 的 on_fail 承接（记日志、该轮按空处理）。
+    if not rows:
+        logger.warning("申万成分为空：%s", board)
     if not rows:
         raise ValueError(f"申万成分为空：{board}")
     total_cap = sum((_num(row.get("市值")) or 0.0) for row in rows)
@@ -2193,6 +2195,10 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
                 if attempt == 1:
                     time.sleep(0.3)
         raise last_error if last_error else RuntimeError(f"{board} 打分失败")
+        # RF-20261112-01 备注：此处手写 2 次重试为「池内并发 + 限频友好」的
+        # 轻量退避（0.3s 短等待，避免线程池内 retry_call 的随机抖动叠加），
+        # 语义等价于 retry_call(retries=1, backoff=(0.3,))；保留手写以维持
+        # 线程池内的确定性时序（随机抖动 uniform(0,0.3) 会放大并发方差）。
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_work, name): name for name in names}

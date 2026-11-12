@@ -114,6 +114,56 @@ def retry_call(
     raise last_error
 
 
+def retry_until(
+    func: Callable[[], Any],
+    *,
+    ok: Callable[[Any], bool],
+    retries: int = 2,
+    backoff: Sequence[float] = (1.0, 2.5),
+    on_fail: Optional[Callable[[BaseException, int], None]] = None,
+) -> Optional[Any]:
+    """调用 ``func`` 直到 ``ok(result)`` 为真或次数耗尽（RF-20261112-01 阶段 1 收编）。
+
+    与 :func:`retry_call` 的分工：``retry_call`` 面向「异常即失败」的调用；
+    本函数面向「**成功但结果无效**」的调用（典型：akshare 空表不抛异常，
+    唯一判据是行数）——谓词不满足或抛异常时按退避序列重试。
+
+    Args:
+        func: 无参可调用对象。
+        ok: 结果有效性谓词（如 ``bool``——非空即有效）。
+        retries: 谓词不满足/异常后的最大重试次数（不含首次）。
+        backoff: 每次重试前的等待秒数序列（首次调用不等待）。
+        on_fail: 异常回调 ``(异常, 第几次尝试)``，供调用方记日志；异常轮的
+            结果按 ``None`` 处理。
+
+    Returns:
+        Optional[Any]: 首个满足 ``ok`` 的结果；耗尽后返回最后一次结果或
+        ``None``（异常轮）——**不抛异常**，空/无效语义由调用方判定
+        （与「空/错分离」口径一致：数据为空不是通道异常）。
+
+    Examples:
+        >>> rows = retry_until(
+        ...     lambda: clean_records(fetch_frame()),
+        ...     ok=bool, retries=2, backoff=(1.0, 2.5),
+        ...     on_fail=lambda exc, n: logger.warning("解析异常（第 %d 次）：%s", n, exc),
+        ... ) or []
+    """
+    result: Optional[Any] = None
+    for attempt in range(retries + 1):
+        if attempt:
+            time.sleep(backoff[min(attempt - 1, len(backoff) - 1)])
+        try:
+            result = func()
+        except Exception as exc:  # noqa: BLE001 - 无效轮按 None 处理，由调用方判空
+            if on_fail:
+                on_fail(exc, attempt + 1)
+            result = None
+            continue
+        if ok(result):
+            return result
+    return result
+
+
 def _has_rows(value: Any) -> bool:
     """判断返回值是否包含有效数据。
 
