@@ -25,6 +25,7 @@ from fastapi import APIRouter, Body, Query
 from backend.app import config
 from backend.app.core import cache, netfix
 from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
+from backend.app.routers.common import pack_result
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import financial_report
 from backend.app.datasource import news as news_provider
@@ -120,11 +121,11 @@ def news_flash(
             if any(word and word in f"{item.get('title', '')} {item.get('text', '')}" for word in words)
         ]
     items = _sort_items(items, sort)[:limit]
-    return pack_success(
+    return pack_result(
+        result,
         {"items": items, "count": len(items), "board": board or None},
-        result.get("source") or "",
-        result.get("caliber") or "",
-        items[0].get("time") if items else None, "资讯快照", False,
+        as_of=items[0].get("time") if items else None, market_status="资讯快照",
+        data={"items": items, "count": len(items), "board": board or None},
     )
 
 
@@ -203,11 +204,11 @@ def news_stock(
     items = sentiment_engine.analyze_items(result["data"] or [], sectors=news_provider.sector_keywords())
     for item in items:
         item["boards"] = news_provider.match_boards(f"{item.get('title', '')} {item.get('text', '')}")
-    return pack_success(
+    return pack_result(
+        result,
         {"symbol": code, "market": market_text, "items": items, "count": len(items)},
-        result.get("source") or "",
-        result.get("caliber") or "",
-        items[0].get("time") if items else None, "资讯快照", False,
+        as_of=items[0].get("time") if items else None, market_status="资讯快照",
+        data={"symbol": code, "market": market_text, "items": items, "count": len(items)},
     )
 
 
@@ -243,11 +244,12 @@ def news_global(limit: int = Query(100, ge=1, le=300)) -> Dict[str, Any]:
     raw = result["data"] or []
     merged = news_provider.dedup(raw)
     items = sentiment_engine.analyze_items(merged, sectors=news_provider.sector_keywords())
-    return pack_success(
+    return pack_result(
+        result,
         {"items": items, "count": len(items), "before_dedup": len(raw)},
-        result.get("source") or "",
-        "三源合并后按标题归一化去重",
-        items[0].get("time") if items else None, "资讯快照", False,
+        as_of=items[0].get("time") if items else None, market_status="资讯快照",
+        data={"items": items, "count": len(items), "before_dedup": len(raw)},
+        caliber="三源合并后按标题归一化去重",
     )
 
 
@@ -300,11 +302,12 @@ def news_sector_search(
     for item in items:
         item["boards"] = [name]
     items = _sort_items(items, sort)[:limit]
-    return pack_success(
+    return pack_result(
+        result,
         {"sector": name, "level": node.get("level"), "items": items, "count": len(items)},
-        result.get("source") or "",
-        "板块关键词命中（含别名），非语义检索",
-        items[0].get("time") if items else None, "资讯快照", False,
+        as_of=items[0].get("time") if items else None, market_status="资讯快照",
+        data={"sector": name, "level": node.get("level"), "items": items, "count": len(items)},
+        caliber="板块关键词命中（含别名），非语义检索",
     )
 
 
@@ -429,7 +432,8 @@ def news_ai_feed(
         caliber += "；region=cn 仅保留国内快讯"
     if market != "all":
         caliber += f"；market={market} 仅保留该市场有代表个股的板块命中项"
-    return pack_success(
+    return pack_result(
+        result,
         {
             "items": items,
             "count": len(items),
@@ -440,9 +444,18 @@ def news_ai_feed(
             "market": market,
             "boards": board_list,
         },
-        result.get("source") or "",
-        caliber,
-        items[0].get("time") if items else None, "资讯快照", False,
+        as_of=items[0].get("time") if items else None, market_status="资讯快照",
+        data={
+            "items": items,
+            "count": len(items),
+            "channels": payload.get("channels") or [],
+            "before_dedup": payload.get("total_before_dedup"),
+            "after_dedup": payload.get("total_after_dedup"),
+            "region": region,
+            "market": market,
+            "boards": board_list,
+        },
+        caliber=caliber,
     )
 
 

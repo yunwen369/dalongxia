@@ -22,6 +22,7 @@ def pack_result(
     market_status: str = "本地态",
     is_realtime: bool = False,
     data: Any = None,
+    caliber: Optional[str] = None,
 ) -> Dict[str, Any]:
     """服务结果 → 统一信封。
 
@@ -33,6 +34,8 @@ def pack_result(
         market_status: 市场状态文案。
         is_realtime: 是否盘中实时。
         data: 显式载荷；缺省取 ``result.get("data") or {}``。
+        caliber: 显式口径文案；缺省取 ``result.get("caliber") or ""``
+            （端点口径为静态文案时传入，如 news 的三源合并说明）。
 
     Returns:
         dict: 统一信封 ``{data, error, error_code}``。
@@ -40,10 +43,11 @@ def pack_result(
     if not result or result.get("error"):
         return failure_pack(result or {}, empty_value)
     payload = data if data is not None else (result.get("data") or {})
+    caliber_text = result.get("caliber") or "" if caliber is None else caliber
     return pack_success(
         payload,
         result.get("source") or "",
-        result.get("caliber") or "",
+        caliber_text,
         as_of,
         market_status,
         is_realtime,
