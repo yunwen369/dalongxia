@@ -230,6 +230,17 @@
 <script src="js/app.js"></script>
 <!-- 桌面快捷键与主题持久化补丁（《设计说明书》§5.5 / §八）：必须在 app.js 之后 -->
 <script src="js/v6_keys.js"></script>
-<script src="js/v7_app.js"></script>
+<!-- W7 域拆分（RF-20261112-01 阶段4）：core → 9 域（顺序无关，惰性桥）→ 装配 -->
+<script src="js/w7/w7_core.js"></script>
+<script src="js/w7/w7_shell.js"></script>
+<script src="js/w7/w7_topbar.js"></script>
+<script src="js/w7/w7_ai.js"></script>
+<script src="js/w7/w7_forms.js"></script>
+<script src="js/w7/w7_detail.js"></script>
+<script src="js/w7/w7_portfolio.js"></script>
+<script src="js/w7/w7_fund.js"></script>
+<script src="js/w7/w7_data.js"></script>
+<script src="js/w7/w7_misc.js"></script>
+<script src="js/w7/w7_app.js"></script>
 </body>
 </html>
