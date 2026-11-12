@@ -479,6 +479,23 @@
           });
         return;
       }
+      if (act === "about-log") {
+        window.open("/api/logs/export", "_blank");
+        toast("日志导出已开始下载");
+        return;
+      }
+      if (act === "about-reset") {
+        if (btn.getAttribute("data-armed") !== "1") {
+          btn.setAttribute("data-armed", "1");
+          btn.textContent = "确认恢复出厂？";
+          return;
+        }
+        apiJson("/api/factory-reset", { method: "POST" }).then(function (r) {
+          var ok = r.ok && r.body && !r.body.error;
+          toast(ok ? "已恢复出厂设置" : ((r.body && r.body.error) || "失败"));
+        });
+        return;
+      }
       if (act === "pref-save") {
         var pref = $("v7-pref-close");
         apiJson("/api/system/desktop-prefs", { method: "PUT", body: JSON.stringify({
@@ -817,6 +834,9 @@
       injectPortfolioToolbar();
       injectConnectorsToolbar();
       injectSettingsPrefs();
+      injectKlineTools();
+      injectAboutCard();
+      injectDashboardDrag();
     }
     window.addEventListener("hashchange", function () { setTimeout(afterRoute, 460); });
     setTimeout(afterRoute, 1300);
@@ -1178,6 +1198,252 @@
     }, true);
   }
 
+  /* ---------- 18. K 线周期 + 技术指标（恢复旧版能力） ---------- */
+  var PERIODS = ["日k", "周k", "月k"];
+  var INDICS = ["MA", "MACD", "KDJ"];
+
+  function injectKlineTools() {
+    var host = document.getElementById("kline-chart");
+    if (!host || document.querySelector(".v7-kline-tools")) { return; }
+    var card = host.closest(".card") || host.parentNode;
+    var head = card ? card.querySelector(".card-head") : null;
+    if (!head) { return; }
+    var bar = document.createElement("span");
+    bar.className = "v7-kline-tools";
+    bar.innerHTML =
+      PERIODS.map(function (x) {
+        return '<button class="v7-tab" data-period="' + x + '" type="button">' +
+          ({ "日k": "日K", "周k": "周K", "月k": "月K" }[x]) + "</button>";
+      }).join("") +
+      INDICS.map(function (x) {
+        return '<button class="v7-tab" data-indicator="' + x + '" type="button">' + x + "</button>";
+      }).join("");
+    head.appendChild(bar);
+    var cur = (window.V6_APP && window.V6_APP.getPeriod && window.V6_APP.getPeriod()) || "日k";
+    var ind = (window.V6_APP && window.V6_APP.getIndicator && window.V6_APP.getIndicator()) || "MA";
+    markPeriod(cur); markIndicator(ind);
+  }
+
+  function markPeriod(p) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-period]'), function (b) {
+      b.classList.toggle("on", b.getAttribute("data-period") === p);
+    });
+  }
+
+  function markIndicator(i) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-indicator]'), function (b) {
+      b.classList.toggle("on", b.getAttribute("data-indicator") === i);
+    });
+  }
+
+  function bindKlineTools() {
+    document.addEventListener("click", function (event) {
+      var pb = event.target.closest ? event.target.closest("[data-period]") : null;
+      if (pb && window.V6_APP) {
+        window.V6_APP.setPeriod(pb.getAttribute("data-period"));
+        markPeriod(pb.getAttribute("data-period"));
+        toast("已切换周期：" + pb.textContent);
+        return;
+      }
+      var ib = event.target.closest ? event.target.closest("[data-indicator]") : null;
+      if (ib && window.V6_APP) {
+        window.V6_APP.setIndicator(ib.getAttribute("data-indicator"));
+        markIndicator(ib.getAttribute("data-indicator"));
+        toast("已切换指标：" + ib.textContent);
+      }
+    }, true);
+  }
+
+  /* ---------- 19. 右键菜单（恢复旧版 ctxmenu） ---------- */
+  var ctxMenu = null;
+
+  function closeCtx() {
+    if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+  }
+
+  function openCtx(x, y, items) {
+    closeCtx();
+    ctxMenu = document.createElement("div");
+    ctxMenu.className = "v7-ctx";
+    ctxMenu.innerHTML = items.map(function (it, i) {
+      return it === "-" ? '<hr>' : '<button type="button" data-i="' + i + '">' + esc(it.label) + "</button>";
+    }).join("");
+    document.body.appendChild(ctxMenu);
+    var w = ctxMenu.offsetWidth, h = ctxMenu.offsetHeight;
+    ctxMenu.style.left = Math.min(x, window.innerWidth - w - 6) + "px";
+    ctxMenu.style.top = Math.min(y, window.innerHeight - h - 6) + "px";
+    ctxMenu.addEventListener("click", function (event) {
+      var btn = event.target.closest("button[data-i]");
+      if (!btn) { return; }
+      var item = items[+btn.getAttribute("data-i")];
+      closeCtx();
+      if (item && item.run) { item.run(); }
+    });
+  }
+
+  function bindContextMenu() {
+    document.addEventListener("contextmenu", function (event) {
+      var tr = event.target.closest ? event.target.closest("#view-body table tbody tr") : null;
+      if (tr) {
+        event.preventDefault();
+        var code = (tr.children[0] || {}).innerText || "";
+        var name = (tr.children[1] || {}).innerText || "";
+        openCtx(event.clientX, event.clientY, [
+          { label: "查看详情", run: function () {
+            localStorage.setItem("openbb-symbol", code.trim());
+            location.hash = "#/stock";
+          } },
+          { label: "加入自选", run: function () {
+            apiJson("/api/watchlist", { method: "POST", body: JSON.stringify({ symbol: code.trim(), market: "a", name: name.trim() }) })
+              .then(function (r) { toast(r.ok && r.body && !r.body.error ? "已加入自选" : ((r.body && r.body.error) || "失败")); });
+          } },
+          { label: "设为提醒", run: function () { location.hash = "#/alerts-edit"; } },
+          "-",
+          { label: "复制代码", run: function () {
+            if (navigator.clipboard) { navigator.clipboard.writeText(code.trim()); }
+            toast("已复制：" + code.trim());
+          } },
+          { label: "复制整行", run: function () {
+            var line = Array.prototype.map.call(tr.children, function (c) { return (c.innerText || "").trim(); }).join("\t");
+            if (navigator.clipboard) { navigator.clipboard.writeText(line); }
+            toast("已复制整行");
+          } },
+          { label: "导出该表", run: function () {
+            var btn = document.querySelector(".v7-export");
+            if (btn) { btn.click(); }
+          } }
+        ]);
+        return;
+      }
+      var kl = event.target.closest ? event.target.closest("#kline-chart") : null;
+      if (kl) {
+        event.preventDefault();
+        openCtx(event.clientX, event.clientY, [
+          { label: "周期：日K", run: function () { window.V6_APP && window.V6_APP.setPeriod("日k"); markPeriod("日k"); } },
+          { label: "周期：周K", run: function () { window.V6_APP && window.V6_APP.setPeriod("周k"); markPeriod("周k"); } },
+          { label: "周期：月K", run: function () { window.V6_APP && window.V6_APP.setPeriod("月k"); markPeriod("月k"); } },
+          "-",
+          { label: "指标：MA", run: function () { window.V6_APP && window.V6_APP.setIndicator("MA"); markIndicator("MA"); } },
+          { label: "指标：MACD", run: function () { window.V6_APP && window.V6_APP.setIndicator("MACD"); markIndicator("MACD"); } },
+          { label: "指标：KDJ", run: function () { window.V6_APP && window.V6_APP.setIndicator("KDJ"); markIndicator("KDJ"); } },
+          "-",
+          { label: "复制当前链接", run: function () {
+            if (navigator.clipboard) { navigator.clipboard.writeText(location.href); }
+            toast("已复制链接");
+          } }
+        ]);
+      }
+    });
+    document.addEventListener("click", closeCtx);
+    document.addEventListener("scroll", closeCtx, true);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeCtx(); } });
+  }
+
+  /* ---------- 20. 关于卡（恢复旧版 settings S-05） ---------- */
+  function injectAboutCard() {
+    if (currentId() !== "settings") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-about")) { return; }
+    var card = document.createElement("div");
+    card.className = "card v7-about";
+    card.innerHTML = '<div class="card-head"><span class="card-title"><span class="badge-ico">◈</span>关于</span>' +
+      '<span class="card-note">版本 / 数据源 / 日志 / 恢复出厂</span></div>' +
+      '<div class="v-body"><div class="v-kpi-grid" id="v7-about-kpis"></div>' +
+      '<div class="v7-form-foot">' +
+      '<button class="v7-btn" data-act="about-log" type="button">导出日志</button>' +
+      '<button class="v7-btn danger" data-act="about-reset" type="button">恢复出厂设置</button>' +
+      '</div></div>';
+    body.appendChild(card);
+    Promise.all([
+      fetch("/api/health").then(function (r) { return r.json(); }).catch(function () { return {}; }),
+      fetch("/api/connectors/status").then(function (r) { return r.json(); }).catch(function () { return {}; })
+    ]).then(function (res) {
+      var h = (res[0] && res[0].data) || {};
+      var c = (res[1] && res[1].data) || {};
+      var srcs = (c.datasources || []).length;
+      var box = $("v7-about-kpis");
+      if (box) {
+        box.innerHTML = [
+          ["版本", (h.app && h.app.version) || "—"],
+          ["构建", h.build || "—"],
+          ["数据源", srcs + " 个"],
+          ["口径", h.caliber || "—"]
+        ].map(function (kv) {
+          return '<div class="v-kpi"><span class="k-label">' + kv[0] + '</span><span class="k-value">' + esc(kv[1]) + "</span></div>";
+        }).join("");
+      }
+    });
+  }
+
+  /* ---------- 21. 仪表板栅格拖拽排序（恢复旧版 drag 能力，落库） ---------- */
+  function bindGridDrag(grid, target, list, data) {
+    var dragId = "";
+    grid.addEventListener("dragstart", function (e) {
+      var item = e.target.closest(".demo-widget");
+      if (!item) { return; }
+      dragId = item.getAttribute("data-id");
+      item.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    grid.addEventListener("dragend", function () {
+      Array.prototype.forEach.call(grid.querySelectorAll(".demo-widget"), function (x) {
+        x.classList.remove("dragging");
+      });
+    });
+    grid.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      var over = e.target.closest(".demo-widget");
+      if (!over || over.getAttribute("data-id") === dragId) { return; }
+      var dragging = grid.querySelector('.demo-widget[data-id="' + dragId + '"]');
+      if (!dragging || over === dragging) { return; }
+      var rect = over.getBoundingClientRect();
+      var after = (e.clientY - rect.top) > rect.height / 2;
+      grid.insertBefore(dragging, after ? over.nextSibling : over);
+    });
+    grid.addEventListener("drop", function (e) {
+      e.preventDefault();
+      var order = Array.prototype.map.call(grid.querySelectorAll(".demo-widget"), function (x) {
+        return x.getAttribute("data-id");
+      });
+      var byId = {};
+      (target.widgets || []).forEach(function (w) { byId[w.id] = w; });
+      target.widgets = order.map(function (id) { return byId[id] || { id: id, span: 48, params: {} }; });
+      apiJson("/api/dashboards", { method: "PUT", body: JSON.stringify({
+        dashboards: list, activeId: data.activeId, groups: data.groups || [] }) })
+        .then(function (r) {
+          var ok = r.ok && r.body && !r.body.error;
+          toast(ok ? "布局顺序已保存" : ((r.body && r.body.error) || "保存失败"));
+        });
+    });
+  }
+
+  function injectDashboardDrag() {
+    if (currentId() !== "dashboard") { return; }
+    var grid = document.querySelector(".demo-dash-grid");
+    if (!grid || grid.getAttribute("data-v7-bound") === "1") { return; }
+    Promise.all([
+      fetch("/api/dashboards").then(function (r) { return r.json(); }),
+      fetch("/api/widgets").then(function (r) { return r.json(); })
+    ]).then(function (res) {
+      var data = (res[0] && res[0].data) || {};
+      var list = data.dashboards || [];
+      var target = list.filter(function (x) { return x.id === data.activeId; })[0] || list[0];
+      if (!target) { return; }
+      var meta = {};
+      ((res[1] && res[1].data && res[1].data.widgets) || []).forEach(function (x) { meta[x.id] = x; });
+      var ws = target.widgets || [];
+      grid.innerHTML = ws.length ? ws.map(function (x) {
+        var m = meta[x.id] || {};
+        return '<div class="demo-widget" draggable="true" data-id="' + esc(x.id) + '" data-span="' + (x.span || 48) + '">' +
+          "<b>" + esc(m.title || x.id) + '</b><span class="mono">' + esc(x.id) + " · span " + (x.span || 48) + "</span></div>";
+      }).join("") : '<div class="v-empty">仪表板为空，从组件库添加</div>';
+      grid.setAttribute("data-v7-bound", "1");
+      bindGridDrag(grid, target, list, data);
+      var note = grid.closest(".card") && grid.closest(".card").querySelector(".card-note");
+      if (note) { note.textContent = "拖拽卡片可调整顺序，松手即保存到 /api/dashboards"; }
+    }).catch(function () { /* 静默 */ });
+  }
+
   /* ---------- 初始化 ---------- */
   function init() {
     bindLogo();
@@ -1191,6 +1457,8 @@
     watchRoute();
     bindWidgetParams();
     bindDashboardPersist();
+    bindKlineTools();
+    bindContextMenu();
     var mode = currentLayout();
     applyLayout(mode);
     if (mode === "custom") { applyLayout("custom", customOpts()); }

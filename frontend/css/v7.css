@@ -147,3 +147,26 @@ body.v7-custom{font-size:var(--v7-font);}
 @keyframes v7shimmer{0%{opacity:.4}50%{opacity:.9}100%{opacity:.4}}
 .loading{animation:v7shimmer 1.2s ease-in-out infinite;}
 .v7-export{margin-left:auto;}
+
+/* K 线周期 / 技术指标（v3.3.0 恢复） */
+.v7-kline-tools{display:inline-flex;gap:4px;margin-left:auto;flex-wrap:wrap;}
+.v7-tab{border:1px solid var(--line,#2a4763);background:none;color:inherit;font-size:11px;
+  padding:2px 8px;border-radius:10px;cursor:pointer;}
+.v7-tab:hover{border-color:var(--accent,#4a9bff);}
+.v7-tab.on{background:var(--accent,#4a9bff);border-color:var(--accent,#4a9bff);color:#fff;}
+
+/* 右键菜单（v3.3.0 恢复） */
+.v7-ctx{position:fixed;z-index:99999;min-width:150px;background:var(--panel,#0d1b2e);
+  border:1px solid var(--line,#2a4763);border-radius:6px;box-shadow:0 14px 36px rgba(0,0,0,.5);padding:4px;}
+.v7-ctx button{display:block;width:100%;text-align:left;padding:6px 10px;border:0;background:none;
+  color:inherit;font-size:12px;border-radius:4px;cursor:pointer;}
+.v7-ctx button:hover{background:var(--hover,#16324c);}
+.v7-ctx hr{border:0;border-top:1px solid var(--line,#2a4763);margin:4px 2px;}
+
+/* 关于卡（v3.3.0 恢复） */
+.v7-about{margin-top:10px;}
+
+/* 仪表板栅格拖拽（v3.3.0 恢复） */
+.demo-dash-grid .demo-widget{cursor:grab;}
+.demo-dash-grid .demo-widget.dragging{opacity:.5;outline:1px dashed var(--accent,#4a9bff);}
+.demo-dash-grid .demo-widget:hover{outline:1px dashed var(--line,#2a4763);}

@@ -6,6 +6,8 @@
   "use strict";
 
   var PERIOD = encodeURIComponent("日k");
+  var INDICATOR = "MA";          // MA / MACD / KDJ（v3.3.0 恢复旧版技术指标切换）
+  var lastIndexRef = null;       // 最近一次渲染用到的指数，供周期/指标切换复用
   var API = {
     index: "/api/market/index?market=a",
     indexKline: function (code) {
@@ -292,7 +294,8 @@
 
   /** 主 K 线：本地 ECharts 蜡烛图 + 成交量 + MA5/MA10/MA20。 */
   async function renderKline(firstIndex) {
-    var code = (firstIndex && firstIndex.symbol) || "000001";
+    lastIndexRef = firstIndex || lastIndexRef;
+    var code = (lastIndexRef && lastIndexRef.symbol) || "000001";
     var result = await getJSON(API.indexKline(code), "indexKline");
     var rows = ((result.data && result.data.items) || []).slice(-60);
     $("kline-name").textContent = (firstIndex && firstIndex.name) || "上证指数";
@@ -332,6 +335,54 @@
       return '<span class="ma-item"><i style="background:' + item[0] + '"></i>' +
         '<span style="color:' + item[0] + '">' + item[1] + ":" + item[2] + "</span></span>";
     }).join("");
+    /** EMA 序列（MACD 用）。 */
+    var ema = function (n) {
+      var k = 2 / (n + 1), out = [], prev = null;
+      rows.forEach(function (r) {
+        prev = prev == null ? r.close : r.close * k + prev * (1 - k);
+        out.push(+prev.toFixed(3));
+      });
+      return out;
+    };
+    var series = [
+      { name: "K线", type: "candlestick", data: candles,
+        itemStyle: { color: "#ff4b5f", color0: "#00d68f", borderColor: "#ff4b5f", borderColor0: "#00d68f" } }
+    ];
+    if (INDICATOR === "MA") {
+      series.push({ name: "MA5", type: "line", data: ma(5), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#f5a623" } });
+      series.push({ name: "MA10", type: "line", data: ma(10), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#3fa0c0" } });
+      series.push({ name: "MA20", type: "line", data: ma(20), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#c07ae8" } });
+      series.push({ name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes, barWidth: "55%" });
+    } else if (INDICATOR === "MACD") {
+      var e12 = ema(12), e26 = ema(26);
+      var dif = e12.map(function (v, i) { return +(v - e26[i]).toFixed(3); });
+      var dea = [], prevDea = null;
+      dif.forEach(function (v) {
+        prevDea = prevDea == null ? v : v * 0.2 + prevDea * 0.8;
+        dea.push(+prevDea.toFixed(3));
+      });
+      var hist = dif.map(function (v, i) { return +(2 * (v - dea[i])).toFixed(3); });
+      series.push({ name: "DIF", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dif, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
+      series.push({ name: "DEA", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dea, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
+      series.push({ name: "MACD", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barWidth: "55%", data: hist.map(function (v) {
+        return { value: v, itemStyle: { color: v >= 0 ? "#ff4b5f" : "#00d68f" } };
+      }) });
+    } else {
+      var kn = [], dn = [], jn = [], kPrev = 50, dPrev = 50;
+      rows.forEach(function (r) {
+        var win = rows.slice(Math.max(0, rows.indexOf(r) - 8), rows.indexOf(r) + 1);
+        var hi = Math.max.apply(null, win.map(function (x) { return x.high; }));
+        var lo = Math.min.apply(null, win.map(function (x) { return x.low; }));
+        var rsv = hi === lo ? 50 : (r.close - lo) / (hi - lo) * 100;
+        kPrev = (2 * kPrev + rsv) / 3;
+        dPrev = (2 * dPrev + kPrev) / 3;
+        kn.push(+kPrev.toFixed(2)); dn.push(+dPrev.toFixed(2)); jn.push(+(3 * kPrev - 2 * dPrev).toFixed(2));
+      });
+      series.push({ name: "K", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: kn, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
+      series.push({ name: "D", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dn, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
+      series.push({ name: "J", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: jn, symbol: "none", lineStyle: { width: 1.2, color: "#c07ae8" } });
+    }
+
     var chart = window.echarts.init($("kline-chart"), null, { renderer: "canvas" });
     chart.setOption({
       animation: false,
@@ -352,18 +403,25 @@
           splitLine: { lineStyle: { color: "rgba(130,160,190,.14)", type: "dashed" } } },
         { scale: true, gridIndex: 1, axisLine: { show: false }, axisLabel: { show: false }, splitLine: { show: false } }
       ],
-      series: [
-        { name: "K线", type: "candlestick", data: candles,
-          itemStyle: { color: "#ff4b5f", color0: "#00d68f", borderColor: "#ff4b5f", borderColor0: "#00d68f" } },
-        { name: "MA5", type: "line", data: ma(5), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#f5a623" } },
-        { name: "MA10", type: "line", data: ma(10), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#3fa0c0" } },
-        { name: "MA20", type: "line", data: ma(20), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#c07ae8" } },
-        { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes, barWidth: "55%" }
-      ]
+      series: series
     });
     window.addEventListener("resize", function () { chart.resize(); });
     window.__v6Chart = chart;
   }
+
+  /** 供功能层调用：切换 K 线周期或技术指标并重绘。 */
+  window.V6_APP = {
+    setPeriod: function (periodText) {
+      PERIOD = encodeURIComponent(periodText);
+      if (lastIndexRef) { renderKline(lastIndexRef); }
+    },
+    setIndicator: function (name) {
+      INDICATOR = name;
+      if (lastIndexRef) { renderKline(lastIndexRef); }
+    },
+    getPeriod: function () { return decodeURIComponent(PERIOD); },
+    getIndicator: function () { return INDICATOR; }
+  };
 
   /** AI 信号解释：只拼接真实接口返回的结论文本，不生成投资建议。 */
   function renderAiPoints(sentiment, macro) {
