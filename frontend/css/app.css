@@ -239,6 +239,24 @@ body[data-theme="v6"] .card::before {
   background: linear-gradient(140deg, #3c83c4, #3fa0c0);
 }
 .card-note { font-size: 10px; color: var(--text-muted); white-space: nowrap; flex: none; }
+/* 卡片头参数摘要（BUG-20261112-03）：标出组件实际请求的板块/标的/周期，
+   右侧留 auto 边距把接口说明推到最右，避免三元素被 space-between 摊开。 */
+.param-chip {
+  flex: 0 1 auto;
+  margin-right: auto;
+  padding: 0 8px;
+  max-width: 42%;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: rgba(58, 114, 168, .18);
+  color: #7fb6ef;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body[data-theme="light"] .param-chip { background: rgba(58, 114, 168, .10); color: #1f5f9e; }
 .src-tag {
   flex: none; margin-top: auto; padding-top: 4px;
   font-family: var(--font-mono); font-size: 9px; color: var(--text-muted);

@@ -64,6 +64,38 @@
     return path + (PARAM_HINTS[path] || "");
   }
 
+  var MARKET_TEXT = { a: "A股", cn: "A股", hk: "港股", us: "美股" };
+
+  /** 从实际请求路径的查询串提取「板块 / 标的」摘要，供卡片头显示。
+   *
+   * 背景（BUG-20261112-03）：V-02 板块估值、V-03 成分股的 board 只存在于请求参数里
+   * （PARAM_HINTS 默认「影视院线」），卡片头只显示标题，用户无法判断数据属于哪个板块。
+   *
+   * @param {string} path 实际请求路径（含查询串）
+   * @returns {string} 摘要文本，如「影视院线 · A股」；无参数返回空串
+   */
+  function paramChip(path) {
+    var query = String(path || "").split("?")[1];
+    if (!query) { return ""; }
+    var read = function (key) {
+      var hit = query.match(new RegExp("(?:^|&)" + key + "=([^&]*)"));
+      return hit ? decodeURIComponent(hit[1]) : "";
+    };
+    var parts = [];
+    var board = read("board") || read("sector");
+    if (board) {
+      parts.push(board);
+    } else {
+      var target = read("symbol") || read("code") || read("q");
+      if (target) { parts.push(target); }
+    }
+    var market = read("market");
+    if (market) { parts.push(MARKET_TEXT[market] || market); }
+    var period = read("period");
+    if (period) { parts.push({ daily: "日线", weekly: "周线", monthly: "月线" }[period] || period); }
+    return parts.join(" · ");
+  }
+
   function pickRows(data, prefer) {
     if (!data) { return []; }
     if (Array.isArray(data)) { return data; }
@@ -200,12 +232,13 @@
       w._dataKey = keyOf[path];
       w._noData = false;
       w._src = (w.api || []).join(" · ");
+      w._path = path;
     });
     view.api = api;
     view.render = function (map) {
       return widgets.map(function (w) {
         return card(w.id + " · " + w.title, widgetBody(w, map[w._dataKey]), w._src,
-          CAT_ICON[w.category] || "·");
+          CAT_ICON[w.category] || "·", paramChip(w._path));
       }).join("");
     };
     view.chart = null;      // 移除自造图表层：正式环境该页无此功能

@@ -1503,6 +1503,9 @@
   }
 
   /* ---------- 21. 仪表板栅格拖拽排序（恢复旧版 drag 能力，落库） ---------- */
+  /** 宽度档位 → 分数标签（与 views.js 演示卡同口径）。 */
+  var V7_SPAN_LABEL = { 12: "1/4", 16: "1/3", 20: "5/12", 24: "1/2", 28: "7/12", 32: "2/3", 48: "整行" };
+
   function bindGridDrag(grid, target, list, data) {
     var dragId = "";
     grid.addEventListener("dragstart", function (e) {
@@ -1542,12 +1545,50 @@
           toast(ok ? "布局顺序已保存" : ((r.body && r.body.error) || "保存失败"));
         });
     });
+    // 预览卡「移除」：与画布一致——删组件并落库（BUG-20261112-04 恢复该能力）
+    grid.addEventListener("click", function (e) {
+      var btn = e.target.closest(".dw-remove");
+      if (!btn) { return; }
+      e.preventDefault();
+      e.stopPropagation();
+      var id = btn.getAttribute("data-remove");
+      var before = (target.widgets || []).length;
+      target.widgets = (target.widgets || []).filter(function (w) { return w.id !== id; });
+      if (target.widgets.length === before) { return; }
+      apiJson("/api/dashboards", { method: "PUT", body: JSON.stringify({
+        dashboards: list, activeId: data.activeId, groups: data.groups || [] }) })
+        .then(function (r) {
+          var ok = r.ok && r.body && !r.body.error;
+          toast(ok ? "组件已移除" : ((r.body && r.body.error) || "移除失败"));
+          if (!ok) { return; }
+          var node = btn.closest(".demo-widget");
+          if (node) { node.remove(); }
+          if (!grid.querySelector(".demo-widget")) {
+            grid.innerHTML = '<div class="v-empty">仪表板为空，从组件库添加</div>';
+          }
+        });
+    });
   }
 
-  function injectDashboardDrag() {
+  /** 把 /api/dashboards 的真实布局注入「48 栅格」预览卡。
+   *
+   * BUG-20261112-04：视图是异步渲染的，afterRoute 首次调用时栅格容器往往还没挂载，
+   * 原实现直接 return 且无重试，导致同一页面在「切路由进入」时才注入、刷新进入时不注入，
+   * 表现为时好时坏。此处改为退避重试（最多 12 次 / 约 7 秒）。
+   *
+   * @param {number} [attempt] 当前重试次数（内部递归用）
+   * @returns {void} 无返回值
+   */
+  function injectDashboardDrag(attempt) {
     if (currentId() !== "dashboard") { return; }
     var grid = document.querySelector(".demo-dash-grid");
-    if (!grid || grid.getAttribute("data-v7-bound") === "1") { return; }
+    if (!grid) {
+      if ((attempt || 0) < 12) {
+        setTimeout(function () { injectDashboardDrag((attempt || 0) + 1); }, 600);
+      }
+      return;
+    }
+    if (grid.getAttribute("data-v7-bound") === "1") { return; }
     Promise.all([
       fetch("/api/dashboards").then(function (r) { return r.json(); }),
       fetch("/api/widgets").then(function (r) { return r.json(); })
@@ -1557,18 +1598,27 @@
       var target = list.filter(function (x) { return x.id === data.activeId; })[0] || list[0];
       if (!target) { return; }
       var meta = {};
-      ((res[1] && res[1].data && res[1].data.widgets) || []).forEach(function (x) { meta[x.id] = x; });
+      // /api/widgets 的真实字段名是 items（不是 widgets），旧写法取不到标题与分类
+      var reg = (res[1] && res[1].data) || {};
+      (reg.items || reg.widgets || []).forEach(function (x) { meta[x.id] = x; });
       var ws = target.widgets || [];
+      // BUG-20261112-04：此前覆写丢失 grid-column: span N，全部卡片退化成 1/48 列宽，
+      // 被压成一条竖排文字。此处按 widget.span 还原列宽，并补齐标题/宽度/移除三段结构。
       grid.innerHTML = ws.length ? ws.map(function (x) {
         var m = meta[x.id] || {};
-        return '<div class="demo-widget" draggable="true" data-id="' + esc(x.id) + '" data-span="' + (x.span || 48) + '">' +
-          "<b>" + esc(m.title || x.id) + '</b><span class="mono">' + esc(x.id) + " · span " + (x.span || 48) + "</span></div>";
+        var span = Number(x.span) || 48;
+        return '<div class="demo-widget cat-' + esc(m.category || "table") + '" draggable="true" data-id="' + esc(x.id) +
+          '" data-span="' + span + '" style="grid-column: span ' + span + '">' +
+          '<div class="dw-head"><b>' + esc(x.id) + "</b><span>" + esc(m.title || x.id) + "</span></div>" +
+          '<div class="dw-meta">span ' + span + " · " + (V7_SPAN_LABEL[span] || "—") + " / 48 列</div>" +
+          '<button class="dw-remove" type="button" draggable="false" data-remove="' + esc(x.id) + '">移除</button>' +
+          "</div>";
       }).join("") : '<div class="v-empty">仪表板为空，从组件库添加</div>';
       grid.setAttribute("data-v7-bound", "1");
       bindGridDrag(grid, target, list, data);
       var note = grid.closest(".card") && grid.closest(".card").querySelector(".card-note");
       if (note) { note.textContent = "拖拽卡片可调整顺序，松手即保存到 /api/dashboards"; }
-    }).catch(function () { /* 静默 */ });
+    }).catch(function () { /* 静默：预览卡属辅助视图，失败不影响主画布 */ });
   }
 
   /* ---------- 22. 组合回测 / 定投计算器（v3.4.0 恢复） ---------- */

@@ -18,11 +18,20 @@
   var pct = function (v) { return (v >= 0 ? "+" : "") + num(v, 2) + "%"; };
   var d = function (map, key) { return (map[key] && map[key].data) || {}; };
 
-  /** 通用卡片容器。 */
-  function card(title, body, note, extra) {
+  /** 通用卡片容器。
+   *
+   * @param {string} title 标题
+   * @param {string} body 卡片正文 HTML
+   * @param {string} [note] 右上角接口说明
+   * @param {string} [extra] 标题前的图标字符
+   * @param {string} [chip] 标题后的参数摘要（如「影视院线 · A股」），空则不渲染
+   * @returns {string} 卡片 HTML
+   */
+  function card(title, body, note, extra, chip) {
     return '<div class="card v-card">' +
       '<div class="card-head"><span class="card-title"><span class="badge-ico">' +
       (extra || "·") + "</span>" + esc(title) + "</span>" +
+      (chip ? '<span class="param-chip">' + esc(chip) + "</span>" : "") +
       (note ? '<span class="card-note">' + esc(note) + "</span>" : "") + "</div>" +
       '<div class="v-body">' + body + "</div></div>";
   }
