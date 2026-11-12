@@ -94,6 +94,26 @@ def main() -> int:
     def add(cid: str, name: str, ok: bool, detail: str = "") -> None:
         checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": str(detail)[:200]})
 
+    def add_flaky(cid: str, name: str, attempt, retry_delay: float = 5.0) -> None:
+        """时序脆弱项专用：首跑失败后等待再重试一轮，甄别外部依赖波动。
+
+        仅用于已知易受外部数据源/超时边界影响的项目（P15/P20/P22）；
+        重试后仍失败才记 FAIL，detail 保留两轮信息便于归档甄别。
+
+        Args:
+            cid: 检查项 ID。
+            name: 检查项名称。
+            attempt: 单轮尝试函数（含触发动作），返回 (ok, detail) 二元组。
+            retry_delay: 重试前等待秒数。
+        """
+        ok, detail = attempt()
+        if ok:
+            add(cid, name, ok, detail)
+            return
+        time.sleep(retry_delay)
+        ok2, detail2 = attempt()
+        add(cid, name, ok2, "%s ||retry: %s" % (detail, detail2))
+
     proc = ui.launch_chrome(args.port, profile, 1600, 1000)
     try:
         time.sleep(2.5)
@@ -186,12 +206,16 @@ def main() -> int:
         cdp.call("Page.navigate", {"url": base + "/#/connectors"})
         ok = wait_for(cdp, "document.querySelector('.v7-cn-test')")
         add("P14", "连通性自检卡注入", ok)
-        ui.eval_js(cdp, "document.querySelector('[data-act=\"cn-test-all\"]').click()")
-        ok = wait_for(cdp, "document.querySelector('#v7-cn-sum') && /完成：可用 \\d+/.test(document.querySelector('#v7-cn-sum').innerText)", 150)
-        summary = txt(cdp, "(document.querySelector('#v7-cn-sum')||{}).innerText")
-        rows = ui.eval_js(cdp, "document.querySelectorAll('#v7-cn-test-tbl tr').length - 1")
-        add("P15", "逐源真实探测（connectors/test）", ok and (rows or 0) >= 3,
-            "%s rows=%s" % (summary, rows))
+
+        def p15_attempt():
+            # 动作含触发点击：首跑与重试各自独立触发一轮完整测速
+            ui.eval_js(cdp, "document.querySelector('[data-act=\"cn-test-all\"]').click()")
+            ok15 = wait_for(cdp, "document.querySelector('#v7-cn-sum') && /完成：可用 \\d+/.test(document.querySelector('#v7-cn-sum').innerText)", 150)
+            summary = txt(cdp, "(document.querySelector('#v7-cn-sum')||{}).innerText")
+            rows = ui.eval_js(cdp, "document.querySelectorAll('#v7-cn-test-tbl tr').length - 1")
+            return ok15 and (rows or 0) >= 3, "%s rows=%s" % (summary, rows)
+
+        add_flaky("P15", "逐源真实探测（connectors/test）", p15_attempt)
 
         # ---------- F. 条件选股（3 个端点） ----------
         cdp.call("Page.navigate", {"url": base + "/#/screener"})
@@ -226,16 +250,21 @@ def main() -> int:
         ok = wait_for(cdp, "document.querySelector('.v7-ai-test')")
         hint = txt(cdp, "(document.querySelector('#v7-ai-test-body')||{}).innerText")
         add("P19", "AI 测试卡（未配置给引导）", ok and ("未配置" in hint or "密钥" in hint), hint[:90])
-        ui.eval_js(cdp, """
-          (function(){
-            var b=document.getElementById('v7-ai-base'); if (b) { b.value='https://example.com/v1'; }
-            var m=document.getElementById('v7-ai-model'); if (m) { m.value='demo-model'; }
-            document.querySelector('[data-act="ai-test"]').click();
-          })()
-        """)
-        ok = wait_for(cdp, "document.querySelector('#v7-ai-test-body .v-empty') || document.querySelector('#v7-ai-test-body .v-kpi')", 60)
-        res = txt(cdp, "(document.querySelector('#v7-ai-test-body')||{}).innerText")
-        add("P20", "AI 测试给明确结果（ai/test）", ok and len(res.strip()) > 4, res[:100].replace("\n", "|"))
+
+        def p20_attempt():
+            # 动作含填假配置+点击：对假端点的 HTTP 超时受网络环境影响，允许重试一轮
+            ui.eval_js(cdp, """
+              (function(){
+                var b=document.getElementById('v7-ai-base'); if (b) { b.value='https://example.com/v1'; }
+                var m=document.getElementById('v7-ai-model'); if (m) { m.value='demo-model'; }
+                document.querySelector('[data-act="ai-test"]').click();
+              })()
+            """)
+            ok20 = wait_for(cdp, "document.querySelector('#v7-ai-test-body .v-empty') || document.querySelector('#v7-ai-test-body .v-kpi')", 60)
+            res = txt(cdp, "(document.querySelector('#v7-ai-test-body')||{}).innerText")
+            return ok20 and len(res.strip()) > 4, res[:100].replace("\n", "|")
+
+        add_flaky("P20", "AI 测试给明确结果（ai/test）", p20_attempt)
 
         cdp.call("Page.navigate", {"url": base + "/#/news"})
         wait_for(cdp, "document.querySelector('.v7-news')")
@@ -251,9 +280,13 @@ def main() -> int:
         add("P21", "AI 摘要不造假（未配置给引导）", ok and ("未配置" in res or "正文" in res), res[:100].replace("\n", "|"))
 
         # ---------- H. 12 秒刷新横切 ----------
-        time.sleep(14)
-        kept = txt(cdp, "(document.getElementById('v7-news-code')||{}).value")
-        add("P22", "12 秒刷新后输入不丢（资讯页）", kept == "600519", "code=%s" % kept)
+        def p22_attempt():
+            # 等待跨过 12 秒刷新边界后取值：取值与刷新存在秒级竞争，允许重试一轮
+            time.sleep(14)
+            kept = txt(cdp, "(document.getElementById('v7-news-code')||{}).value")
+            return kept == "600519", "code=%s" % kept
+
+        add_flaky("P22", "12 秒刷新后输入不丢（资讯页）", p22_attempt, retry_delay=3.0)
         cdp.call("Page.navigate", {"url": base + "/#/sectors"})
         ok = wait_for(cdp, "document.querySelector('#v7-sec-body') && "
                       "(document.querySelector('#v7-sec-body').innerText||'').length > 50", 90)
