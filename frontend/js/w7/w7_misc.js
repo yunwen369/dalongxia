@@ -51,8 +51,7 @@
         return '<option value="' + x.code + '">' + x.code + " " + x.name + "</option>";
       }).join("");
     }
-    fetch("/api/watchlist", { cache: "no-store" })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    OB.http.getJSON("/api/watchlist")
       .then(function (j) {
         var items = (j && j.data && j.data.items) || [];
         render(items.length ? items : DEMO_WL);

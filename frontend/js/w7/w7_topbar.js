@@ -26,8 +26,7 @@
       if (!q) { list.hidden = true; return; }
       clearTimeout(timer);
       timer = setTimeout(function () {
-        fetch("/api/market/search?q=" + encodeURIComponent(q), { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+        OB.http.getJSON("/api/market/search?q=" + encodeURIComponent(q))
           .then(function (j) {
             var items = (j && j.data && (j.data.items || j.data.results)) || [];
             render(items.length ? items.slice(0, 8) : DEMO_SEARCH.filter(function (x) {
@@ -71,8 +70,7 @@
     var dot = $("v7-bell-dot");
     if (!bell) { return; }
     bell.addEventListener("click", function () { location.hash = "#/alerts"; });
-    fetch("/api/alerts/events", { cache: "no-store" })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    OB.http.getJSON("/api/alerts/events")
       .then(function (j) {
         var events = (j && j.data && (j.data.events || j.data.items)) || [];
         var unread = events.filter(function (e) { return !e.read; }).length;
@@ -88,8 +86,7 @@
   function bindBadges() {
     var health = $("v7-health");
     var build = $("v7-build");
-    fetch("/api/health", { cache: "no-store" })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    OB.http.getJSON("/api/health")
       .then(function (j) {
         var data = (j && j.data) || {};
         var ok = data.status === "ok";

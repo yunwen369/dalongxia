@@ -104,20 +104,24 @@
     return [];
   }
 
-  /** 加自选：走既有 /api/watchlist，重复添加给明确提示。 */
+  /** 加自选：走既有 /api/watchlist，重复添加给明确提示。
+   * （阶段4 收编 OB.http.apiJson：401 时由统一层跳登录，属语义增强） */
   function addWatch(symbol, name) {
     if (!symbol) {
       return;
     }
-    fetch("/api/watchlist", {
+    OB.http.apiJson("/api/watchlist", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol: String(symbol), market: "a", note: name || "" })
     })
-      .then(function (response) { return response.json(); })
-      .then(function (body) {
-        if (body && body.error) {
+      .then(function (r) {
+        var body = r && r.body;
+        if (r.ok && body && body.error) {
           toast(body.error);
+          return;
+        }
+        if (!r.ok && !body) {
+          toast("加自选失败，请稍后重试");
           return;
         }
         toast("已加入自选：" + (name || symbol));
@@ -219,11 +223,12 @@
     }
   }
 
-  /** 预加载板块名录（行业 + 概念），供旧表格兜底识别板块行；失败静默。 */
+  /** 预加载板块名录（行业 + 概念），供旧表格兜底识别板块行；失败静默。
+   * （阶段4 收编 OB.http.getJSON：!ok 抛错→catch null，与原 401/错误信封「无数据」分支等价） */
   function loadBoardNames() {
     Promise.all([
-      fetch("/api/sector/industry", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; }),
-      fetch("/api/sector/concept", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; })
+      OB.http.getJSON("/api/sector/industry").catch(function () { return null; }),
+      OB.http.getJSON("/api/sector/concept").catch(function () { return null; })
     ]).then(function (res) {
       var set = new Set();
       [res[0], res[1]].forEach(function (body) {

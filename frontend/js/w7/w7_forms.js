@@ -600,8 +600,7 @@
       '<button class="v7-btn primary" data-act="pf-add" type="button">＋ 添加持仓</button>' +
       '<span class="v7-hint">删除会真实写入 data/portfolio.json</span>';
     body.insertBefore(bar, body.firstChild);
-    fetch("/api/portfolio", { headers: { "Content-Type": "application/json" } })
-      .then(function (r) { return r.json(); })
+    OB.http.getJSON("/api/portfolio").catch(function () { return null; })
       .then(function (j) {
         var items = ((j && j.data && j.data.items) || []);
         var sel = $("v7-pf-select");
@@ -624,8 +623,7 @@
       '<button class="v7-btn" data-act="cn-on" type="button">启用</button>' +
       '<button class="v7-btn danger" data-act="cn-off" type="button">停用</button>';
     body.insertBefore(bar, body.firstChild);
-    fetch("/api/connectors/status", { headers: { "Content-Type": "application/json" } })
-      .then(function (r) { return r.json(); })
+    OB.http.getJSON("/api/connectors/status").catch(function () { return null; })
       .then(function (j) {
         var list = ((j && j.data && j.data.datasources) || []);
         var sel = $("v7-cn-select");
@@ -647,8 +645,7 @@
       '<select id="v7-pref-close"><option value="tray">最小化到托盘</option><option value="quit">直接退出</option></select>' +
       '<button class="v7-btn primary" data-act="pref-save" type="button">保存</button>';
     body.insertBefore(bar, body.firstChild);
-    fetch("/api/system/desktop-prefs", { headers: { "Content-Type": "application/json" } })
-      .then(function (r) { return r.json(); })
+    OB.http.getJSON("/api/system/desktop-prefs").catch(function () { return null; })
       .then(function (j) {
         var v = (j && j.data && j.data.close_action) || "tray";
         var sel = $("v7-pref-close");
@@ -672,8 +669,8 @@
       '</div></div>';
     body.appendChild(card);
     Promise.all([
-      fetch("/api/health").then(function (r) { return r.json(); }).catch(function () { return {}; }),
-      fetch("/api/connectors/status").then(function (r) { return r.json(); }).catch(function () { return {}; })
+      OB.http.getJSON("/api/health").catch(function () { return {}; }),
+      OB.http.getJSON("/api/connectors/status").catch(function () { return {}; })
     ]).then(function (res) {
       var h = (res[0] && res[0].data) || {};
       var c = (res[1] && res[1].data) || {};

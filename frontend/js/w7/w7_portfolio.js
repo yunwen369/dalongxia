@@ -46,8 +46,7 @@
         var psym = $("v7p-symbol"), pper = $("v7p-period"), pbrd = $("v7p-board");
         var params = { symbol: psym ? (psym.value || "").trim() : "",
           period: pper ? pper.value : "", board: pbrd ? pbrd.value : "" };
-        fetch("/api/dashboards", { headers: { "Content-Type": "application/json" } })
-          .then(function (r) { return r.json(); })
+        OB.http.getJSON("/api/dashboards").catch(function () { return null; })
           .then(function (j) {
             var data = (j && j.data) || {};
             var list = data.dashboards || [];
@@ -156,8 +155,8 @@
     }
     if (grid.getAttribute("data-v7-bound") === "1") { return; }
     Promise.all([
-      fetch("/api/dashboards").then(function (r) { return r.json(); }),
-      fetch("/api/widgets").then(function (r) { return r.json(); })
+      OB.http.getJSON("/api/dashboards").catch(function () { return null; }),
+      OB.http.getJSON("/api/widgets").catch(function () { return null; })
     ]).then(function (res) {
       var data = (res[0] && res[0].data) || {};
       var list = data.dashboards || [];
