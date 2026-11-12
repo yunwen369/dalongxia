@@ -38,3 +38,5 @@
 | `lib_smoke.js` | **lib 基础层行为门禁**（RF-20261112-01 阶段1b 落地：config 键枚举 7 键 / store 原始串+JSON 双口径 / fmt 数值百分比金额日期 / dom.esc 与 v7_app esc 逐字符等价，17 断言；lib/* 任何修改先过此门禁再跑 UI 探针） | `node tools/lib_smoke.js` |
 | `check_layer_deps.py` | **前端层级依赖门禁**（RF-20261112-01 阶段6：7 条不变式——lib 纯度/唯一入口/W7 命名空间/挂载顺序/Utils 幽灵/裸 fetch/裸 echarts.init，扫 frontend/js 23 文件；字符串感知剥注释防文案误报） | `python tools/check_layer_deps.py` |
 | `check_dup_patterns.py` | **后端重复模式门禁**（RF-20261112-01 阶段6：P1 手写退避循环→retry_call/retry_until；P2 信封专属字段 error_code 字面量→core/errors.py 唯一实现；ast 剥 docstring 防文案误报；`# dup-ok: 原因` 行级备案豁免，errors.py/resilient.py 唯一实现层整体豁免） | `python tools/check_dup_patterns.py` |
+| `css_tokenize_migration.py` | **CSS 全量硬编码色值 token 化迁移**（v3.4.2 批次：app.css/v7.css 全部 hex/rgba 字面量→`var(--c-*)` 常量 token（166 个，:root 定义），三主题块定义行与注释保护，RGB(A) 解析逐位断言保证值等价；一次性迁移工具，重跑须先 git 还原） | `python tools/css_tokenize_migration.py [--apply]` |
+| `probe_equivalence_diff.py` | **改前/改后探针 JSON 深度对拍**（v3.4.2 批次：baseline/after 三份探针 JSON 递归 diff，时变键与内嵌时间戳归一；views[9].cards(news)/views[10].cards(fin) 为数据条数驱动时变字段，甄别后豁免） | `python tools/probe_equivalence_diff.py` |

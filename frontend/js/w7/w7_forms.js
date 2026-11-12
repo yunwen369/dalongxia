@@ -509,7 +509,7 @@
     box.innerHTML = "<table><tr><th>代码</th><th>名称</th><th>数量</th><th>成本</th><th>状态</th></tr>" +
       rows.map(function (r) {
         return "<tr><td>" + esc(r.code) + "</td><td>" + esc(r.name) + "</td><td>" + esc(r.qty) +
-          "</td><td>" + esc(r.cost) + '</td><td class="' + (r.ok ? "ok" : "bad") + '">' + r.note + "</td></tr>";
+          "</td><td>" + esc(r.cost) + '</td><td class="' + (r.ok ? "ok" : "bad") + '">' + esc(r.note) + "</td></tr>";
       }).join("") + "</table>";
     var cf = document.querySelector('[data-act="import-confirm"]');
     if (cf) { cf.disabled = okN === 0; }
@@ -606,7 +606,7 @@
         var sel = $("v7-pf-select");
         if (sel) {
           sel.innerHTML = '<option value="">选择持仓…</option>' + items.map(function (x) {
-            return '<option value="' + x.id + '">' + (x.symbol || "") + " " + (x.name || "") + "</option>";
+            return '<option value="' + esc(x.id) + '">' + esc(x.symbol || "") + " " + esc(x.name || "") + "</option>";
           }).join("");
         }
       }).catch(function () { /* 静默 */ });

@@ -108,10 +108,10 @@ tools/_ad_hoc/
 # CDP 自测产生的 Edge 临时用户目录（脚本自清理，不入库）
 tools/_*_profile/
 
-# Windows 保留设备名残留（2026-11-13 RF-20261112-01 收尾登记）：
-# Git Bash 下「cmd > NUL」会创建名为 NUL 的普通文件（0.3KB pytest 残留输出），
-# 该文件被未知句柄占用期间删除被拒（POSIX unlink 与设备命名空间路径均
-# Permission denied）。gitignore 登记使工作区状态干净；重启机器后用
-# PowerShell Remove-Item -LiteralPath "\\.\<绝对路径>\NUL" 清理。
+# Windows 保留设备名残留（2026-11-13 RF-20261112-01 收尾登记，同日已清除）：
+# Git Bash 下「cmd > NUL」会创建名为 NUL 的普通文件（pytest 残留输出）。
+# 已于 2026-11-13 02:30 用「MoveFileW 同目录改名 NUL→NUL_del_tmp → os.remove」清除
+# （直接 DeleteFileW 报 ERROR_ACCESS_DENIED；重命名法绕开保留名解析）。
+# 此两行为防御性登记：未来若有脚本再生成 NUL，不影响 git 状态判定。
 NUL
 nul

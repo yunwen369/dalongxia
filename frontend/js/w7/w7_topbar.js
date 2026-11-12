@@ -4,6 +4,8 @@
   var W7 = window.W7 = window.W7 || {};
   var C = W7.core;
   var $ = C.$, toast = C.toast, apiJson = C.apiJson, queryParam = C.queryParam;
+  /* esc 惰性桥（W7.forms.esc 在 w7_forms.js 定义；RF-20261112-01 遗留收口：搜索联想动态值转义） */
+  var esc = function () { return W7.forms.esc.apply(null, arguments); };
   /* ---------- 5. 顶栏标的搜索 ---------- */
   function bindSearch() {
     var input = $("v7-search");
@@ -14,8 +16,8 @@
     function render(items) {
       list.innerHTML = items.length
         ? items.map(function (x) {
-            return '<div class="v7-search-item" data-symbol="' + x.symbol + '" data-name="' + x.name + '">' +
-              "<b>" + x.symbol + "</b><span>" + x.name + " · " + (x.market || "") + "</span></div>";
+            return '<div class="v7-search-item" data-symbol="' + esc(x.symbol) + '" data-name="' + esc(x.name) + '">' +
+              "<b>" + esc(x.symbol) + "</b><span>" + esc(x.name) + " · " + esc(x.market || "") + "</span></div>";
           }).join("")
         : '<div class="v7-search-item"><b>无匹配</b><span>换个代码或名称试试</span></div>';
       list.hidden = false;

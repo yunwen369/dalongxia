@@ -48,7 +48,7 @@
     if (!sel) { return; }
     function render(items) {
       sel.innerHTML = '<option value="">选择标的…</option>' + items.map(function (x) {
-        return '<option value="' + x.code + '">' + x.code + " " + x.name + "</option>";
+        return '<option value="' + esc(x.code) + '">' + esc(x.code) + " " + esc(x.name) + "</option>";
       }).join("");
     }
     OB.http.getJSON("/api/watchlist")
