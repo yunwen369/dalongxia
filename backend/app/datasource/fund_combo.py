@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.app import config
+from backend.app.core import memcache
 from backend.app.datasource import fund as fund_provider
 from backend.app.datasource import macro, portfolio, tencent, utils
 
@@ -66,40 +67,35 @@ EXCLUDE_MIN_AGE_YEARS = 3.0         # ② 成立年限下限（年）
 EXCLUDE_LIQUID_BAND_YI = 5.0        # ③ 清盘风险·小型带（亿）：规模在此带内才看流出信号
 EXCLUDE_SHRINK_MOM_PCT = -30.0      # ③ 清盘风险·单季环比流出阈值（%），小型且急缩才算
 
-# 费率缓存（按类型批量拉一次，24 小时）
-_FEE_CACHE: Dict[str, float] = {}
-_FEE_TS = 0.0
-_FEE_TTL = 24 * 3600
+# 费率缓存（按类型批量拉一次；B2 口径收编：MemCache 命名实例，TTL 见 config.TTL）
+_FEE_CACHE = memcache.get_cache("fund_fee_table")
 
 
+# B2 口径收编（2026-11-12）：原 _risk_free（与 valuation._bond_10y 逐字同构副本）
+# 删除，统一改调 macro.bond_10y_value()（全站唯一入口）。
 def _risk_free() -> Optional[float]:
-    """无风险利率（10Y 国债，%）：与估值页同源，不硬编码。
+    """无风险利率（10Y 国债，%）：与估值页同源（macro 唯一入口），不硬编码。
 
     Returns:
         Optional[float]: 收益率百分数；取不到返回 None（夏普/索提诺将退化为 None）。
     """
-    try:
-        overview = macro.get_overview() or {}
-        for item in overview.get("indicators") or []:
-            if item.get("key") == "bond_10y" and item.get("available"):
-                return float(item["value"])
-    except Exception as exc:  # noqa: BLE001 - 取不到就不算风险调整指标
-        logger.info("无风险利率取数失败：%s", type(exc).__name__)
-    return None
+    return macro.bond_10y_value()
 
 
 def _load_fee_map() -> Dict[str, float]:
-    """批量拉取各类型基金手续费（%），进程内缓存 24 小时。
+    """批量拉取各类型基金手续费（%），MemCache 统一缓存（TTL: config.TTL["fund_fee_table"]）。
+
+    全部类别失败时不缓存空表（下次调用立即重试，与原手写实现语义一致）。
 
     Returns:
         Dict[str, float]: {基金代码: 手续费%}；单类失败不影响其他类。
     """
-    global _FEE_TS
-    now = time.time()
-    if _FEE_CACHE and now - _FEE_TS < _FEE_TTL:
-        return _FEE_CACHE
+    cached = _FEE_CACHE.get("table", config.TTL["fund_fee_table"])
+    if cached is not None:
+        return cached
     import akshare as ak
 
+    merged: Dict[str, float] = {}
     for kind in ("股票型", "混合型", "债券型", "指数型"):
         try:
             frame = ak.fund_open_fund_rank_em(symbol=kind)
@@ -112,11 +108,12 @@ def _load_fee_map() -> Dict[str, float]:
             if not code or not raw:
                 continue
             try:
-                _FEE_CACHE[code] = float(raw)
+                merged[code] = float(raw)
             except ValueError:
                 continue
-    _FEE_TS = now
-    return _FEE_CACHE
+    if merged:
+        _FEE_CACHE.set("table", merged)
+    return merged
 
 
 def _rank_percentile(code: str) -> Optional[float]:
@@ -730,27 +727,24 @@ CROWD_DISCOUNT_TIERS = (
     (100.1, 0.60, "拥挤度 80–100，重度折扣 ×0.60"),
 )
 
-_THS_BOARD_CACHE: Dict[str, Any] = {"boards": [], "ts": 0.0}
-_THS_BOARD_TTL = 3600.0
+_THS_BOARD_CACHE = memcache.get_cache("ths_board_list")
 
 
 def _ths_boards() -> List[str]:
-    """同花顺行业名清单（进程内缓存 1 小时，用于东财行业 → 同花顺板块匹配）。
+    """同花顺行业名清单（MemCache 统一缓存，用于东财行业 → 同花顺板块匹配）。
 
     Returns:
-        List[str]: 行业名列表；取不到返回空列表。
+        List[str]: 行业名列表；取不到返回空列表（不缓存空结果，下次调用重试）。
     """
-    import time as _time
-
-    now = _time.time()
-    if _THS_BOARD_CACHE["boards"] and now - _THS_BOARD_CACHE["ts"] <= _THS_BOARD_TTL:
-        return _THS_BOARD_CACHE["boards"]
+    cached = _THS_BOARD_CACHE.get("names", config.TTL["ths_board_list"])
+    if cached is not None:
+        return cached
     try:
         from backend.app.datasource import sector as sector_provider
 
         names = sector_provider.get_crowding_board_names()
-        _THS_BOARD_CACHE["boards"] = names
-        _THS_BOARD_CACHE["ts"] = now
+        if names:
+            _THS_BOARD_CACHE.set("names", names)
         return names
     except Exception as exc:  # noqa: BLE001 - 清单取不到时退化为空（不折扣并标注）
         logger.info("同花顺行业清单取数失败：%s", type(exc).__name__)

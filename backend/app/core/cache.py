@@ -213,6 +213,17 @@ def clear_cache() -> int:
     with _LOCK:
         _MEMORY.clear()
 
+    # B2（2026-11-12）：联动清空 core/memcache 全部命名实例
+    #（个股行业/通道探测/费率表等进程内存小缓存），/api/cache/clear 语义完整。
+    try:
+        from backend.app.core import memcache
+
+        mem_clear = memcache.clear_all()
+        if mem_clear:
+            logger.info("已联动清空 MemCache 条目 %d 个", mem_clear)
+    except Exception as exc:  # noqa: BLE001 - 联动失败不影响主清空
+        logger.warning("MemCache 联动清空失败：%s", type(exc).__name__)
+
     removed = 0
     if config.CACHE_DIR.is_dir():
         for path in config.CACHE_DIR.glob("*.json"):
@@ -248,6 +259,7 @@ CACHE_TTL: tuple = (
     ("profile / financial / estimates", "3600 / 3600 / 1800", "概况、财报、一致预期"),
     ("search", 600, "搜索联想"),
     ("yjb:collect / yjb:holdings:*", 30, "养基宝账户汇总与持仓（账户级接口不宜高频）"),
+    ("memcache:*（行业/探测/费率等）", "见 config.TTL", "进程内 MemCache 命名实例（B2 口径收编，config.TTL 统一登记）"),
 )
 
 

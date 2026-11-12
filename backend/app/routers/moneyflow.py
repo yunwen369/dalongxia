@@ -47,7 +47,7 @@ def _lhb_like(*, cache_key: str, loader, empty_source: str, empty_caliber: str,
         dict: 统一信封响应。
     """
     try:
-        payload = cache.get_or_load(cache_key, config.TTL.get("lhb", 3600), loader)
+        payload = cache.get_or_load(cache_key, config.TTL["lhb"], loader)
     except ValueError as exc:
         # 上游「确实没有披露」：成功 + 空列表 + 中文说明（空/错分离）
         return ok({
@@ -109,7 +109,7 @@ def northbound(
 
     cache_key = f"moneyflow:northbound:{mode}"
     try:
-        payload = cache.get_or_load(cache_key, config.TTL.get("northbound", 3600), loader)
+        payload = cache.get_or_load(cache_key, config.TTL["northbound"], loader)
     except Exception as exc:  # noqa: BLE001 - 上游异常统一中文错误
         logger.warning("北向资金取数失败（%s）：%s（%s）", mode, type(exc).__name__, exc)
         hint = ("北向成交总额数据暂不可用（东财通道异常），请稍后重试。"
@@ -135,7 +135,7 @@ def north_top(limit: int = Query(10, ge=1, le=30, description="返回条数")) -
     """
     try:
         payload = cache.get_or_load(
-            f"moneyflow:north-top:{limit}", config.TTL.get("north_top", 3600),
+            f"moneyflow:north-top:{limit}", config.TTL["north_top"],
             lambda: moneyflow.get_north_top(limit),
         )
     except Exception as exc:  # noqa: BLE001 - 上游异常统一中文错误

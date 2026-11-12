@@ -26,16 +26,19 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 from backend.app import config
+from backend.app.core import memcache, netfix
 from backend.app.datasource import utils
-from backend.app.core import netfix
 
 logger = logging.getLogger(__name__)
 
-PROBE_TTL = 600  # 探测结果缓存秒数（10 分钟）——仅供探测结果专用短缓存，与数据缓存不同
+# B2（2026-11-12）：探测缓存 TTL 收编至 config.TTL["probe"]（600），此处保留
+# 旧常量名做别名，既有引用零改动。
+PROBE_TTL = config.TTL["probe"]  # 探测结果缓存秒数（10 分钟）——仅供探测结果专用短缓存，与数据缓存不同
 PROBE_TIMEOUT = 2.0  # 单个通道探测超时（秒）
 
-# {源键: (过期时间戳, {"ok": bool, "detail": str, "probed_at": str})}
-_PROBE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+# B2 收编：原手写 {源键: (过期时间戳, payload)} + _PROBE_LOCK 改为命名 MemCache
+# 实例（写入时刻 + 读取判 TTL，语义等价；clear_cache 时随全局联动清空）。
+_PROBE_CACHE = memcache.get_cache("probe")
 _PROBE_LOCK = threading.Lock()
 
 
@@ -172,14 +175,13 @@ def probe_snapshot(force: bool = False) -> Dict[str, Dict[str, Any]]:
     Returns:
         Dict[str, Dict[str, Any]]: {源键: {ok, detail, probed_at}}。
     """
-    now = time.time()
     result: Dict[str, Dict[str, Any]] = {}
     todo = []
     with _PROBE_LOCK:
         for key in PROBES:
-            cached = _PROBE_CACHE.get(key)
-            if not force and cached and cached[0] > now:
-                result[key] = dict(cached[1])
+            cached = _PROBE_CACHE.get(key, PROBE_TTL)
+            if not force and cached is not None:
+                result[key] = dict(cached)
             else:
                 todo.append(key)
 
@@ -194,7 +196,7 @@ def probe_snapshot(force: bool = False) -> Dict[str, Dict[str, Any]]:
                 payload = {"ok": bool(ok), "detail": detail, "probed_at": _now_text()}
                 result[key] = payload
                 with _PROBE_LOCK:
-                    _PROBE_CACHE[key] = (now + PROBE_TTL, payload)
+                    _PROBE_CACHE.set(key, payload)
                 logger.info("通道探测 %s：%s（%s）", key, "可用" if ok else "不可用", detail)
     return result
 

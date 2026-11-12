@@ -168,7 +168,12 @@ def _recipe_ids() -> set:
     """
     source = (FRONTEND / "js" / "registry_view.js").read_text(encoding="utf-8")
     assert "function widgetBody(" in source, "新层缺通用渲染入口 widgetBody"
-    categories = set(re.findall(r'category:\s*"([\w-]+)"', source))
+    # 判据迁移（2026-11-12 RF 基线收尾）：新层渲染分支路由键即 CAT_ICON 表键
+    # （filter/market/chart/table/news/fin），旧正则 category:\s*"..." 匹配的
+    # 对象字面量写法在新层不存在（判据失真，门禁假绿/假红均可能）。
+    cat_match = re.search(r"var\s+CAT_ICON\s*=\s*\{([^}]*)\}", source)
+    assert cat_match, "新层缺 CAT_ICON 分类路由表"
+    categories = set(re.findall(r"([A-Za-z-]+):\s*\"", cat_match.group(1)))
     return categories, set()
 
 

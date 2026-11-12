@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -399,17 +398,18 @@ def analyze() -> Dict[str, Any]:
 # 第七轮 M4：归因与风险（组合台账的「为什么赚/亏」）
 # =============================================================
 
-# 行业查询缓存：symbol → 行业名，避免每次归因都打东财 F10
-_INDUSTRY_CACHE: Dict[str, str] = {}
-_INDUSTRY_TTL = 12 * 3600
-_INDUSTRY_TS = 0.0
+# B2 口径收编（2026-11-12）：原手写行业缓存（_INDUSTRY_CACHE/_INDUSTRY_TTL/
+# _INDUSTRY_TS，12h）随 _industry_of 收编废止，行业查询统一走
+# stock_provider.stock_industry（core/memcache "stock_industry" 实例）。
 
 
 def _industry_of(symbol: str, market: str) -> Optional[str]:
     """取标的所属行业（仅 A 股有；基金/港股/美股返回 None）。
 
-    东财 F10 的 `industry` 字段即所属行业（EM2016 行业分类）。逐只查询成本较高，
-    因此进程内缓存 12 小时：归因是「看组合结构」而非「看单票」，行业短期不会变。
+    B2 口径收编（2026-11-12）：行业查询统一走
+    :func:`stock_provider.stock_industry`（EM2016 东财行业 + 12h 负缓存，
+    全站唯一口径）；本函数保留「非 A 股直接返回 None」的市场判定。
+    原手写 `_INDUSTRY_CACHE`（12h）与缓存空串语义随收编废止。
 
     Args:
         symbol: 代码。
@@ -418,27 +418,11 @@ def _industry_of(symbol: str, market: str) -> Optional[str]:
     Returns:
         Optional[str]: 行业名；取不到返回 None（由调用方归入「未分类」，不猜测）。
     """
-    global _INDUSTRY_TS
     if market != "a":
         return None
-    now = time.time()
-    if now - _INDUSTRY_TS > _INDUSTRY_TTL:
-        _INDUSTRY_CACHE.clear()
-        _INDUSTRY_TS = now
-    cached = _INDUSTRY_CACHE.get(symbol)
-    if cached is not None:
-        return cached or None
-    try:
-        from backend.app.datasource import stock as stock_provider
+    from backend.app.datasource import stock as stock_provider
 
-        profile = stock_provider.get_profile(symbol)
-        industry = str(profile.get("industry") or "").strip()
-        _INDUSTRY_CACHE[symbol] = industry
-        return industry or None
-    except Exception as exc:  # noqa: BLE001 - 行业取不到不影响归因主体
-        logger.info("行业查询失败 %s：%s", symbol, type(exc).__name__)
-        _INDUSTRY_CACHE[symbol] = ""
-        return None
+    return stock_provider.stock_industry(symbol)
 
 
 def attribution() -> Dict[str, Any]:

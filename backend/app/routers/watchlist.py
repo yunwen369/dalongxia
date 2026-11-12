@@ -120,7 +120,7 @@ def list_watchlist() -> Dict[str, Any]:
             dict: 含 quote 的行。
         """
         key = f"watchlist:row:{item['market']}:{item['symbol']}"
-        return cache.get_or_load(key, config.TTL.get("watchlist", 15), lambda: _quote_for(item))
+        return cache.get_or_load(key, config.TTL["watchlist"], lambda: _quote_for(item))
 
     with ThreadPoolExecutor(max_workers=min(8, len(items))) as executor:
         rows = list(executor.map(load, items))

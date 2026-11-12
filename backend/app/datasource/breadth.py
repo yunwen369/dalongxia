@@ -26,7 +26,7 @@ _BREADTH_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
 # 沪市（上证指数）+ 深市（深证综指）：两市家数相加即全市场口径
 _SECIDS = "1.000001,0.399106"
 # 缓存 60 秒：家数属高频变动指标，但仍需避免每次进首页都打源站
-_TTL = 60
+_TTL = config.TTL["breadth"]
 
 
 def _load() -> Dict[str, Any]:

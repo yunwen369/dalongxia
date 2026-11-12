@@ -490,8 +490,31 @@ def get_overview(force: bool = False) -> Dict[str, Any]:
         force: 为 True 时绕过缓存强制重取。
 
     Returns:
-        Dict[str, Any]: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/is_realtime。
+        Dict[str, Any]: 直接返回 payload（含 indicators/source/caliber/as_of），
+        **不带** ``{data, error, error_code}`` 信封——信封由路由层
+        ``routers/macro.py`` 打包。调用方（如 bond_10y_value）按裸 payload 取值。
     """
     if force:
         return _load_overview()
-    return cache.get_or_load("macro:overview", config.TTL.get("macro", 86400), _load_overview)
+    return cache.get_or_load("macro:overview", config.TTL["macro"], _load_overview)
+
+
+def bond_10y_value() -> Optional[float]:
+    """无风险利率（10Y 国债收益率，%）：全站唯一取数入口（B2 口径收编）。
+
+    此前 valuation._bond_10y 与 fund_combo._risk_free 各持一份逐字同构的
+    提取逻辑（AST 近似重复扫描命中），macro 结构一变须两处同步改——现收敛
+    为本函数，估值 ERP / 基金组合夏普·索提诺共用。
+
+    Returns:
+        Optional[float]: 收益率百分数；取不到返回 None（调用方将风险调整
+        指标退化为 None，不硬凑）。
+    """
+    try:
+        overview = get_overview() or {}
+        for item in overview.get("indicators") or []:
+            if item.get("key") == "bond_10y" and item.get("available"):
+                return float(item["value"])
+    except Exception as exc:  # noqa: BLE001 - 取不到就不算风险调整指标
+        logger.info("10Y 国债取数失败：%s", type(exc).__name__)
+    return None

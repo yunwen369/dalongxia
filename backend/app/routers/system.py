@@ -61,7 +61,7 @@ def _northbound_status() -> Dict[str, Any]:
     disclosure = "沪深股通成交总额 · 交易所 T+0 收市后披露；2024-08-19 起无净买额披露"
     payload = None
     try:
-        payload = cache.get("moneyflow:northbound:turnover", config.TTL.get("northbound", 3600))
+        payload = cache.get("moneyflow:northbound:turnover", config.TTL["northbound"])
     except Exception:  # noqa: BLE001 - 健康检查不得因缓存异常而失败
         payload = None
     # get_or_load 直接缓存 data 载荷（无 {data,error} 信封），故兼容两种形态

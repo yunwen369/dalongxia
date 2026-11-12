@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from backend.app import config
 from backend.app.core import cache
 from backend.app.datasource import utils
 
@@ -30,7 +31,7 @@ _MAX_LINES = 5  # 每个榜单最多列出条数（控制 system 长度）
 
 # 只读探测用 TTL：路由写入用 1h~24h（日频），这里放宽到 24h 只影响
 # 「读不到则退主源」的概率，不会读到超过一天的旧数据（内存缓存在重启即清）
-_PROBE_TTL = 24 * 3600
+_PROBE_TTL = config.TTL["page_probe"]
 
 
 def _fmt_pct(value: Any) -> str:

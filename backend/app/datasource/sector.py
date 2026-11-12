@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 from backend.app import config
-from backend.app.core import cache, netfix
+from backend.app.core import cache, memcache, netfix
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
@@ -617,7 +617,7 @@ def _period_key(period: str) -> str:
 
 
 # 腾讯板块「名称 → 代码」缓存：{kind: (时间戳, {名称: 代码})}
-_TX_BOARD_CACHE: Dict[str, Any] = {}
+_TX_BOARD_CACHE = memcache.get_cache("tx_board_map")  # B2 收编：原手写 {kind: (ts, mapping)}，TTL config.TTL["tx_board_map"]
 
 
 def _tencent_board_code(name: str, kind: str = "concept") -> Optional[str]:
@@ -1422,8 +1422,7 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
 
 
 # 板块四档缓存：{板块名: (时间戳, {super_big, big, medium, small, covered})}
-_FLOW_TIER_CACHE: Dict[str, Any] = {}
-_FLOW_TIER_TTL = 600  # 四档 10 分钟刷新
+_FLOW_TIER_CACHE = memcache.get_cache("flow_tier")  # B2 收编：原手写 {board: (ts, payload)}，TTL config.TTL["flow_tier"]
 # 板块成分映射：{板块名: [6 位代码]}（落盘缓存 7 天，构建慢）
 _CONS_CACHE: Dict[str, List[str]] = {}
 _CONS_CACHE_LOADED = False
@@ -1688,9 +1687,9 @@ def _flow_tier(board: str, code: Optional[str]) -> Optional[Dict[str, Any]]:
     Returns:
         Optional[Dict[str, Any]]: 四档聚合结果；未就绪返回 None。
     """
-    cached = _FLOW_TIER_CACHE.get(board)
-    if cached and time.time() - cached[0] < _FLOW_TIER_TTL:
-        return cached[1]
+    cached = _FLOW_TIER_CACHE.get(board, config.TTL["flow_tier"])
+    if cached is not None:
+        return cached
     _load_cons_cache()
     codes = _CONS_CACHE.get(board)
     if not codes:
@@ -1701,7 +1700,7 @@ def _flow_tier(board: str, code: Optional[str]) -> Optional[Dict[str, Any]]:
         logger.info("板块四档聚合失败 %s：%s", board, type(exc).__name__)
         return None
     if payload.get("covered"):
-        _FLOW_TIER_CACHE[board] = (time.time(), payload)
+        _FLOW_TIER_CACHE.set(board, payload)
         return payload
     return None
 

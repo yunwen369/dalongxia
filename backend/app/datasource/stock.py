@@ -29,7 +29,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app import config
-from backend.app.core import netfix
+from backend.app.core import memcache, netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.datasource import ashare, tencent, utils
@@ -228,6 +228,44 @@ def get_profile(symbol: str, market: str = "a") -> Dict[str, Any]:
         "turnover": quote.get("turnover") if quote else None,
         "caliber_note": "东财 F10 基本资料 + 东财估值 + 腾讯报价",
     }
+
+
+# B2 口径收编（2026-11-12）：个股→行业唯一入口。
+# 旧实现两份且口径漂移：fund.py 直连 akshare stock_individual_info_em（「行业」=
+# 证监会一级分类，缓存 24h）；portfolio.py 走本模块 get_profile（EM2016 分类，
+# 缓存 12h）。统一取 get_profile 链路的 **EM2016 东财行业**——与板块/拥挤度/
+# 成分映射的行业体系同源（sector provider 均为东财口径），缓存 TTL 收编至
+# config.TTL["stock_industry"]（12h），失败负缓存（防归因批量逐票反复打源站）。
+_INDUSTRY_CACHE = memcache.get_cache("stock_industry")
+
+
+def stock_industry(symbol: str) -> Optional[str]:
+    """个股所属行业（东财 EM2016 分类，全站唯一口径，进程内缓存 12h）。
+
+    Args:
+        symbol: 6 位 A 股代码（其他市场由调用方先判定，本函数只认 A 股代码）。
+
+    Returns:
+        Optional[str]: 行业名称（如「半导体」）；取不到返回 None（结果同样
+        负缓存，避免同一失效代码反复打源站），由调用方归入「未分类」，不猜测。
+
+    Notes:
+        调用方注意：港股/美股/基金无行业归属（get_profile 对 hk/us 已返回
+        ``industry=None``），市场判定（是否 A 股）由调用方自行处理。
+    """
+    if not symbol:
+        return None
+    key = str(symbol)
+    if _INDUSTRY_CACHE.contains(key, config.TTL["stock_industry"]):
+        return _INDUSTRY_CACHE.get(key, config.TTL["stock_industry"])
+    try:
+        profile = get_profile(key, "a")
+        industry = str(profile.get("industry") or "").strip() or None
+    except Exception as exc:  # noqa: BLE001 - 行业取不到不影响归因/风格主体
+        logger.info("个股行业不可得 %s：%s", key, type(exc).__name__)
+        industry = None
+    _INDUSTRY_CACHE.set(key, industry)
+    return industry
 
 
 # =============================================================

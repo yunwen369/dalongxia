@@ -956,7 +956,7 @@ class TestCapabilityStatus:
         from backend.app.core import capabilities
 
         monkeypatch.setitem(capabilities.PROBES, "cls", lambda: (False, "模拟超时"))
-        capabilities._PROBE_CACHE.pop("cls", None)  # noqa: SLF001 - 清掉缓存确保重探
+        capabilities._PROBE_CACHE.clear()  # noqa: SLF001 - B2：dict→MemCache，pop 无单键删除改清全部（force_probe 本就绕缓存）
         status = capabilities.datasource_status(force_probe=True)
         assert status["cls"]["status"] == "通道异常（探测失败）"
         assert status["cls"]["active"] is False
@@ -969,7 +969,7 @@ class TestCapabilityStatus:
 
         monkeypatch.setattr(cfg, "V8_SOURCES_ENABLED", False)
         monkeypatch.setitem(capabilities.PROBES, "ths", lambda: (True, "模拟可达"))
-        capabilities._PROBE_CACHE.pop("ths", None)  # noqa: SLF001 - 清掉缓存确保重探
+        capabilities._PROBE_CACHE.clear()  # noqa: SLF001 - B2：dict→MemCache，pop 无单键删除改清全部（force_probe 本就绕缓存）
         status = capabilities.datasource_status(force_probe=True)
         assert status["ths"]["status"] == "已接入（纯 HTTP，无 V8 依赖）"
         assert status["ths"]["active"] is True

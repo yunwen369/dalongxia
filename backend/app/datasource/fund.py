@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError, NotFoundError
+from backend.app.datasource import stock as stock_provider
 from backend.app.datasource import utils
 
 netfix.apply_netfix()
@@ -1203,42 +1204,10 @@ def get_profile_basis(code: str) -> Dict[str, Any]:
     return _cache.get_or_load(f"fund:profile_basis:{code}", 24 * 3600, _load)
 
 
-# R8 风格稳定性：重仓行业季度漂移度所需的行业→代码映射（进程内缓存 24h）
-# 东财 `stock_individual_info_em` 返回的「行业」字段是证监会一级行业，跨基金复用。
-_INDUSTRY_CACHE: Dict[str, Optional[str]] = {}
-_INDUSTRY_TS = 0.0
-_INDUSTRY_TTL = 24 * 3600
-
-
-def _stock_industry(stock_code: str) -> Optional[str]:
-    """个股所属行业（东财个股概况「行业」字段，进程内缓存 24h）。
-
-    Args:
-        stock_code: 6 位 A 股代码。
-
-    Returns:
-        Optional[str]: 行业名称（如「半导体」）；取不到返回 None。
-    """
-    global _INDUSTRY_TS
-    now = time.time()
-    if now - _INDUSTRY_TS > _INDUSTRY_TTL:
-        _INDUSTRY_CACHE.clear()
-        _INDUSTRY_TS = now
-    cached = _INDUSTRY_CACHE.get(stock_code)
-    if cached is not None or stock_code in _INDUSTRY_CACHE:
-        return cached
-    try:
-        frame = ak.stock_individual_info_em(symbol=stock_code)
-        industry: Optional[str] = None
-        for row in frame.to_dict("records"):
-            if str(row.get("item", "")).strip() == "行业":
-                industry = row.get("value") or None
-                break
-    except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
-        logger.info("个股行业不可得 %s：%s", stock_code, type(exc).__name__)
-        industry = None
-    _INDUSTRY_CACHE[stock_code] = industry
-    return industry
+# B2 口径收编（2026-11-12）：原 _stock_industry（直连 akshare
+# stock_individual_info_em、证监会一级分类、24h 手写缓存）已删除，统一改调
+# stock_provider.stock_industry（EM2016 东财行业，与全站板块体系同源，
+# TTL config.TTL["stock_industry"]，负缓存）。旧实现见 git 历史 3e4e947。
 
 
 def get_style_history(code: str) -> Dict[str, Any]:
@@ -1301,7 +1270,7 @@ def get_style_history(code: str) -> Dict[str, Any]:
                 pct = _num(row.get("占净值比例"))
                 if not stock or pct is None:
                     continue
-                industry = _stock_industry(stock) or "未知"
+                industry = stock_provider.stock_industry(stock) or "未知"
                 weights[industry] = weights.get(industry, 0.0) + pct
             # 归一化到 100%（重仓股合计通常 70~95%，剩余为非重仓+现金）
             industry_series.append({

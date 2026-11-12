@@ -277,23 +277,15 @@ def _industry_snapshot() -> List[Dict[str, Any]]:
     return rows
 
 
+# B2 口径收编（2026-11-12）：原 _bond_10y（逐字同构副本）删除，统一改调
+# macro.bond_10y_value()（全站唯一入口，见 macro.py docstring 登记）。
 def _bond_10y() -> Optional[float]:
-    """取 10Y 国债收益率（复用宏观模块，失败返回 None）。
-
-    注意：`macro.get_overview()` 直接返回 payload（含 indicators），
-    不是 `{data: ...}` 包装——这里少取一层曾在首版写成 `.get("data")` 导致 ERP 恒为 None。
+    """取 10Y 国债收益率（复用宏观模块唯一入口，失败返回 None）。
 
     Returns:
         Optional[float]: 收益率（%）。
     """
-    try:
-        overview = macro.get_overview() or {}
-        for item in overview.get("indicators") or []:
-            if item.get("key") == "bond_10y" and item.get("available"):
-                return float(item["value"])
-    except Exception as exc:  # noqa: BLE001 - 取不到就不算 ERP
-        logger.info("ERP 取国债失败：%s", type(exc).__name__)
-    return None
+    return macro.bond_10y_value()
 
 
 def _load_percentile() -> Dict[str, Any]:
@@ -409,4 +401,4 @@ def get_percentile(force: bool = False) -> Dict[str, Any]:
     """
     if force:
         return _load_percentile()
-    return cache.get_or_load("valuation:percentile", config.TTL.get("valuation", 21600), _load_percentile)
+    return cache.get_or_load("valuation:percentile", config.TTL["valuation"], _load_percentile)
