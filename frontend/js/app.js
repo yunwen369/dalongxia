@@ -46,12 +46,10 @@
   var APP_VER = "";        // 由 /api/health 回填（侧栏页脚展示真实版本，不再写死）
   var pinnedGroups = {};     // 用户手动展开/折叠的分组；未登记的组只随当前视图自动展开
 
-  /** 拉取真实接口，失败时按 key 降级为演示数据。 */
+  /** 拉取真实接口，失败时按 key 降级为演示数据。（阶段2：fetch 骨架收编 OB.http.getJSON） */
   async function getJSON(path, demoKey) {
     try {
-      var response = await fetch(path, { cache: "no-store" });
-      if (!response.ok) { throw new Error("HTTP " + response.status); }
-      var payload = await response.json();
+      var payload = await OB.http.getJSON(path);
       if (!payload || payload.data == null) {
         // 业务态（未绑定 / 无权限 / EMPTY_DATA）不是通道故障：保留真实文案，不降级演示数据。
         return { data: {}, error: (payload && payload.error) || "empty data", demo: false };
@@ -511,9 +509,8 @@
         if (id !== "home") {
           await renderGeneric(id, true);
         } else {
-          var response = await fetch("/api/market/index?market=a", { cache: "no-store" });
-          var payload = await response.json();
-          var items = (payload.data && payload.data.items) || [];
+          var payload = await OB.http.getJSON("/api/market/index?market=a").catch(function () { return null; });
+          var items = (payload && payload.data && payload.data.items) || [];
           document.querySelectorAll(".index-value").forEach(function (node, i) {
             if (!items[i]) { return; }
             var next = Number(items[i].price).toFixed(2);
@@ -769,8 +766,7 @@
     // 导致首屏最长 30s 无侧栏/顶栏，且期间的 hash 跳转被丢弃。改为启动即渲染导航。
     route();
     window.addEventListener("hashchange", route);
-    fetch("/api/health", { cache: "no-store" })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    OB.http.getJSON("/api/health")
       .then(function (j) {
         var app = (j && j.data && j.data.app) || {};
         if (app.version) { APP_VER = "v" + app.version; renderSidebar(currentViewId()); }

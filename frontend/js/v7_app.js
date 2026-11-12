@@ -379,14 +379,11 @@
       });
   }
 
-  /* ---------- 统一请求（401 跳登录，D-19） ---------- */
+  /* ---------- 统一请求（401 跳登录，D-19） ----------
+   * RF-20261112-01 阶段2：唯一实现迁至 lib/http.js（OB.http.apiJson），
+   * 此处保留本地委托别名，巨石内全部调用点行为不变。 */
   function apiJson(path, opts) {
-    var conf = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
-    return fetch(path, conf).then(function (resp) {
-      if (resp.status === 401) { location.href = "/auth"; return { ok: false, body: null, status: 401 }; }
-      return resp.json().then(function (body) { return { ok: resp.ok, body: body, status: resp.status }; })
-        .catch(function () { return { ok: resp.ok, body: null, status: resp.status }; });
-    });
+    return OB.http.apiJson(path, opts);
   }
 
   function queryParam(name) {
