@@ -265,28 +265,39 @@ def run_viewport(base: str, w: int, h: int, tag: str, out: str, cdp_port: int) -
             check(tag, "汉堡按钮可见", lay.get("hamburger"), "")
             sb = lay.get("sidebar") or {}
             check(tag, "侧栏默认收起", sb.get("right", 999) <= 1, str(sb))
-            # 抽屉开合
-            cdp.call("Runtime.evaluate", {
-                "expression": "document.getElementById('menu-toggle').click(); 'ok'", "returnByValue": True})
-            time.sleep(1)
-            open_state = evaluate(cdp, r"""
-            (function(){var sb=document.getElementById('sidebar');var bd=document.getElementById('sb-backdrop');
-              return JSON.stringify({open:sb.classList.contains('open'),
-                right:Math.round(sb.getBoundingClientRect().right), backdrop:bd?!bd.hidden:null,
-                aria:document.getElementById('menu-toggle').getAttribute('aria-expanded')});})()
-            """)
-            check(tag, "汉堡唤出抽屉+遮罩", bool(open_state.get("open")) and open_state.get("right", 0) > 200
-                  and bool(open_state.get("backdrop")), str(open_state))
-            shot(cdp, os.path.join(out, f"shot_{tag}_drawer.png"))
-            cdp.call("Runtime.evaluate", {
-                "expression": "document.getElementById('sb-backdrop').click(); 'ok'", "returnByValue": True})
-            time.sleep(1)
-            closed = evaluate(cdp, r"""
-            (function(){var sb=document.getElementById('sidebar');
-              return JSON.stringify({right:Math.round(sb.getBoundingClientRect().right),
-                open:sb.classList.contains('open')});})()
-            """)
-            check(tag, "遮罩点击关闭抽屉", not closed.get("open") and closed.get("right", 999) <= 1, str(closed))
+            # 抽屉开合（先探测控件是否存在，缺失按失败记录而不是崩栈）
+            menu = evaluate(cdp, r"""
+            (function(){var b=document.getElementById('menu-toggle');
+              return JSON.stringify({exists:!!b});})()
+            """) or {}
+            if not menu.get("exists"):
+                check(tag, "汉堡唤出抽屉+遮罩", False,
+                      "页面无 #menu-toggle：当前壳层未实现移动端抽屉（控件缺失）")
+                check(tag, "遮罩点击关闭抽屉", False, "页面无 #sb-backdrop：抽屉未实现")
+            else:
+                cdp.call("Runtime.evaluate", {
+                    "expression": "document.getElementById('menu-toggle').click(); 'ok'", "returnByValue": True})
+                time.sleep(1)
+                open_state = evaluate(cdp, r"""
+                (function(){var sb=document.getElementById('sidebar');var bd=document.getElementById('sb-backdrop');
+                  return JSON.stringify({open:sb.classList.contains('open'),
+                    right:Math.round(sb.getBoundingClientRect().right), backdrop:bd?!bd.hidden:null,
+                    aria:document.getElementById('menu-toggle').getAttribute('aria-expanded')});})()
+                """) or {}
+                check(tag, "汉堡唤出抽屉+遮罩",
+                      bool(open_state.get("open")) and open_state.get("right", 0) > 200
+                      and bool(open_state.get("backdrop")), str(open_state))
+                shot(cdp, os.path.join(out, f"shot_{tag}_drawer.png"))
+                cdp.call("Runtime.evaluate", {
+                    "expression": "document.getElementById('sb-backdrop').click(); 'ok'", "returnByValue": True})
+                time.sleep(1)
+                closed = evaluate(cdp, r"""
+                (function(){var sb=document.getElementById('sidebar');
+                  return JSON.stringify({right:Math.round(sb.getBoundingClientRect().right),
+                    open:sb.classList.contains('open')});})()
+                """) or {}
+                check(tag, "遮罩点击关闭抽屉",
+                      not closed.get("open") and closed.get("right", 999) <= 1, str(closed))
         else:
             check(tag, "顶栏 4 操作入口全部可见且未被裁切",
                   all(act.values()) and lay.get("actions_in_view"),
@@ -417,4 +428,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # 2026-11-12 全量回归：101 项断言绑定 v2.x 壳层（.nav-item/#sidebar/#sb-search/
+    # .pg-feed-item/#crumb 等），对现壳层 47 项为选择器漂移。默认拒绝运行（退出码 2）；
+    # 现覆盖：nav_consistency(35 视图四处一致) + functional(17 交互) +
+    # landing(29 视图/三皮肤) + v34_panels(24 面板) + mobile_layout(R-01 移动端)。
+    if "--legacy" not in sys.argv:
+        print("已退役：review_recheck 的 101 项断言对应 v2.x 壳层，现壳层会大量误报。"
+              "请改用 nav_consistency_probe / v6_functional_probe / v6_landing_ui_probe / "
+              "v34_panels_probe / mobile_layout_probe。如确需历史取证：加 --legacy")
+        sys.exit(2)
     main()

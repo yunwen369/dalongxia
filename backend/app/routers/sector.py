@@ -516,7 +516,9 @@ def sector_fundflow(market: str = Query("a", description="a/hk/us（cn 为 a 的
                         "细分为 496 个行业且自带四档，但无流入/流出总额）；"
                         "每行 flow_source 标明实际来源，不同源口径不可跨行相加；"
                         "未聚合板块的四档为 None（成分映射预热中，按请求逐步补齐）；"
-                        "顶层 source 标签沿用主源名，**实际每行来源以 flow_source 为准**",
+                        "顶层 source 标签沿用主源名，**实际每行来源以 flow_source 为准**；"
+                        "涨跌幅 pct 与 /api/sector/industry 同源（优先取行情列表已缓存值，"
+                        "保证同一板块两处数值一致；行情缓存未命中时取本链路资金流列表的值）",
               sector_provider.get_fundflow)],
             empty_value=[],
         )

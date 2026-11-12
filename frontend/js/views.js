@@ -78,7 +78,7 @@
 
   var V = {};
 
-  V.home = { title: "总览仪表盘", group: "dashboard", sidebar: "overview", template: "home", crumb: ["市场总览"] };
+  V.home = { title: "总览仪表盘", group: "dashboard", sidebar: "overview", template: "home", crumb: ["总览仪表盘"] };
 
   V.today = {
     title: "今日看点", group: "dashboard", sidebar: "overview", template: "dashboard", crumb: ["市场总览", "今日看点"],
@@ -143,17 +143,47 @@
   };
 
   V["widget-library"] = {
-    title: "组件库", group: "dashboard", sidebar: "overview", template: "dashboard", crumb: ["仪表板", "组件库"],
-    api: { dash: ["/api/dashboards", "dashboards"], conn: ["/api/connectors/status", "connectors"] },
+    title: "组件库", group: "dashboard", sidebar: "overview", template: "dashboard",
+    crumb: ["仪表板", "组件库"],
+    api: { reg: ["/api/widgets", "widgetsReg"], conn: ["/api/connectors/status", "connectors"],
+      dash: ["/api/dashboards", "dashboards"] },
     render: function (m) {
-      var widgets = ((d(m, "dash").dashboards || [])[0] || {}).widgets || [];
-      var sources = d(m, "conn").datasources || [];
-      return card("已配置组件", kpis((widgets.length ? widgets : [{ name: "暂无" }]).map(function (w) {
-        return [typeof w === "string" ? w : (w.name || w.id || "widget"), "可用"];
-      })), "/api/dashboards", "组") +
-        card("数据源能力", table([["label", "数据源", "35%"], ["status", "状态", "25%"],
-          ["stage", "阶段", "20%"], ["ttl", "缓存(秒)", "20%", "num"]], sources),
-          "/api/connectors/status", "源");
+      var reg = d(m, "reg");
+      demoInit(reg, d(m, "dash"));
+      var items = reg.items || [];
+      var cats = reg.categories || {};
+      var keys = Object.keys(cats);
+      var count = function (key) {
+        return items.filter(function (w) { return w.category === key; }).length;
+      };
+      var summary = kpis([
+        ["组件总数", reg.total || items.length], ["组件分类", keys.length],
+        ["图表走势", count("chart")], ["行情报价", count("market")],
+        ["列表表格", count("table")], ["数据源", (d(m, "conn").datasources || []).length],
+        ["已添加", '<span class="demo-count">' + demo.widgets.length + "</span>"]
+      ]);
+      var groups = keys.map(function (key) {
+        return card(cats[key] + " · " + count(key), widgetGrid(items.filter(function (w) {
+          return w.category === key;
+        })), "/api/widgets · " + key, "组");
+      }).join("");
+      return card("组件注册表（真实 /api/widgets）", summary, "/api/widgets", "库") +
+        groups +
+        card("添加到：" + esc(demo.target) + " · 48 列栅格",
+          demoGridHTML(), "本地演示状态，不调用 PUT /api/dashboards、不写入 data/dashboards.json", "板") +
+        card("多组件分配规则与逐行占用", demoRuleHTML(), "/api/widgets · grid / /api/dashboards · widgets.span", "则") +
+        card("数据源能力", table([["label", "数据源", "35%"], ["status", "状态", "22%"],
+          ["stage", "阶段", "21%"], ["ttl", "缓存(秒)", "22%", "num"]],
+          d(m, "conn").datasources), "/api/connectors/status", "源");
+    },
+    chart: {
+      type: "donut", key: "reg", title: "组件分类分布", src: "/api/widgets · categories",
+      pick: function (x) {
+        var cats = x.categories || {}, items = x.items || [];
+        return Object.keys(cats).map(function (k) {
+          return { label: cats[k], value: items.filter(function (w) { return w.category === k; }).length };
+        });
+      }
     }
   };
 
@@ -707,50 +737,7 @@
     }).join("") + "</div>";
   }
 
-  V["widget-library"] = {
-    title: "组件库", group: "dashboard", sidebar: "overview", template: "dashboard",
-    crumb: ["仪表板", "组件库"],
-    api: { reg: ["/api/widgets", "widgetsReg"], conn: ["/api/connectors/status", "connectors"],
-      dash: ["/api/dashboards", "dashboards"] },
-    render: function (m) {
-      var reg = d(m, "reg");
-      demoInit(reg, d(m, "dash"));
-      var items = reg.items || [];
-      var cats = reg.categories || {};
-      var keys = Object.keys(cats);
-      var count = function (key) {
-        return items.filter(function (w) { return w.category === key; }).length;
-      };
-      var summary = kpis([
-        ["组件总数", reg.total || items.length], ["组件分类", keys.length],
-        ["图表走势", count("chart")], ["行情报价", count("market")],
-        ["列表表格", count("table")], ["数据源", (d(m, "conn").datasources || []).length],
-        ["已添加", '<span class="demo-count">' + demo.widgets.length + "</span>"]
-      ]);
-      var groups = keys.map(function (key) {
-        return card(cats[key] + " · " + count(key), widgetGrid(items.filter(function (w) {
-          return w.category === key;
-        })), "/api/widgets · " + key, "组");
-      }).join("");
-      return card("组件注册表（真实 /api/widgets）", summary, "/api/widgets", "库") +
-        groups +
-        card("添加到：" + esc(demo.target) + " · 48 列栅格",
-          demoGridHTML(), "本地演示状态，不调用 PUT /api/dashboards、不写入 data/dashboards.json", "板") +
-        card("多组件分配规则与逐行占用", demoRuleHTML(), "/api/widgets · grid / /api/dashboards · widgets.span", "则") +
-        card("数据源能力", table([["label", "数据源", "35%"], ["status", "状态", "22%"],
-          ["stage", "阶段", "21%"], ["ttl", "缓存(秒)", "22%", "num"]],
-          d(m, "conn").datasources), "/api/connectors/status", "源");
-    },
-    chart: {
-      type: "donut", key: "reg", title: "组件分类分布", src: "/api/widgets · categories",
-      pick: function (x) {
-        var cats = x.categories || {}, items = x.items || [];
-        return Object.keys(cats).map(function (k) {
-          return { label: cats[k], value: items.filter(function (w) { return w.category === k; }).length };
-        });
-      }
-    }
-  };
+;
 
   /* ---------- 各视图走势图配置：统一从已有真实接口数据派生，不新增端点 ---------- */
   var topN = function (key, field, n, label) {
@@ -929,6 +916,52 @@
       return card("AI 助手 · Copilot", chat, "独立视图 · /api/ai/chat", "AI") +
         card("能力与口径", kpis([["上下文", "当前视图"], ["数据口径", "真实接口"],
           ["模型", "默认"], ["会话留存", "本机"]]), "/api/ai/config", "置");
+    }
+  };
+
+  /* v3.4.0 恢复：组合回测 / 定投计算器（v3.0.3 存在，v3.1.0 整站替换丢失） */
+  V.backtest = {
+    title: "组合回测", group: "market", sidebar: "research", template: "form",
+    crumb: ["投研工具", "组合回测"],
+    render: function () {
+      return card("回测参数",
+        '<div class="v7-form">' +
+          '<div class="full"><label>基金代码（多个用逗号分隔）</label>' +
+            '<input id="bt-codes" value="017811" placeholder="如 017811,025500"></div>' +
+          '<div class="full"><label>权重（逗号分隔，与代码一一对应；留空=等权）</label>' +
+            '<input id="bt-weights" placeholder="如 0.6,0.4"></div>' +
+          '<div><label>初始资金（元）</label><input id="bt-cash" value="100000"></div>' +
+          '<div><label>回测区间</label><select id="bt-range">' +
+            '<option value="250">近一年</option><option value="500">近两年</option>' +
+            '<option value="9999">全部</option></select></div>' +
+        '</div>' +
+        '<div class="v7-form-foot"><button class="v7-btn primary" data-act="bt-run" type="button">开始回测</button>' +
+        '<span class="v7-hint" id="bt-hint">口径：按 /api/fund/nav 净值序列归一化后加权，纯前端计算</span></div>',
+        "/api/fund/nav · 前端计算", "测") +
+      card("回测结果", '<div id="bt-result"><div class="v-empty">设置参数后点「开始回测」</div></div>',
+        "净值曲线 / 年化 / 最大回撤 / 夏普", "果");
+    }
+  };
+
+  V.dca = {
+    title: "定投计算器", group: "market", sidebar: "research", template: "form",
+    crumb: ["投研工具", "定投计算器"],
+    render: function () {
+      return card("定投参数",
+        '<div class="v7-form">' +
+          '<div><label>基金代码</label><input id="dca-code" value="017811"></div>' +
+          '<div><label>每次定投金额（元）</label><input id="dca-amount" value="1000"></div>' +
+          '<div><label>频率</label><select id="dca-freq">' +
+            '<option value="week">每周</option><option value="month">每月</option></select></div>' +
+          '<div><label>区间</label><select id="dca-range">' +
+            '<option value="250">近一年</option><option value="500">近两年</option>' +
+            '<option value="9999">全部</option></select></div>' +
+        '</div>' +
+        '<div class="v7-form-foot"><button class="v7-btn primary" data-act="dca-run" type="button">计算定投收益</button>' +
+        '<span class="v7-hint" id="dca-hint">口径：按频率定期定额买入，份额=当日净值；年化为近似折算</span></div>',
+        "/api/fund/nav · 前端模拟", "投") +
+      card("定投结果", '<div id="dca-result"><div class="v-empty">设置参数后点「计算定投收益」</div></div>',
+        "投入 / 份额 / 市值 / 收益率 / 年化", "果");
     }
   };
 

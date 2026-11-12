@@ -37,15 +37,20 @@ from ui_clickthrough import CDP, launch_chrome, page_ws  # noqa: E402
 
 STATE_JS = """JSON.stringify({
   "hash": location.hash,
-  "nav": (document.querySelector('#main-nav .nav-item.active')||{}).textContent||'',
-  "side": Array.from(document.querySelectorAll('.sidebar-item.active')).map(function(x){
-      return x.getAttribute('data-view'); }),
-  "crumb": (function(){var c=document.getElementById('crumb');
-      return c && !c.hidden ? c.textContent.trim() : '';})(),
-  "title": (document.getElementById('page-title')||{}).textContent||'',
-  "open_groups": Array.from(document.querySelectorAll('.sidebar details.sb-group[open]'))
-      .map(function(d){ return d.getAttribute('data-group'); })
+  "nav": (document.querySelector('.topnav button.active')||{}).getAttribute
+         ? (document.querySelector('.topnav button.active')||{}).getAttribute('data-group') : '',
+  "side": Array.from(document.querySelectorAll('#side-nav .side-item.active'))
+      .map(function(x){ return x.getAttribute('data-view'); }),
+  "crumb": (function(){var c=document.getElementById('view-crumb');
+      return c ? c.textContent.trim() : '';})(),
+  "title": (document.getElementById('view-title')||{}).textContent||'',
+  "generic_hidden": !!(document.getElementById('view-generic')||{}).hidden,
+  "open_groups": Array.from(document.querySelectorAll('#side-nav .side-group'))
+      .filter(function(g){ var c=g.querySelector('.grp-caret');
+        return c && c.textContent.trim() === '\u25be'; })
+      .map(function(g){ return g.getAttribute('data-group'); })
 })"""
+
 
 
 def eval_js(cdp: CDP, expr: str):
@@ -75,7 +80,11 @@ def eval_js(cdp: CDP, expr: str):
 
 
 def sidebar_views(base: str) -> list[str]:
-    """从 index.html 抽取侧栏全部 data-view（保持文档顺序、去重）。
+    """从服务端 views.js 的 V6_VIEWS 抽取全部视图 id（保持注册顺序、去重）。
+
+    2026-11-12：v3.1.0 起侧栏由 ``VIEW_IDS`` 动态渲染，index.html 不再有静态
+    ``data-view``。若沿用旧法会得到 0 条并「0 错 0 通过」假绿，故改为解析
+    ``/js/views.js``，并在视图数为 0 时 fail-closed（返回空 → main 判失败）。
 
     Args:
         base: 服务地址。
@@ -83,11 +92,40 @@ def sidebar_views(base: str) -> list[str]:
     Returns:
         list[str]: 视图标识列表。
     """
-    html = urllib.request.urlopen(base + "/", timeout=15).read().decode("utf-8", "replace")
+    src = urllib.request.urlopen(base + "/js/views.js", timeout=15).read().decode("utf-8", "replace")
     out: list[str] = []
-    for match in re.finditer(r'data-action="view"\s+data-view="([^"]+)"', html):
-        if match.group(1) not in out:
-            out.append(match.group(1))
+    for match in re.finditer(r'^  V(?:\["([\w-]+)"\]|\.([\w-]+))\s*=\s*\{', src, re.M):
+        vid = match.group(1) or match.group(2)
+        if vid not in out:
+            out.append(vid)
+    return out
+
+
+def views_meta(base: str) -> list[dict]:
+    """解析 views.js，返回 [{id, group, sidebar}]（注册顺序）。
+
+    Args:
+        base: 服务地址。
+
+    Returns:
+        list[dict]: 视图元信息；解析为空时由 main 判失败（fail-closed）。
+    """
+    src = urllib.request.urlopen(base + "/js/views.js", timeout=15).read().decode("utf-8", "replace")
+    out: list[dict] = []
+    heads = list(re.finditer(r'^  V(?:\["([\w-]+)"\]|\.([\w-]+))\s*=\s*\{', src, re.M))
+    for idx, match in enumerate(heads):
+        vid = match.group(1) or match.group(2)
+        stop = heads[idx + 1].start() if idx + 1 < len(heads) else len(src)
+        chunk = src[match.end():min(match.end() + 400, stop)]
+        group = re.search(r'\bgroup\s*:\s*"([\w-]+)"', chunk)
+        sidebar = re.search(r'\bsidebar\s*:\s*("([\w-]+)"|null)', chunk)
+        if any(item["id"] == vid for item in out):
+            continue
+        out.append({
+            "id": vid,
+            "group": group.group(1) if group else "",
+            "sidebar": (sidebar.group(2) if sidebar and sidebar.group(2) else None),
+        })
     return out
 
 
@@ -101,9 +139,14 @@ def main() -> int:
     parser.add_argument("--base", default="http://127.0.0.1:6905")
     parser.add_argument("--out", required=True)
     parser.add_argument("--port", type=int, default=9366)
+    parser.add_argument("--settle", type=float, default=2.6, help="每视图渲染等待秒数")
     args = parser.parse_args()
 
-    views = sidebar_views(args.base)
+    meta = views_meta(args.base)
+    if len(meta) < 5:
+        print(f"FAIL 视图发现异常：仅解析到 {len(meta)} 个视图（应为 30+），判失败而非假绿")
+        return 1
+
     profile = tempfile.mkdtemp(prefix="edge_nav_")
     proc = launch_chrome(args.port, profile, 1440, 900)
     rows: list[dict] = []
@@ -112,14 +155,20 @@ def main() -> int:
         cdp = CDP(page_ws(args.port))
         cdp.call("Page.enable")
         cdp.call("Runtime.enable")
-        for view in views:
+        for item in meta:
+            view = item["id"]
             cdp.call("Page.navigate", {"url": f"{args.base}/#/{view}"})
-            time.sleep(2.6)
+            time.sleep(args.settle)
             state = eval_js(cdp, STATE_JS) or {}
             state["view"] = view
-            state["ok_nav"] = bool(state.get("nav"))
-            state["ok_side"] = view in (state.get("side") or [])
-            state["ok_crumb"] = bool(state.get("crumb"))
+            state["expect_group"] = item["group"]
+            state["subpage"] = item["sidebar"] is None
+            # 判定：顶栏分组命中 → 侧栏选中命中（子页面豁免）→ 面包屑非空且含标题
+            state["ok_nav"] = bool(state.get("nav")) and state.get("nav") == item["group"]
+            state["ok_side"] = item["sidebar"] is None or view in (state.get("side") or [])
+            crumb = state.get("crumb") or ""
+            title = state.get("title") or ""
+            state["ok_crumb"] = bool(crumb) and (title in crumb) if not state.get("generic_hidden") else True
             rows.append(state)
     finally:
         proc.terminate()
@@ -134,9 +183,10 @@ def main() -> int:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
 
     for row in rows:
-        flag = "PASS" if (row["ok_nav"] and row["ok_side"] and row["ok_crumb"]) else "FAIL"
-        print(f"{flag} {row['view']:<18} nav={row['nav']!r} side={row['side']} "
-              f"crumb={row['crumb']!r} groups={row['open_groups']}")
+        good = row["ok_nav"] and row["ok_side"] and row["ok_crumb"]
+        print(("PASS " if good else "FAIL ") + f"{row['view']:<18} nav={row['nav']!r} "
+              f"expect={row['expect_group']!r} side={row['side']} crumb={(row['crumb'] or '')[:28]!r} "
+              f"title={(row['title'] or '')[:16]!r}")
     print(f"\nTOTAL={len(rows)} BAD={len(bad)}")
     return 0 if not bad else 1
 

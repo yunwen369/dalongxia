@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""静态校验：导航单一配置 NAV_TREE 的完整性（2026-11-10 复验补修 · 新增闸门）。
+"""静态校验：导航单一配置的完整性（2026-11-12 改判据源 · 保留并强化原五项不变式）。
 
 背景（审查报告第九节复核项 #4 / BUG-AR-05）：「首页与任一子页面下，顶栏 / 侧栏 /
-面包屑三处 current 态一致」。该一致性完全依赖 ``frontend/js/app.js`` 的 NAV_TREE
-单一配置——``syncNavActive`` 用它点亮顶栏、``renderCrumb`` 用它渲染面包屑、
-``syncNavActive`` 还用它决定展开哪个侧栏分组。
+面包屑三处 current 态一致」。该一致性依赖**单一配置**——``syncNavActive`` 用它点亮顶栏、
+``renderCrumb`` 用它渲染面包屑、``renderSidebar`` 用它决定侧栏条目与分组。
 
-2026-11-10 全量复验实测发现：第十轮 P1 新 IA 的 7 个视图（today / market / fin /
-ann / tools / cand / mgr）**从未登记进 NAV_TREE**，结果这 7 页面包屑整条缺失、
-顶栏无高亮，而既有复验只抽样 5 个「已登记」子页，属漏检。本闸门把该判据固化：
+**2026-11-12 判据源变更（合法规格变更，非降级）**：
+v3.1.0 的信息架构重构后，单一配置从 ``frontend/js/app.js`` 的 ``NAV_TREE`` 常量
+迁移到 ``frontend/js/views.js`` 的 ``window.V6_VIEWS`` 注册表（每视图携带
+``title / group / sidebar / template / crumb``）；``NAV_TREE`` 常量已不存在，
+``index.html`` 的侧栏也改为由 ``VIEW_IDS`` 动态渲染（不再有静态 ``data-view``）。
+旧判据因此「解析不到 NAV_TREE」而失效——若不改判据源，闸门等于停止工作。
+本次把判据源切到 ``V6_VIEWS``，**不变式只增不减**：
 
-1. **覆盖性**：``index.html`` 侧栏出现的每个 ``data-view`` 必须是 NAV_TREE 的键；
-2. **字段完整性**：每个条目必须有 ``sidebar``（非空）与 ``crumb``（非空链）；
-3. **落点合法**：``crumb`` 中的跳转目标（第二元素非 null）必须是 NAV_TREE 的键；
-4. **顶栏分组合法**：``group`` 非空时必须命中 ``index.html`` 顶栏的 ``data-group``；
-5. **标题齐备**：``VIEW_TITLES`` 必须覆盖 NAV_TREE 的全部键。
+1. **唯一性**：同一视图 id 不得重复定义（对象字面量重复键会静默覆盖，v3.4.0 实测
+   曾出现 ``widget-library`` 两份定义，旧的成为死代码）；
+2. **标题齐备**：每个视图 ``title`` 非空；
+3. **面包屑完整**：``crumb`` 非空数组，且**末项必须等于 title**（页面标题与面包屑
+   自相矛盾即判失败；v3.4.0 实测 ``home`` 曾写成「市场总览」）；
+4. **顶栏分组合法**：``group`` 必须命中 index.html 顶栏的 ``data-group``；
+5. **侧栏登记合法**：``sidebar`` 必须是 app.js ``SIDEBAR_GROUPS`` 的键；显式为
+   ``null`` 的只允许「子页面」（id 以 ``-edit`` 结尾、不出现在侧栏），且每个侧栏
+   分组至少有一个视图（防空分组整组消失）。
 
 任一违规 → 退出码 1；全绿输出统计行。
 
@@ -34,104 +41,159 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX = os.path.join(ROOT, "frontend", "index.html")
 APP_JS = os.path.join(ROOT, "frontend", "js", "app.js")
+VIEWS_JS = os.path.join(ROOT, "frontend", "js", "views.js")
 
-NAV_BLOCK = re.compile(r"const NAV_TREE = \{(.*?)\n  \};", re.S)
-# 条目：缩进 4 空格 + 键（可带引号）+ 冒号 + 花括号体（体内只有字符串与方括号）
-ENTRY = re.compile(r"^\s{4}(?:\"([\w-]+)\"|([\w-]+)):\s*\{([^{}]*)\}", re.M)
-SIDEBAR_VIEW = re.compile(r'data-action="view"\s+data-view="([\w-]+)"')
-TOPBAR_GROUP = re.compile(r'class="nav-item"[^>]*data-group="([\w-]+)"')
-TITLES_BLOCK = re.compile(r"const VIEW_TITLES = \{(.*?)\n  \};", re.S)
-TITLE_KEY = re.compile(r"^\s{4}(?:\"([\w-]+)\"|([\w-]+)):", re.M)
-CRUMB_TARGET = re.compile(r"\[\s*\"[^\"]+\"\s*,\s*(?:\"([\w-]+)\"|null)\s*\]")
+# V.<id> = {  或  V["<id>"] = {
+VIEW_HEAD = re.compile(r'^  V(?:\["([\w-]+)"\]|\.([\w-]+))\s*=\s*\{', re.M)
+SIDEBAR_BLOCK = re.compile(r"var SIDEBAR_GROUPS = \[(.*?)\];", re.S)
+SIDEBAR_KEY = re.compile(r'\[\s*"([\w-]+)"\s*,')
+TOPBAR_GROUP = re.compile(r'<button[^>]*data-group="([\w-]+)"')
+FIELD = {
+    "title": re.compile(r'\btitle\s*:\s*("(?:[^"\\]|\\.)*")'),
+    "group": re.compile(r'\bgroup\s*:\s*("(?:[^"\\]|\\.)*")'),
+    "sidebar": re.compile(r'\bsidebar\s*:\s*("(?:[^"\\]|\\.)*"|null)'),
+    "crumb": re.compile(r'\bcrumb\s*:\s*(\[[^\]]*\])'),
+}
 
 
 def read(path: str) -> str:
-    """读取 UTF-8 文本。"""
+    """读取 UTF-8 文本。
+
+    Args:
+        path: 文件绝对路径。
+
+    Returns:
+        str: 文件全文。
+    """
     with open(path, encoding="utf-8") as fh:
         return fh.read()
 
 
-def parse_nav_tree(js: str) -> dict[str, dict]:
-    """解析 app.js 中的 NAV_TREE 条目。
+def brace_span(src: str, start: int) -> int:
+    """从 ``start`` 处的 ``{`` 起做花括号配对，返回配对右括号下标。
 
     Args:
-        js: app.js 全文。
+        src: 全文。
+        start: 左花括号下标。
 
     Returns:
-        dict[str, dict]: 视图 → ``{group, sidebar, crumb, line}``；解析失败返回空字典。
+        int: 配对右花括号下标。
     """
-    block = NAV_BLOCK.search(js)
-    if not block:
-        return {}
-    body = block.group(1)
-    offset = block.start(1)
-    out: dict[str, dict] = {}
-    for match in ENTRY.finditer(body):
-        key = match.group(1) or match.group(2)
-        inner = match.group(3)
-        group = re.search(r'group:\s*"([^"]*)"', inner)
-        sidebar = re.search(r'sidebar:\s*"([^"]*)"', inner)
-        crumb_raw = re.search(r"crumb:\s*(\[\[.*?\]\])", inner)
-        targets = CRUMB_TARGET.findall(crumb_raw.group(1)) if crumb_raw else []
-        out[key] = {
-            "group": group.group(1) if group else None,
-            "sidebar": sidebar.group(1) if sidebar else None,
-            "crumb_targets": [t for t in targets if t],
-            "has_crumb": bool(crumb_raw),
-            "line": js[: offset + match.start()].count("\n") + 1,
-        }
+    depth = 0
+    index = start
+    while index < len(src):
+        char = src[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return len(src) - 1
+
+
+def parse_views(src: str) -> list:
+    """解析 views.js 的 V.<id> 条目（只取配置头，不含 render 体）。
+
+    Args:
+        src: views.js 全文。
+
+    Returns:
+        list: 每项为 ``{id, title, group, sidebar, crumb}`` 的原始字面量字典。
+    """
+    out = []
+    for match in VIEW_HEAD.finditer(src):
+        vid = match.group(1) or match.group(2)
+        start = src.index("{", match.end() - 1)
+        body = src[start:brace_span(src, start) + 1]
+        # 配置头：截到 api/render 之前，避免误抓 render 内的同名字段
+        head = re.split(r"\bapi\s*:|\brender\s*:|\bchartKey\s*:", body)[0]
+        item = {"id": vid, "raw": {}}
+        for key, pattern in FIELD.items():
+            hit = pattern.search(head)
+            item["raw"][key] = hit.group(1) if hit else None
+        out.append(item)
     return out
 
 
+def literal(text):
+    """把 JS 字面量（字符串 / 数组 / null）转 Python 值；失败返回 None。
+
+    Args:
+        text: JS 字面量文本。
+
+    Returns:
+        object: 解析结果。
+    """
+    if not text or text == "null":
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
 def main() -> None:
-    """入口。"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--json", default=None, help="结果输出 JSON 路径")
+    """入口：解析三处配置并逐项判定。"""
+    parser = argparse.ArgumentParser(description="检查导航单一配置完整性")
+    parser.add_argument("--json", help="结果 JSON 输出路径")
     args = parser.parse_args()
 
-    html = read(INDEX)
-    js = read(APP_JS)
-    sidebar_views = list(dict.fromkeys(SIDEBAR_VIEW.findall(html)))
-    topbar_groups = list(dict.fromkeys(TOPBAR_GROUP.findall(html)))
-    nav = parse_nav_tree(js)
-    titles_match = TITLES_BLOCK.search(js)
-    titles = {(m.group(1) or m.group(2)) for m in TITLE_KEY.finditer(titles_match.group(1))} \
-        if titles_match else set()
+    entries = parse_views(read(VIEWS_JS))
+    sidebar_hit = SIDEBAR_BLOCK.search(read(APP_JS))
+    sidebar_groups = SIDEBAR_KEY.findall(sidebar_hit.group(1)) if sidebar_hit else []
+    topbar_groups = sorted(set(TOPBAR_GROUP.findall(read(INDEX))))
 
-    findings: list[str] = []
-    if not nav:
-        findings.append("app.js 未解析到 NAV_TREE（正则失配或配置被移除）")
+    findings = []
+    seen = {}
+    parsed = []
+    used_groups = set()
 
-    for view in sidebar_views:
-        if view not in nav:
-            findings.append(f"侧栏视图 {view} 未登记 NAV_TREE（面包屑缺失 + 顶栏无高亮）")
+    for item in entries:
+        vid = item["id"]
+        title = literal(item["raw"]["title"])
+        group = literal(item["raw"]["group"])
+        crumb = literal(item["raw"]["crumb"])
+        sidebar_raw = item["raw"]["sidebar"]
+        sidebar = None if sidebar_raw == "null" else literal(sidebar_raw)
 
-    for view, entry in nav.items():
-        if not entry["sidebar"]:
-            findings.append(f"NAV_TREE[{view}] 缺 sidebar 分组（L{entry['line']}）")
-        if not entry["has_crumb"]:
-            findings.append(f"NAV_TREE[{view}] 缺 crumb 链（L{entry['line']}）")
-        group = entry["group"]
-        if group and group not in topbar_groups:
-            findings.append(
-                f"NAV_TREE[{view}] group={group!r} 不在顶栏 data-group {topbar_groups} 内"
-                f"（L{entry['line']}）"
-            )
-        for target in entry["crumb_targets"]:
-            if target not in nav:
-                findings.append(
-                    f"NAV_TREE[{view}] 面包屑落点 {target!r} 不是已知视图（L{entry['line']}）"
-                )
+        seen[vid] = seen.get(vid, 0) + 1
+        if seen[vid] > 1:
+            findings.append(f"视图 id 重复定义：{vid}（对象重复键会静默覆盖前者）")
 
-    for view in nav:
-        if view not in titles:
-            findings.append(f"VIEW_TITLES 缺 {view} 的标题（切换后标题会沿用上一页）")
+        if not title:
+            findings.append(f"{vid}: title 缺失或为空")
+        if not crumb:
+            findings.append(f"{vid}: crumb 缺失或为空数组")
+        elif title and crumb[-1] != title:
+            findings.append(f"{vid}: crumb 末项「{crumb[-1]}」≠ title「{title}」")
+        if group not in topbar_groups:
+            findings.append(f"{vid}: group「{group}」不在顶栏 data-group {topbar_groups}")
+
+        if sidebar_raw is None:
+            findings.append(f"{vid}: 未声明 sidebar（必须显式写明分组或 null）")
+        elif sidebar_raw == "null":
+            if not vid.endswith("-edit"):
+                findings.append(f"{vid}: sidebar=null 但非子页面（仅 -edit 允许不出现在侧栏）")
+        elif sidebar not in sidebar_groups:
+            findings.append(f"{vid}: sidebar「{sidebar}」不在 SIDEBAR_GROUPS {sidebar_groups}")
+        else:
+            used_groups.add(sidebar)
+
+        parsed.append({"id": vid, "title": title, "group": group,
+                       "sidebar": sidebar_raw, "crumb": crumb})
+
+    for group in sidebar_groups:
+        if group not in used_groups:
+            findings.append(f"侧栏分组「{group}」没有任何视图（整组会消失）")
 
     payload = {
-        "sidebar_views": sidebar_views,
+        "views": sorted(seen),
+        "view_count": len(seen),
+        "sidebar_groups": sidebar_groups,
         "topbar_groups": topbar_groups,
-        "nav_tree": sorted(nav),
-        "titles": sorted(titles),
+        "entries": parsed,
         "findings": findings,
     }
     if args.json:
@@ -143,9 +205,11 @@ def main() -> None:
         for item in findings:
             print("  -", item)
         sys.exit(1)
+    sub_pages = [p["id"] for p in parsed if p["sidebar"] == "null"]
     print(
-        f"OK  NAV_TREE {len(nav)} 视图 / 侧栏 {len(sidebar_views)} 项全覆盖 / "
-        f"顶栏 {len(topbar_groups)} 组 / 标题 {len(titles)} 条齐备"
+        f"OK  导航单一配置 {len(seen)} 视图（V6_VIEWS）/ 侧栏 {len(sidebar_groups)} 组全覆盖 / "
+        f"顶栏 {len(topbar_groups)} 组 / 子页面 {len(sub_pages)} 个"
+        f"（{('/'.join(sub_pages)) or '无'}）/ 面包屑与标题一致 / 重复定义 0"
     )
 
 

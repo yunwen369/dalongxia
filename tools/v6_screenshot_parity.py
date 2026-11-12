@@ -123,9 +123,10 @@ def compose(proto: str, local: str, out_path: str) -> None:
     if a.size != b.size:
         b = b.resize(a.size)
     diff = ImageChops.difference(a.convert("L"), b.convert("L")).point(lambda v: min(255, v * 3)).convert("RGB")
-    canvas = Image.new("RGB", (a.width, a.height * 2 + 8), (16, 16, 16))
+    canvas = Image.new("RGB", (a.width, a.height * 3 + 16), (16, 16, 16))
     canvas.paste(a, (0, 0))
     canvas.paste(b, (0, a.height + 8))
+    canvas.paste(diff, (0, a.height * 2 + 16))
     canvas.save(out_path, quality=88)
 
 

@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 from backend.app import config
-from backend.app.core import netfix
+from backend.app.core import cache, netfix
 from backend.app.core.source_prefs import ensure_enabled
 from backend.app.core.resilient import polite_sleep, retry_call
 from backend.app.core.v8_guard import guard_v8
@@ -1359,6 +1359,29 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     # 四档依赖成分映射；未预热完时按时间预算补 1–2 个板块，
     # 使「首次使用也能逐步补齐」，而不是永久空白（预算内补不完由后台线程继续）。
     _ensure_cons_progress(rows, budget_seconds=6.0, max_boards=2)
+    # 涨跌幅与 /api/sector/industry 同源对齐（2026-11-12 全量回归 R-02）：
+    # 行情链路取「行情列表」的 pct，资金流链路取「资金流列表」的 pct，
+    # 两个同花顺接口刷新节奏不同 → 同一板块两处可差 0.1–0.3pp，用户对不上账。
+    # 这里复用行情链路的**已缓存**结果覆盖 pct（不额外打源站）；缓存未命中则保留原值，
+    # 并在 caliber 里保留「pct 以行情列表为准、未命中时为本链路值」的说明。
+    quote_pct: Dict[str, Any] = {}
+    try:
+        cached_industry = cache.get(f"sector:industry:{market}", config.TTL["sector"])
+        # 缓存里存的是**信封**（{data, source, caliber, error...}），items 在 data 内；
+        # 兼容裸结构，避免 provider 形态变化时静默失效。
+        payload = cached_industry or {}
+        if isinstance(payload.get("value"), dict):
+            payload = payload["value"]
+        rows_src = payload.get("data") if "data" in payload else payload
+        # 缓存形态随链路而变：provider 返回列表 → 信封里 data 是 list；
+        # 若已被路由层打包，则是 {"items": [...]}。两种都要认。
+        if isinstance(rows_src, dict):
+            rows_src = rows_src.get("items") or []
+        for quote in rows_src or []:
+            if isinstance(quote, dict) and quote.get("name") and quote.get("pct") is not None:
+                quote_pct[quote["name"]] = quote["pct"]
+    except Exception as exc:  # noqa: BLE001 - 对齐失败不影响资金流主功能
+        logger.info("资金流 pct 同源对齐跳过：%s", type(exc).__name__)
     items: List[Dict[str, Any]] = []
     for row in rows:
         name = row.get("name")
@@ -1380,7 +1403,7 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
         items.append(
             {
                 "name": name,
-                "pct": _round(_num(row.get("pct"))),
+                "pct": quote_pct.get(name, _round(_num(row.get("pct")))),
                 "net_inflow": _round(_num(net_inflow), 2),
                 "inflow": _round(_num(inflow), 2),
                 "outflow": _round(_num(outflow), 2),

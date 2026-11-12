@@ -40,6 +40,10 @@ THEME = os.path.join(FRONT, "css", "theme.css")
 # REQ-20261111-01：V6 皮肤的变量块定义在 v6.css（第三套皮肤），
 # 与 theme.css 的 :root / [data-theme="light"] 一起参与「变量是否已定义」判定。
 V6_SKIN = os.path.join(FRONT, "css", "v6.css")
+# REQ-20261112-01：V7 壳层样式（frontend/css/v7.css）自带 ``--v7-*`` 布局变量，
+# 且只作用在 ``body.v7-custom``（自定义布局档）上。与 v6.css 同理，定义处不在
+# theme.css 的 :root 属正常设计，需一并参与「是否已定义」判定。
+V7_SKIN = os.path.join(FRONT, "css", "v7.css")
 
 # JS 运行时注入的变量（不在 theme.css 定义属正常）；来源注明便于复核
 JS_INJECTED: Set[str] = {
@@ -71,7 +75,7 @@ def _load_theme_blocks() -> Dict[str, Set[str]]:
     （作用域覆盖，不改 :root 基准）。因此两个文件都要参与「已定义」判定。
     """
     blocks: Dict[str, Set[str]] = {}
-    for path in (THEME, V6_SKIN):
+    for path in (THEME, V6_SKIN, V7_SKIN):
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as handle:
@@ -99,9 +103,16 @@ def main() -> int:
     args = parser.parse_args()
 
     blocks = _load_theme_blocks()
+    # 非颜色类变量（布局/尺寸/字号）允许在任意样式表定义——app.css 的 --menu-h 即此类；
+    # 颜色类仍严格要求在 theme.css 的两块主题内（AR-04 判据不变）。
+    any_vars: Set[str] = set()
+    for path in _iter_css_files():
+        with open(path, encoding="utf-8") as handle:
+            any_vars |= set(DEF_RE.findall(handle.read()))
     root_vars = blocks.get(":root", set())
     light_vars = blocks.get("[data-theme=\"light\"]", set())
     v6_vars = blocks.get("[data-theme=\"v6\"]", set())
+
 
     used: Dict[str, List[str]] = {}   # 变量名 -> 引用位置列表
     bg_fallback: List[str] = []       # --bg-* 带色值 fallback 的违规行
@@ -138,7 +149,7 @@ def main() -> int:
                     where.append("[data-theme=light]")
                 color_violations.append(f"{name} 缺定义于 {'/'.join(where)}")
         else:
-            if name not in root_vars and name not in light_vars and name not in v6_vars:
+            if name not in root_vars and name not in light_vars and name not in v6_vars and name not in any_vars:
                 plain_violations.append(name)
 
     result = {

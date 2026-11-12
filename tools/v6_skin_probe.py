@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """V6 皮肤验收探针（REQ-20261111-01 · 门禁 A 证据）。
 
+⚠️ 口径过时（2026-11-12 全量回归登记）：本脚本的 S-03b/A-01/A-04 等断言基于
+v6 壳层的 ``--menu-w:44px``、``window.App.applyTheme``、``NAV_TREE`` 命名；
+当前壳层已改为 ``--menu-h`` / ``.skin-switch`` 按钮 / ``V6_VIEWS``，故这些项
+会误报。三皮肤计算值请以 ``tools/v6_landing_ui_probe.py`` 的 skins 段为准
+（v6: menu 44 / side 130；dark、light: menu 64 / side 236）。本脚本仅留档取证。
+
 用途：真实 Edge headless CDP 验证 V6 皮肤落地后的视觉与结构判据，
       覆盖验收标准 S/A/B 三组中可自动断言的部分。
 
@@ -332,13 +338,29 @@ def main() -> int:
         for _ in range(40):
             time.sleep(0.5)
             try:
-                if cdp.eval_js("!!(window.App && window.App.applyTheme)"):
+                if cdp.eval_js("!!((window.App && window.App.applyTheme) || "
+                               "document.querySelector('.skin-switch button[data-skin]'))"):
                     ready = True
                     break
             except Exception:
                 continue
         if not ready:
-            raise RuntimeError("页面未就绪：window.App.applyTheme 40 次轮询内不可用")
+            raise RuntimeError("页面未就绪：皮肤切换控件 40 次轮询内不可用")
+        # 2026-11-12：v6 壳层起 window.App.applyTheme 已不存在，皮肤切换改为
+        # 侧栏「皮肤」按钮（.skin-switch button[data-skin]）。此处加同签名垫片，
+        # 让探针走**真实 UI 路径**切换（比直接改 data-theme 更贴近用户操作）。
+        cdp.eval_js(
+            "if (!(window.App && window.App.applyTheme)) {"
+            "  window.App = window.App || {};"
+            "  window.App.applyTheme = function (s) {"
+            "    var b = document.querySelector('.skin-switch button[data-skin=\"' + s + '\"]');"
+            "    if (b) { b.click(); } else {"
+            "      if (s === 'dark') { document.body.removeAttribute('data-theme'); }"
+            "      else { document.body.setAttribute('data-theme', s); }"
+            "    }"
+            "  };"
+            "}"
+        )
         cdp.eval_js(JS_HELPERS)
 
         # ---------- S-03：默认皮肤必须是 v6 ----------
@@ -530,4 +552,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # 2026-11-12 全量回归：本脚本断言基于 v6 旧壳层（--menu-w / window.App.applyTheme /
+    # NAV_TREE 命名），对现壳层必然误报。默认拒绝运行（退出码 2）以免造成假红；
+    # 需要历史取证时显式加 --legacy。**CDP 原语仍被 human_walkthrough / shoot_states 复用**，
+    # 故不能改成导入期报错。
+    if "--legacy" not in sys.argv:
+        print("已退役：v6_skin_probe 的断言口径对应 v6 旧壳层，现壳层请用 "
+              "tools/v6_landing_ui_probe.py（三皮肤计算值）。如确需历史取证：加 --legacy")
+        sys.exit(2)
     sys.exit(main())

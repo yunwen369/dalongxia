@@ -43,6 +43,7 @@
     ["my", "我的"], ["sys", "系统"]
   ];
   var VIEW_IDS = Object.keys(VIEWS);
+  var APP_VER = "";        // 由 /api/health 回填（侧栏页脚展示真实版本，不再写死）
   var pinnedGroups = {};     // 用户手动展开/折叠的分组；未登记的组只随当前视图自动展开
 
   /** 拉取真实接口，失败时按 key 降级为演示数据。 */
@@ -573,8 +574,8 @@
       '<path d="M42 60 L52 64 M78 60 L68 64" stroke="#3f86c0" stroke-width="2"/>' +
       '<path d="M8 84 Q60 70 112 84" fill="none" stroke="#2f6cae" stroke-width="1" stroke-opacity=".5"/>' +
       "</svg>";
-    html += '<div class="side-foot">NAV_TREE 同源 · ' + VIEW_IDS.length +
-      ' 视图<br>皮肤评审稿 · 只读<br><span class="mono">v2.2.0 / visual-draft</span></div>';
+    html += '<div class="side-foot">V6_VIEWS 同源 · ' + VIEW_IDS.length +
+      ' 视图<br>本地真实数据<br><span class="mono" id="side-version">' + esc(APP_VER || "版本读取中…") + "</span></div>";
     $("side-nav").innerHTML = html;
   }
 
@@ -706,6 +707,13 @@
     // 导致首屏最长 30s 无侧栏/顶栏，且期间的 hash 跳转被丢弃。改为启动即渲染导航。
     route();
     window.addEventListener("hashchange", route);
+    fetch("/api/health", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (j) {
+        var app = (j && j.data && j.data.app) || {};
+        if (app.version) { APP_VER = "v" + app.version; renderSidebar(currentViewId()); }
+      })
+      .catch(function () { /* 版本非关键，静默 */ });
     try {
       var settled = await Promise.all([
         renderIndexCards(),

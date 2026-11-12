@@ -1006,7 +1006,7 @@ class TestFrontendViews:
         return self._read("js/views.js")
 
     def test_views_registry_complete(self):
-        """定稿前端：views.js 登记 33 个视图、四要素齐全，index.html 提供通用外壳节点。
+        """定稿前端：views.js 登记 35 个视图、四要素齐全，index.html 提供通用外壳节点。
 
         契约变更（2026-11-11 V6 定稿整站替换）：前端由「index.html page-* 容器 +
         pages/*.js」改为定稿原型工程「views.js V6 视图配置 + 通用视图外壳
@@ -1019,7 +1019,7 @@ class TestFrontendViews:
         pairs = re.findall(r'V(?:\.([a-z0-9]+)|\["([a-z0-9-]+)"\])\s*=\s*\{', source)
         unique = {a or b for a, b in pairs}
         # 契约变更（v3.2.0，REQ-20261112-01）：新增 3 个独立编辑页（watchlist-edit/alerts-edit/portfolio-edit）+ AI 助手视图，共 33 个；断言仍要求精确数量与四要素齐全，非放宽
-        assert len(unique) == 33, f"前端应登记 33 个视图，实际 {len(unique)}：{sorted(unique)}"
+        assert len(unique) == 35, f"前端应登记 35 个视图，实际 {len(unique)}：{sorted(unique)}"
         for field in ("title:", "group:", "sidebar:", "template:", "crumb:"):
             assert source.count(field) >= 29, f"视图配置字段 {field} 不足 29 处（{source.count(field)}）"
         index = self._read("index.html")

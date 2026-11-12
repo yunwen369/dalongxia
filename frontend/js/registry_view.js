@@ -255,7 +255,7 @@
     var options = ['<option value="__dashboard__">我的仪表板（48 列栅格）</option>'];
     Object.keys(V).forEach(function (id) {
       // 编辑页（sidebar=null）与 AI 页不承载组件，不作为添加目标
-      if (V[id].sidebar === null || id === "ai") { return; }
+      if (V[id].sidebar === null || id === "ai" || id === "backtest" || id === "dca") { return; }
       options.push('<option value="' + esc(id) + '">' + esc(V[id].title) + "  #/" + esc(id) + "</option>");
     });
     select.innerHTML = options.join("");

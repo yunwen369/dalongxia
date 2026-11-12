@@ -8,11 +8,11 @@
 | 脚本 | 用途 | 调用 |
 |---|---|---|
 | `check_i18n_keys.py` | i18n 键命中校验 | `python tools/check_i18n_keys.py` |
-| `check_css_theme_vars.py` | CSS 主题变量完整性（两主题齐备/禁背景色 fallback，AR-25） | `python tools/check_css_theme_vars.py` |
+| `check_css_theme_vars.py` | CSS 主题变量完整性（颜色类两主题齐备 / 非颜色类任意样式表已定义 / 禁 `--bg-*` 色值 fallback，AR-25；2026-11-12 起纳入 v7.css 与跨文件布局变量） | `python tools/check_css_theme_vars.py` |
 | `check_comment_drift.py` | 注释漂移静态校验（断点数字/AR 编号/Logo 承诺，AR-26） | `python tools/check_comment_drift.py` |
-| `check_nav_tree.py` | **导航单一配置完整性**（侧栏视图全覆盖 NAV_TREE / 面包屑落点合法 / 顶栏分组合法 / 标题齐备，2026-11-10 新增） | `python tools/check_nav_tree.py` |
+| `check_nav_tree.py` | **导航单一配置完整性**（判据源 2026-11-12 改为 `views.js` 的 `V6_VIEWS`：视图 id 唯一 / title 齐备 / crumb 末项=title / group 命中顶栏 / sidebar 命中分组且无空组 / 仅 `-edit` 可为 null） | `python tools/check_nav_tree.py` |
 | `nav_consistency_probe.py` | **导航三处一致动态探针**（逐侧栏视图读真实渲染的顶栏/侧栏/面包屑；审查报告 §九 #4） | `python tools/nav_consistency_probe.py --base <url> --out nav.json` |
-| `review_recheck.py` | **审查报告 §九 九项复核动态判定**（三视口×双主题 101 项：移动端/F5/四处一致/键盘/对比度/侧栏层级/卡片内容；原 `_ad_hoc` 脚本 2026-11-10 转正） | `python tools/review_recheck.py --base <url> --out <证据目录>` |
+| `review_recheck.py` | ⛔**已退役（2026-11-12）**：默认拒跑（退出码 2），需 `--legacy` 才执行。原：断言基于 v2.x 壳层选择器，47 项为选择器漂移；四处一致/交互/皮肤已由 nav_consistency + functional + landing + v34_panels 覆盖，移动端已由 `mobile_layout_probe.py`（14 项）覆盖。保留作历史取证 | **审查报告 §九 九项复核动态判定**（三视口×双主题 101 项：移动端/F5/四处一致/键盘/对比度/侧栏层级/卡片内容；原 `_ad_hoc` 脚本 2026-11-10 转正） | `python tools/review_recheck.py --base <url> --out <证据目录>` |
 | `diag_frontend_data.py` | **前端数据加载诊断**（登录后逐视图采集 fetch 失败/JS 异常，区分接口 401/404/超时 vs 渲染失败；复用 ui_clickthrough 的 CDP harness） | `python tools/diag_frontend_data.py --base <url> --token <口令> --out diag.json` |
 | `comment_rate_check.py` | 注释率快查 | `python tools/comment_rate_check.py` |
 | `docstring_audit.py` | 注释率审计（出 JSON/MD） | `python tools/docstring_audit.py --out-json <p> --out-md <p>` |
@@ -33,3 +33,5 @@
 | `build_and_gate.py` | 打包 + 版本三元派生（`sync_nsi()`）+ 门禁串联 | `python tools/build_and_gate.py` |
 | `probe_v6_landing.py` | V6 定稿工程落地取证：解析原型引用端点并与本地服务逐条 HTTP 探测 | `python tools/probe_v6_landing.py --base http://127.0.0.1:6903` |
 | `v6_landing_ui_probe.py` | V6 定稿页真实浏览器自测（29 视图 / 三皮肤 / V6_LIVE / 添加弹窗，复用 ui_clickthrough 的 CDP 原语） | `python tools/v6_landing_ui_probe.py --base-url http://127.0.0.1:6903` |
+| `v34_panels_probe.py` | **v3.4.0 新增面板深度探针**（板块工具/组合归因风险/系统运维/提醒已读/连接器测速/条件选股/AI 测试与摘要 + 12 秒刷新横切，24 项；默认只读，`--write` 才执行写操作） | `python tools/v34_panels_probe.py --base-url http://127.0.0.1:6901 --out <json>` |
+| `mobile_layout_probe.py` | **移动端布局门禁**（390/768/1024 三档无横向溢出 · ≤768 汉堡+抽屉+遮罩 · 抽屉四条关闭路径 · 顶栏搜索/提醒在视口内 · 390 首页单列 · 0 控制台错误，14 项；替代已退役 review_recheck 的 R1 组） | `python tools/mobile_layout_probe.py --base-url http://127.0.0.1:6901 --out <json>` |
