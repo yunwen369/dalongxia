@@ -35,3 +35,4 @@
 | `v6_landing_ui_probe.py` | V6 定稿页真实浏览器自测（29 视图 / 三皮肤 / V6_LIVE / 添加弹窗，复用 ui_clickthrough 的 CDP 原语） | `python tools/v6_landing_ui_probe.py --base-url http://127.0.0.1:6903` |
 | `v34_panels_probe.py` | **v3.4.0 新增面板深度探针**（板块工具/组合归因风险/系统运维/提醒已读/连接器测速/条件选股/AI 测试与摘要 + 12 秒刷新横切，24 项；默认只读，`--write` 才执行写操作） | `python tools/v34_panels_probe.py --base-url http://127.0.0.1:6901 --out <json>` |
 | `mobile_layout_probe.py` | **移动端布局门禁**（390/768/1024 三档无横向溢出 · ≤768 汉堡+抽屉+遮罩 · 抽屉四条关闭路径 · 顶栏搜索/提醒在视口内 · 390 首页单列 · 0 控制台错误，14 项；替代已退役 review_recheck 的 R1 组） | `python tools/mobile_layout_probe.py --base-url http://127.0.0.1:6901 --out <json>` |
+| `lib_smoke.js` | **lib 基础层行为门禁**（RF-20261112-01 阶段1b 落地：config 键枚举 7 键 / store 原始串+JSON 双口径 / fmt 数值百分比金额日期 / dom.esc 与 v7_app esc 逐字符等价，17 断言；lib/* 任何修改先过此门禁再跑 UI 探针） | `node tools/lib_smoke.js` |
