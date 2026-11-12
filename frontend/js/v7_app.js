@@ -252,7 +252,13 @@
       list.hidden = true;
       input.value = symbol;
       try { localStorage.setItem("openbb-symbol", symbol); } catch (e) { /* noop */ }
-      location.hash = "#/stock";
+      // BUG-20261112-06：跳转必须带 symbol，否则同页切换标的时 hash 不变、页面不刷新
+      var target = "#/stock?symbol=" + encodeURIComponent(symbol);
+      if (location.hash === target) {
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      } else {
+        location.hash = target;
+      }
       toast("已切换标的：" + symbol + " " + name);
     });
 
@@ -1938,7 +1944,9 @@
     var view = (window.V6_VIEWS || {}).stock || {};
     var arr = (view.api && view.api.p) || [];
     var m = String(arr[0] || "").match(/symbol=([^&]+)/);
-    stockSymbol = m ? decodeURIComponent(m[1]) : (localStorage.getItem("openbb-symbol") || "300750");
+    // BUG-20261112-06：hash 里的 ?symbol= 优先于视图配置与本地记忆，
+    // 否则「关键指标」卡（按 hash 取数）与「个股深度」卡（按配置取数）会显示两个标的
+    stockSymbol = queryParam("symbol") || (m ? decodeURIComponent(m[1]) : (localStorage.getItem("openbb-symbol") || "300750"));
     var card = document.createElement("div");
     card.className = "card v7-stock";
     card.innerHTML =

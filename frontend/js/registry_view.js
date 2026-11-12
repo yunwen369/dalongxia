@@ -235,10 +235,14 @@
       w._path = path;
     });
     view.api = api;
-    view.render = function (map) {
+    view.render = function (map, viewRef) {
+      // app.js 的 apiWithHash 会把 hash 参数覆盖后的实际接口挂到 view._api 上，
+      // 卡头参数摘要必须反映「真实请求的参数」，否则 URL 换了板块而标签不动
+      var effective = (viewRef && viewRef._api) || null;
       return widgets.map(function (w) {
+        var path = (effective && effective[w._dataKey] && effective[w._dataKey][0]) || w._path;
         return card(w.id + " · " + w.title, widgetBody(w, map[w._dataKey]), w._src,
-          CAT_ICON[w.category] || "·", paramChip(w._path));
+          CAT_ICON[w.category] || "·", paramChip(path));
       }).join("");
     };
     view.chart = null;      // 移除自造图表层：正式环境该页无此功能

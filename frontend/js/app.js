@@ -535,10 +535,70 @@
     setInterval(live.tick, live.intervalMs);
   }
 
-  /** 当前 hash 视图（kebab-case，对齐 §7.3.1(2)）。 */
+  /** 当前 hash 视图（kebab-case，对齐 §7.3.1(2)）。
+   *
+   * BUG-20261112-05：hash 带查询串时（#/watchlist-edit?id=…、#/stock?symbol=…），
+   * 原实现拿整串去查 VIEWS 必然落空并回落到 home，导致所有带参入口点开即跳回首页。
+   * 这里先剥离 `?query` 再匹配。
+   */
   function currentViewId() {
-    var id = (location.hash || "").replace(/^#\/?/, "").trim();
+    var raw = (location.hash || "").replace(/^#\/?/, "").trim();
+    var id = raw.split("?")[0];
     return Object.prototype.hasOwnProperty.call(VIEWS, id) ? id : "home";
+  }
+
+  /** 取当前 hash 的查询参数（如 `#/stock?symbol=600519&market=a`）。
+   *
+   * @returns {Object} 参数键值表；无查询串返回空对象
+   */
+  function hashParams() {
+    var raw = String(location.hash || "").split("?")[1] || "";
+    var out = {};
+    raw.split("&").forEach(function (pair) {
+      if (!pair) {
+        return;
+      }
+      var index = pair.indexOf("=");
+      if (index < 0) {
+        return;
+      }
+      var key = decodeURIComponent(pair.slice(0, index));
+      var value = decodeURIComponent(pair.slice(index + 1));
+      if (key && value) {
+        out[key] = value;
+      }
+    });
+    return out;
+  }
+
+  /** 用 hash 参数覆盖视图接口里的同名参数（标的 / 板块 / 代码切换）。
+   *
+   * BUG-20261112-06：视图 api 的 symbol/code/board 是写死的（个股固定 300750），
+   * 带参进入时页面仍拉旧标的，与卡片标题、注入面板显示的标的互相矛盾。
+   * 只替换接口里**已存在**的同名键，不给不支持的端点追加参数。
+   *
+   * @param {Object} api 视图接口表 {key: [path, dataKey]}
+   * @returns {Object} 覆盖后的接口表（不改原对象）
+   */
+  function apiWithHash(api) {
+    var params = hashParams();
+    var names = Object.keys(params);
+    if (!names.length) {
+      return api;
+    }
+    var out = {};
+    Object.keys(api).forEach(function (key) {
+      var path = api[key][0];
+      var next = path;
+      names.forEach(function (name) {
+        var pattern = new RegExp("([?&]" + name + "=)[^&]*");
+        if (pattern.test(next)) {
+          next = next.replace(pattern, "$1" + encodeURIComponent(params[name]));
+        }
+      });
+      out[key] = [next, api[key][1]];
+    });
+    return out;
   }
 
   /** 分组是否展开：用户手动固定过的听用户的，否则只自动展开当前视图所属组。 */
@@ -639,7 +699,9 @@
     generic.hidden = false;
     renderHead(view, id);
     if (!quiet) { host.innerHTML = '<div class="loading">视图加载中…</div>'; }
-    var api = view.api || {};
+    var api = apiWithHash(view.api || {});
+    // 覆盖结果挂到视图上，供 render 侧展示「实际请求参数」（如卡片头参数摘要）
+    view._api = api;
     var keys = Object.keys(api);
     var results = await Promise.all(keys.map(function (key) {
       return getJSON(api[key][0], api[key][1]);
