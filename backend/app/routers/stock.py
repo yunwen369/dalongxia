@@ -23,6 +23,7 @@ from fastapi import APIRouter, Query
 from backend.app import config
 from backend.app.core import cache
 from backend.app.core.errors import pack_success, ErrorCode, api_error, ok, bad_request, failure_pack
+from backend.app.routers.common import pack_result
 from backend.app.core.resilient import with_fallback
 from backend.app.datasource import overseas as overseas_provider
 from backend.app.datasource import fcf_health
@@ -149,11 +150,8 @@ def stock_profile(
         )
 
     result = cache.get_or_load(f"stock:profile:{selected}:{code}", config.TTL["profile"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code})
-    data = result["data"] or {}
     as_of, status, is_realtime = _quote_status(None)
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
+    return pack_result(result, {"symbol": code}, as_of=as_of, market_status=status, is_realtime=is_realtime)
 
 
 @router.get("/holders")
@@ -187,12 +185,10 @@ def stock_holders(symbol: str = Query(..., description="6 位 A股代码")) -> D
         )
 
     result = cache.get_or_load(f"stock:holders:{code}", config.TTL["profile"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "top10": [], "free_top10": []})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     as_of = data.get("top10_period") or data.get("free_top10_period")
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                 f"{as_of} 报告期" if as_of else None, "报告期披露", False)
+    return pack_result(result, {"symbol": code, "top10": [], "free_top10": []},
+                       as_of=f"{as_of} 报告期" if as_of else None, market_status="报告期披露", data=data)
 
 
 # =============================================================
@@ -239,11 +235,10 @@ def stock_realtime_panel(
         )
 
     result = cache.get_or_load(f"stock:panel:{selected}:{code}", config.TTL["realtime_quote"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "market": selected, "blocks": {}})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     as_of, status, is_realtime = _quote_status(data.get("quote"))
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "", as_of, status, is_realtime)
+    return pack_result(result, {"symbol": code, "market": selected, "blocks": {}},
+                       as_of=as_of, market_status=status, is_realtime=is_realtime, data=data)
 
 
 # =============================================================
@@ -280,12 +275,11 @@ def stock_financial_summary(symbol: str = Query(..., description="6 位 A股代�
         )
 
     result = cache.get_or_load(f"stock:fin-summary:{code}", config.TTL["financial"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "periods": [], "metrics": []})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     periods = data.get("periods") or []
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                 f"{periods[0]} 报告期" if periods else None, "定期报告", False)
+    return pack_result(result, {"symbol": code, "periods": [], "metrics": []},
+                       as_of=f"{periods[0]} 报告期" if periods else None,
+                       market_status="定期报告", data=data)
 
 
 @router.get("/estimates")
@@ -381,12 +375,11 @@ def stock_financial_trend(
         )
 
     result = cache.get_or_load(f"stock:fin-trend:{code}:{years}", config.TTL["financial"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "periods": [], "series": []})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     periods = data.get("periods") or []
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                 f"{periods[-1]} 年报" if periods else None, "年报披露", False)
+    return pack_result(result, {"symbol": code, "periods": [], "series": []},
+                       as_of=f"{periods[-1]} 年报" if periods else None,
+                       market_status="年报披露", data=data)
 
 
 @router.get("/financial-indicator")
@@ -431,12 +424,11 @@ def stock_financial_indicator(
             )
         result = cache.get_or_load(
             f"stock:fin-indicator:{market_text}:{code}:{limit}", config.TTL["financial"], loader_overseas)
-        if result.get("error"):
-            return failure_pack(result, {"symbol": code, "market": market_text, "periods": []})
-        data = result["data"] or {}
-        return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                     f"{(data.get('periods') or [{}])[-1].get('date', '')} 报告期".strip()
-                     or None, "定期报告", False)
+        data = result.get("data") or {}
+        last_period = ((data.get("periods") or [{}])[-1].get("date", "") or "").strip()
+        return pack_result(result, {"symbol": code, "market": market_text, "periods": []},
+                           as_of=f"{last_period} 报告期".strip() or None,
+                           market_status="定期报告", data=data)
 
     def loader() -> Dict[str, Any]:
         """新浪财务分析指标取数。
@@ -452,12 +444,11 @@ def stock_financial_indicator(
         )
 
     result = cache.get_or_load(f"stock:fin-indicator:{code}:{limit}", config.TTL["financial"], loader)
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "periods": [], "metrics": []})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     periods = data.get("periods") or []
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                 f"{periods[-1]} 报告期" if periods else None, "定期报告", False)
+    return pack_result(result, {"symbol": code, "periods": [], "metrics": []},
+                       as_of=f"{periods[-1]} 报告期" if periods else None,
+                       market_status="定期报告", data=data)
 
 
 @router.get("/financial-report")
@@ -501,12 +492,11 @@ def stock_financial_report(
     result = cache.get_or_load(
         f"stock:fin-report:{code}:{statement}:{limit}", config.TTL["financial"], loader
     )
-    if result.get("error"):
-        return failure_pack(result, {"symbol": code, "statement": statement, "periods": [], "metrics": []})
-    data = result["data"] or {}
+    data = result.get("data") or {}
     periods = data.get("periods") or []
-    return pack_success(data, result.get("source") or "", result.get("caliber") or "",
-                 f"{periods[0]} 报告期" if periods else None, "定期报告", False)
+    return pack_result(result, {"symbol": code, "statement": statement, "periods": [], "metrics": []},
+                       as_of=f"{periods[0]} 报告期" if periods else None,
+                       market_status="定期报告", data=data)
 
 
 # =============================================================
