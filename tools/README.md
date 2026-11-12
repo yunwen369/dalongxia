@@ -7,7 +7,7 @@
 
 | 脚本 | 用途 | 调用 |
 |---|---|---|
-| `check_i18n_keys.py` | i18n 键命中校验 | `python tools/check_i18n_keys.py` |
+| `check_i18n_keys.py` | ⛔**已退役（2026-11-13）**：默认拒跑（退出码 2），需 `--legacy` 才执行。原：前端 i18n 键覆盖/重复/冲突校验——判据对象 `frontend/js/i18n.js` 已随 B1 前端减脂归档（多语言为非目标，新层无 i18n 体系） | ~~`python tools/check_i18n_keys.py`~~（历史取证加 `--legacy`） |
 | `check_css_theme_vars.py` | CSS 主题变量完整性（颜色类两主题齐备 / 非颜色类任意样式表已定义 / 禁 `--bg-*` 色值 fallback，AR-25；2026-11-12 起纳入 v7.css 与跨文件布局变量） | `python tools/check_css_theme_vars.py` |
 | `check_comment_drift.py` | 注释漂移静态校验（断点数字/AR 编号/Logo 承诺，AR-26） | `python tools/check_comment_drift.py` |
 | `check_nav_tree.py` | **导航单一配置完整性**（判据源 2026-11-12 改为 `views.js` 的 `V6_VIEWS`：视图 id 唯一 / title 齐备 / crumb 末项=title / group 命中顶栏 / sidebar 命中分组且无空组 / 仅 `-edit` 可为 null） | `python tools/check_nav_tree.py` |

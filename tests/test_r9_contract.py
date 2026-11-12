@@ -72,11 +72,12 @@ def test_charting_quote_decoupled_from_kline() -> None:
     """R3-32：报价不得与 K 线/分时共用同一个 Promise.all（慢源下旧响应带累新标的）。
 
     契约迁移（2026-11-12 架构重构 B1）：旧层 pages/charting.js 的 loadCharting
-    已随整站替换退役。新层 K 线实现为 v7_app.js ``loadQuote()``——分时与 K 线
-    各自独立 apiJson 请求，无 Promise.all 捆绑。本用例改为断言新层结构：
-    loadQuote 存在、体内无 Promise.all、分时与 kline 两分支各自独立发请求。
+    已随整站替换退役。新层 K 线实现为 ``loadQuote()``——分时与 K 线
+    各自独立 apiJson 请求，无 Promise.all 捆绑。
+    判据源迁移（RF-20261112-01 阶段 4 W7 拆分）：v7_app.js 退役，loadQuote
+    现居 ``w7/w7_detail.js``（域拆分同名同体迁移），断言不变。
     """
-    source = (ROOT / "frontend" / "js" / "v7_app.js").read_text(encoding="utf-8")
+    source = (ROOT / "frontend" / "js" / "w7" / "w7_detail.js").read_text(encoding="utf-8")
     assert "function loadQuote(" in source, "新层未找到 loadQuote"
     start = source.index("function loadQuote(")
     body = source[start:start + 3000]
@@ -94,12 +95,14 @@ def test_heatmap_subtitle_has_no_internal_caliber() -> None:
 
     契约迁移（2026-11-12 架构重构 B1）：旧层副标题文案在 i18n.js
     ``sectors.heatSub``（已归档）。新层热力图卡由 views.js ``type:"heat"``
-    通用模板渲染、v7_app.js ``loadSector("板块热力")`` 注入，文案集中在
+    通用模板渲染、``loadSector("板块热力")`` 注入，文案集中在
     这两个文件——改为对两者全文断言违规字样为 0。
+    判据源迁移（RF-20261112-01 阶段 4 W7 拆分）：v7_app.js 退役，
+    loadSector 现居 ``w7/w7_data.js``，断言不变。
     """
     combined = "\n".join(
-        (ROOT / "frontend" / "js" / name).read_text(encoding="utf-8")
-        for name in ("views.js", "v7_app.js")
+        (ROOT / "frontend" / "js" / rel).read_text(encoding="utf-8")
+        for rel in ("views.js", "w7/w7_data.js")
     )
     for mark in ("为原值", "口径="):
         assert mark not in combined, f"新层仍含内部口径「{mark}」"

@@ -24,6 +24,14 @@ import re
 import sys
 from typing import Dict, List, Tuple
 
+# ⛔退役闸（2026-11-13，RF-20261112-01）：判据对象 frontend/js/i18n.js 已随
+# B1 前端减脂（3e4e947）归档——多语言为非目标，新层无 i18n 字典可校验。
+# 键覆盖/重复冲突风险随 i18n 体系一并消失；如需历史取证：加 --legacy。
+if "--legacy" not in sys.argv:
+    print("⛔ check_i18n_keys.py 已退役（2026-11-13）：i18n.js 已随 B1 减脂归档，"
+          "新层无 i18n 体系。如确需历史取证：加 --legacy")
+    sys.exit(2)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONT = os.path.join(ROOT, "frontend")
 I18N = os.path.join(FRONT, "js", "i18n.js")
@@ -152,4 +160,11 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
+    # ⛔退役闸（2026-11-13，RF-20261112-01）：判据对象 frontend/js/i18n.js 已随
+    # B1 前端减脂（3e4e947）归档——多语言为非目标，新层无 i18n 字典可校验。
+    # 键覆盖/重复冲突风险随 i18n 体系一并消失；如需历史取证：加 --legacy。
+    if "--legacy" not in sys.argv:
+        print("⛔ check_i18n_keys.py 已退役（2026-11-13）：i18n.js 已随 B1 减脂归档，"
+              "新层无 i18n 体系。如确需历史取证：加 --legacy")
+        sys.exit(2)
     sys.exit(main(sys.argv[1:]))
