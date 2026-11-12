@@ -107,3 +107,11 @@ tools/_ad_hoc/
 # CDP 自测产生的 Edge 临时用户目录（v3.1.0 起，均由脚本 rmtree 清理，不入库）
 # CDP 自测产生的 Edge 临时用户目录（脚本自清理，不入库）
 tools/_*_profile/
+
+# Windows 保留设备名残留（2026-11-13 RF-20261112-01 收尾登记）：
+# Git Bash 下「cmd > NUL」会创建名为 NUL 的普通文件（0.3KB pytest 残留输出），
+# 该文件被未知句柄占用期间删除被拒（POSIX unlink 与设备命名空间路径均
+# Permission denied）。gitignore 登记使工作区状态干净；重启机器后用
+# PowerShell Remove-Item -LiteralPath "\\.\<绝对路径>\NUL" 清理。
+NUL
+nul
