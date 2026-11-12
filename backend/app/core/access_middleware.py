@@ -359,17 +359,20 @@ class AccessPasswordMiddleware(BaseHTTPMiddleware):
         # 口令/会话未通过：记录失败并检查节流（同 IP 连续失败 10 次后 60s 内拒绝）。
         _record_fail(client_ip)
         if not _check_rate_limit(client_ip):
+            # dup-ok: 中间件层 HTTP 语义响应（429/401 状态码承载主信息，body 刻意最小化
+            # 仅 error/error_code 不含 data），与 200 业务信封不同构；api_error 无法表达
+            # status_code，见 RF-20261112-01 阶段 6 甄别备案。
             return JSONResponse(
                 status_code=429,
                 content={
                     "error": "尝试次数过多，请稍后再试",
-                    "error_code": "RATE_LIMITED",
+                    "error_code": "RATE_LIMITED",  # dup-ok: 同上备案
                 },
             )
         return JSONResponse(
             status_code=401,
             content={
                 "error": "访问口令错误或未提供",
-                "error_code": "UNAUTHORIZED",
+                "error_code": "UNAUTHORIZED",  # dup-ok: 同上备案
             },
         )

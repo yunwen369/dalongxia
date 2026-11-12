@@ -143,7 +143,7 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
                 logger.warning("同花顺 %s 第 %d/%d 次命中反爬（%s），冷却 %.0fs 后重试",
                                host_key, attempt + 1, _MAX_ATTEMPTS, last_error, cooldown)
                 if attempt < _MAX_ATTEMPTS - 1:
-                    time.sleep(cooldown)
+                    time.sleep(cooldown)  # dup-ok: 领域退避——host 级冷却翻倍状态机与跨调用记忆耦合，retry_call 无法表达（文件头已备案）
                     cooldown = min(cooldown * 2, _COOLDOWN_MAX)
                 continue
             response.raise_for_status()

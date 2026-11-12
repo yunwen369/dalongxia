@@ -249,7 +249,7 @@ def _portfolio_snapshot_loop() -> None:
                 logger.info("持仓快照已写入：%s", result.get("date"))
         except Exception as exc:  # noqa: BLE001 - 快照失败不影响主服务
             logger.info("持仓快照调度异常：%s", type(exc).__name__)
-        time.sleep(1800)
+        time.sleep(1800)  # dup-ok: 定时调度守护循环（周期任务非失败重试退避），retry 机制不适用
 
 
 def _concept_spotcheck_loop() -> None:
@@ -268,7 +268,7 @@ def _concept_spotcheck_loop() -> None:
                 logger.info("概念排行抽检已落档：%s", result.get("date"))
         except Exception as exc:  # noqa: BLE001 - 抽检失败不影响主服务
             logger.info("概念排行抽检调度异常：%s", type(exc).__name__)
-        time.sleep(1800)
+        time.sleep(1800)  # dup-ok: 定时调度守护循环（周期任务非失败重试退避），retry 机制不适用
 
 
 def _fundflow_warm_loop() -> None:
@@ -282,14 +282,14 @@ def _fundflow_warm_loop() -> None:
 
     from backend.app.datasource import sector as sector_provider
 
-    _time.sleep(15)
+    _time.sleep(15)  # dup-ok: 延迟启动错峰（避开首屏高峰，非失败重试退避）
     try:
         # 每批 15 个板块、批间冷却 120 秒：单次连续请求过多会被同花顺判为异常流量
         # （实测 40 个板块后 NonRetryableError 连片出现，并连累同进程的业务请求）。
         done = 0
         for _ in range(6):
             done += sector_provider.warm_fundflow_tiers(max_boards=15)
-            _time.sleep(120)
+            _time.sleep(120)  # dup-ok: 预热批间限频冷却（固定间隔非失败重试退避）
         logger.info("板块四档预热完成：累计 %d 个板块已聚合", done)
     except Exception as exc:  # noqa: BLE001 - 预热失败不影响主服务
         logger.info("板块四档预热异常：%s", type(exc).__name__)

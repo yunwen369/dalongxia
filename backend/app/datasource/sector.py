@@ -2193,7 +2193,7 @@ def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, 
             except Exception as exc:  # noqa: BLE001 - 记录后重试一次
                 last_error = exc
                 if attempt == 1:
-                    time.sleep(0.3)
+                    time.sleep(0.3)  # dup-ok: 池内并发确定性时序（避免 retry_call 随机抖动放大并发方差，备案见下）
         raise last_error if last_error else RuntimeError(f"{board} 打分失败")
         # RF-20261112-01 备注：此处手写 2 次重试为「池内并发 + 限频友好」的
         # 轻量退避（0.3s 短等待，避免线程池内 retry_call 的随机抖动叠加），
