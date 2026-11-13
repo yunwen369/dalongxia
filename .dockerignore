@@ -1,0 +1,51 @@
+# =============================================================
+# Docker 构建上下文排除清单（加速 context 传输 + 防敏感物入镜像）
+# 红线：.git 与 data/（运行时凭据）绝不进构建上下文
+# =============================================================
+
+# 版本控制与 CI（镜像只需工作树）
+.git
+.github
+.gitignore
+
+# 运行时数据与日志（挂卷提供，绝不打进镜像）
+data/
+logs/
+
+# 本机私有交付物（历史遗留的误建目录，与仓库无关）
+B_交付归档/
+C_历史备份/
+A_运行资产/
+
+# 构建与测试产物
+outputs/
+dist/
+build/
+*.spec
+.pytest_cache/
+pytest_cache/
+
+# 测试与工具（运行时不需要）
+tests/
+tools/
+sdk/
+scripts/
+accept_pytest_r1.log
+pytest.ini
+
+# Windows 桌面形态（容器不适用）
+desktop.py
+start.bat
+installer/
+assets/
+
+# 文档（GitHub 上看，不进镜像）
+docs/
+*.md
+!README.md
+
+# 其他
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

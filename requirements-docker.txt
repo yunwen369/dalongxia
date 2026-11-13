@@ -1,0 +1,27 @@
+# =============================================================
+# OpenBB 中文投研工作台 · 容器运行时依赖（Linux / Docker）
+# 与 requirements.txt 的差异：
+#   1. 裁剪 Windows 桌面壳依赖（click / pywebview / pythonnet / pystray / pillow）
+#      —— pythonnet 为 .NET 桥，Linux 无法安装；桌面壳在容器内不可用也不需要；
+#   2. 裁剪 pytest（测试依赖，运行时不需要）；
+#   3. 保留后端全部运行时直接依赖与 akshare 关键传递依赖的精确锁定，
+#      与 Windows 环境同版本，保证数据口径一致。
+# 锁版基准：requirements.txt（2026-11-13，v3.6.0）
+# =============================================================
+
+# ---------- Web 框架与服务 ----------
+fastapi==0.146.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+
+# ---------- 数据获取与处理 ----------
+akshare==1.19.1
+pandas==3.0.6
+numpy==2.5.4
+requests==2.34.2
+httpx==0.28.1
+curl_cffi==0.16.3
+lxml==6.1.3
+openpyxl==3.1.5
+certifi==2026.10.18
+segno==1.6.6

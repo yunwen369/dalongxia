@@ -1,0 +1,34 @@
+# =============================================================
+# OpenBB 中文投研工作台 · Docker Compose 部署
+# 用法：
+#   1. echo "OPENBB_ACCESS_PASSWORD=你的口令" > .env （或直接导出环境变量）
+#   2. docker compose up -d
+#   3. 浏览器访问 http://localhost:6900
+# 镜像：ghcr.io/<仓库所有者>/openbb-cn，随 GitHub tag 自动发布
+# =============================================================
+
+services:
+  openbb-cn:
+    # 部署时把 OWNER 换成实际 GitHub 用户名/组织名（ghcr.io 镜像路径全小写）
+    image: ghcr.io/owner/openbb-cn:latest
+    container_name: openbb-cn
+    ports:
+      - "6900:6900"          # 左侧可改宿主端口，如 "8080:6900"
+    environment:
+      # 访问口令（≥4 字符启用口令中间件；放 .env 或导出环境变量，勿写死在仓库）
+      OPENBB_ACCESS_PASSWORD: ${OPENBB_ACCESS_PASSWORD:-}
+      # AI 能力（可选）：财报中文摘要 / 新闻情绪复核 / AI 助手
+      # 注意：Linux 容器无 Windows DPAPI，界面「AI 设置」保存不可用，
+      #       统一走环境变量注入（config 优先级：环境变量 > .env > data/ai_config.json）
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./data:/app/data     # 运行时数据（缓存/用户配置），升级镜像不丢
+      - ./logs:/app/logs     # 日志（按天滚动）
+    restart: unless-stopped
+    init: true               # 以 init 转发信号，stop 更干净
+    # 资源上限按需放开（数据源冷启动偏 IO，一般 512MB 足够）
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 1g
