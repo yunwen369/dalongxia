@@ -61,7 +61,7 @@ _EDGAR_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 _EDGAR_SUB = "https://data.sec.gov/submissions/CIK{cik}.json"
 _EDGAR_ARCHIVE = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 # EDGAR 强制要求可识别 UA，否则返回 403（设计基准 §7.2）
-_EDGAR_UA = "OpenBB-CN/1.0.5 (local research tool; contact: local-user)"
+_EDGAR_UA = "dalongxia/1.0.5 (local research tool; contact: local-user)"
 
 # 中文/英文常用名 → 代码（阶段 8.1）：HKEX prefix 仅认代码/繁体/英文，
 # EDGAR 仅认 ticker/英文名，故内置常用别名做一次归一；未命中时再走源站原名检索，

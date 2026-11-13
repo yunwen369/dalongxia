@@ -1,4 +1,4 @@
-/* OpenBB-CN 前端公共基础层 · lib/store.js
+/* dalongxia 前端公共基础层 · lib/store.js
  * ------------------------------------------------------------------
  * RF-20261112-01 阶段 1b：localStorage 唯一读写入口（L1 lib 层）。
  * 目标：全站 localStorage 访问收编到一处，统一 try/catch（隐私模式兜底）。

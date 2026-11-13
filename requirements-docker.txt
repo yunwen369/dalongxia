@@ -1,5 +1,5 @@
 # =============================================================
-# OpenBB 中文投研工作台 · 容器运行时依赖（Linux / Docker）
+# 大龙虾投研工作台 · 容器运行时依赖（Linux / Docker）
 # 与 requirements.txt 的差异：
 #   1. 裁剪 Windows 桌面壳依赖（click / pywebview / pythonnet / pystray / pillow）
 #      —— pythonnet 为 .NET 桥，Linux 无法安装；桌面壳在容器内不可用也不需要；

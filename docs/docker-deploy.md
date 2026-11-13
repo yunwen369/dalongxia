@@ -21,10 +21,10 @@ sudo usermod -aG docker $USER && newgrp docker
 
 ```bash
 # 1. 建部署目录
-mkdir -p /opt/openbb-cn && cd /opt/openbb-cn
+mkdir -p /opt/dalongxia && cd /opt/dalongxia
 
 # 2. 下载 compose 文件（或手工复制仓库根的 docker-compose.yml）
-curl -o docker-compose.yml https://raw.githubusercontent.com/yunwen369/openbb-cn/main/docker-compose.yml
+curl -o docker-compose.yml https://raw.githubusercontent.com/yunwen369/dalongxia/main/docker-compose.yml
 
 # 3. 配置环境变量（口令必设；AI 可选）
 cat > .env <<'EOF'
@@ -45,7 +45,7 @@ curl -s http://127.0.0.1:6900/api/health   # {"data":...,"error":null,...}
 
 浏览器访问 `http://服务器IP:6900`，输入口令登录。
 
-> 镜像路径 `ghcr.io/yunwen369/openbb-cn`（GitHub 用户名在镜像路径中全小写）。
+> 镜像路径 `ghcr.io/yunwen369/dalongxia`（GitHub 用户名在镜像路径中全小写）。
 
 ## 三、配置详解
 
@@ -93,7 +93,7 @@ docker compose up -d --force-recreate
 ## 五、升级流程
 
 ```bash
-cd /opt/openbb-cn
+cd /opt/dalongxia
 docker compose pull        # 拉取新镜像
 docker compose up -d       # 滚动重建容器（data/logs 卷保留）
 docker image prune -f      # 清理旧镜像（可选）
@@ -107,8 +107,8 @@ docker image prune -f      # 清理旧镜像（可选）
 docker compose logs -f --tail 100     # 跟踪日志
 docker compose restart                # 重启
 docker compose down                   # 停止并移除容器（数据卷不动）
-docker stats openbb-cn                # 资源占用
-docker inspect --format='{{.State.Health.Status}}' openbb-cn   # 健康状态
+docker stats dalongxia                # 资源占用
+docker inspect --format='{{.State.Health.Status}}' dalongxia   # 健康状态
 ```
 
 常见问题：

@@ -31,7 +31,7 @@ def test_health_returns_data() -> None:
     data = payload["data"]
     assert data, "health.data 不能为空"
     assert data["build"], "health.data.build 不能为空"
-    assert data["app"]["name"] == "OpenBB 中文投研工作台"
+    assert data["app"]["name"] == "大龙虾投研工作台"
     assert isinstance(data["datasources"], dict) and data["datasources"]
     assert "akshare" in data["datasources"]
 
@@ -41,7 +41,7 @@ def test_root_serves_index_html() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
-    assert "OpenBB 中文投研工作台" in response.text
+    assert "大龙虾投研工作台" in response.text
 
 
 def test_unknown_api_returns_contract() -> None:

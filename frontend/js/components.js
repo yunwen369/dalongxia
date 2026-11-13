@@ -1,4 +1,4 @@
-/* OpenBB-CN 业务组件层（RF-20261112-01 阶段4 抽取自 views.js）——
+/* dalongxia 业务组件层（RF-20261112-01 阶段4 抽取自 views.js）——
    card/table/kpis/feed/chartCard 五组件 + esc/num/cls/pct/pctCell/plainNum/levelCell/d 基础 helper。
    window.V6_HELPERS 导出（原 9 键不变，新增 4 键增量兼容）；views.js 头部解构引用，体内零改写。 */
 (function () {

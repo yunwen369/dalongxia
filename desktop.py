@@ -7,7 +7,7 @@
    - 端口空闲 → 以子进程启动 uvicorn，等待 /api/health 就绪；
    - 端口已被**本应用**占用（health.build 存在）→ 直接复用，退出时不动它；
    - 端口被其他进程占用 → 弹出中文提示并退出，不静默换端口；
-3. 窗口：1366×768，最小 1024×640，标题「OpenBB 中文投研工作台」，图标 assets/icon.ico；
+3. 窗口：1366×768，最小 1024×640，标题「大龙虾投研工作台」，图标 assets/icon.ico；
 4. 关闭窗口 → 终止本次拉起的 uvicorn 子进程（进程干净退出）；
 5. `--check` 仅做启动前检查并打印结果（供自动化验收），不创建窗口。
 
@@ -34,7 +34,7 @@ HOST = "127.0.0.1"
 PORT = 6900
 BASE_URL = f"http://{HOST}:{PORT}"
 HEALTH_URL = f"{BASE_URL}/api/health"
-WINDOW_TITLE = "OpenBB 中文投研工作台"
+WINDOW_TITLE = "大龙虾投研工作台"
 ICON_PATH = PROJECT_DIR / "assets" / "icon.ico"
 
 
@@ -237,7 +237,7 @@ def run_check() -> int:
 
 def main() -> int:
     """入口：解析参数 → 准备服务 → 打开窗口 → 关闭后清理。"""
-    parser = argparse.ArgumentParser(description="OpenBB 中文投研工作台 · 桌面壳")
+    parser = argparse.ArgumentParser(description="大龙虾投研工作台 · 桌面壳")
     parser.add_argument("--check", action="store_true", help="仅做启动前检查，不打开窗口")
     args = parser.parse_args()
 
@@ -350,7 +350,7 @@ def main() -> int:
             pystray.Menu.SEPARATOR,
             Item("退出", lambda: _quit_from_tray()),
         )
-        icon = pystray.Icon("openbb-cn", image, WINDOW_TITLE, menu)
+        icon = pystray.Icon("dalongxia", image, WINDOW_TITLE, menu)
         tray_state["icon"] = icon
         threading.Thread(target=icon.run, name="openbb-tray", daemon=True).start()
         print("[桌面模式] 已最小化到托盘（托盘图标右键可退出）", flush=True)

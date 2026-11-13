@@ -1,17 +1,17 @@
 # =============================================================
-# OpenBB 中文投研工作台 · Docker Compose 部署
+# 大龙虾投研工作台 · Docker Compose 部署
 # 用法：
 #   1. echo "OPENBB_ACCESS_PASSWORD=你的口令" > .env （或直接导出环境变量）
 #   2. docker compose up -d
 #   3. 浏览器访问 http://localhost:6900
-# 镜像：ghcr.io/<仓库所有者>/openbb-cn，随 GitHub tag 自动发布
+# 镜像：ghcr.io/<仓库所有者>/dalongxia，随 GitHub tag 自动发布
 # =============================================================
 
 services:
-  openbb-cn:
+  dalongxia:
     # 镜像随 GitHub tag 自动发布（ghcr.io 镜像路径全小写）
-    image: ghcr.io/yunwen369/openbb-cn:latest
-    container_name: openbb-cn
+    image: ghcr.io/yunwen369/dalongxia:latest
+    container_name: dalongxia
     ports:
       - "6900:6900"          # 左侧可改宿主端口，如 "8080:6900"
     environment:

@@ -1,4 +1,4 @@
-/* OpenBB-CN 前端公共基础层 · lib/ui.js
+/* dalongxia 前端公共基础层 · lib/ui.js
  * ------------------------------------------------------------------
  * RF-20261112-01 阶段 3：轻量 UI 单例（toast / loading 口径）。
  * 背景：toast 原唯一实现在 v7_app.js:19（82 处调用），core/ctxmenu.js 与

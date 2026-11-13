@@ -1758,7 +1758,7 @@ def test_financial_search_edgar_requires_user_agent(monkeypatch) -> None:
     assert ten_k["pubTime"].startswith("2026-02-27"), "UTC 21:42 应换算为北京时间次日 05:42"
     assert ten_k["docUrl"].endswith("/nvda-20260125.htm")
     for item in captured:
-        assert "OpenBB-CN" in item["headers"].get("User-Agent", ""), f"{item['url']} 缺 UA"
+        assert "dalongxia" in item["headers"].get("User-Agent", ""), f"{item['url']} 缺 UA"
 
 
 # ================================================================

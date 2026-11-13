@@ -482,7 +482,7 @@ def _run_frozen_check() -> int:
     from backend.app.core import desktop_shell
 
     desktop_shell.redirect_stdio(config.LOG_DIR)
-    lines: List[str] = ["== OpenBB 中文投研工作台 · 安装版自检 =="]
+    lines: List[str] = ["== 大龙虾投研工作台 · 安装版自检 =="]
     lines.append(f"版本：{config.APP_VERSION}（{config.BUILD_TAG}）")
     lines.append(f"程序目录：{config.PROJECT_DIR}")
     lines.append(f"资源目录：{config.RESOURCE_DIR}")

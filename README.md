@@ -1,4 +1,4 @@
-# OpenBB 中文投研工作台
+# 大龙虾投研工作台
 
 受 [OpenBB Workspace](https://openbb.co) 启发的**中文本地投研工作台**（A股 / 港股 / 美股 / 场外基金）。
 纯 Python 后端 + 原生 HTML/CSS/JS 前端，ECharts 本地化（无 CDN），数据来自公开行情接口（akshare / 腾讯 / 新浪 / 东财 / 同花顺 / 蛋卷 / 雪球等）。
@@ -35,11 +35,11 @@ docker compose up -d
 或不用 compose：
 
 ```bash
-docker run -d --name openbb-cn -p 6900:6900 \
+docker run -d --name dalongxia -p 6900:6900 \
   -e OPENBB_ACCESS_PASSWORD=你的访问口令 \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   --restart unless-stopped \
-  ghcr.io/yunwen369/openbb-cn:latest
+  ghcr.io/yunwen369/dalongxia:latest
 ```
 
 镜像标签：`latest`（最新发布版）/ `3.6`（大版本） / `3.6.0`（精确版本）。
@@ -108,4 +108,4 @@ python -m pytest tests/ -q        # 579 例（单元/契约/前端静态一致�
 
 ## License
 
-[MIT](LICENSE) © OpenBB-CN Contributors
+[MIT](LICENSE) © dalongxia Contributors

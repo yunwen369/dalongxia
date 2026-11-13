@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # =============================================================
-# OpenBB 中文投研工作台 · 容器镜像
+# 大龙虾投研工作台 · 容器镜像
 # 设计目标：功能零删减、镜像尽可能小、非 root 运行、内置健康检查
 # 体积策略：
 #   1. 多阶段构建——依赖装在 builder 阶段独立 venv，runtime 只拷最终产物，
@@ -28,9 +28,9 @@ RUN python -m venv /opt/venv \
 # ---------- 阶段 2：运行时 ----------
 FROM python:3.13-slim
 
-LABEL org.opencontainers.image.title="OpenBB 中文投研工作台" \
+LABEL org.opencontainers.image.title="大龙虾投研工作台" \
       org.opencontainers.image.description="受 OpenBB Workspace 启发的中文本地投研工作台（A股/港股/美股/基金）" \
-      org.opencontainers.image.source="https://github.com/yunwen369/openbb-cn" \
+      org.opencontainers.image.source="https://github.com/yunwen369/dalongxia" \
       org.opencontainers.image.licenses="MIT"
 
 # 时区（时区契约：北京时间）；PYTHONUNBUFFERED 使探针/日志即时可见

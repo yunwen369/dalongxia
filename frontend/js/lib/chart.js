@@ -1,4 +1,4 @@
-/* OpenBB-CN 前端公共基础层 · lib/chart.js
+/* dalongxia 前端公共基础层 · lib/chart.js
  * ------------------------------------------------------------------
  * RF-20261112-01 阶段 3：ECharts 实例唯一管理入口。
  * 背景：全站 echarts.init 5 处（app.js×2 / v7_app.js×3）且【无任何 dispose】——

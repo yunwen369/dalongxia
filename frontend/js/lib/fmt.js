@@ -1,4 +1,4 @@
-/* OpenBB-CN 前端公共基础层 · lib/fmt.js
+/* dalongxia 前端公共基础层 · lib/fmt.js
  * ------------------------------------------------------------------
  * RF-20261112-01 阶段 1b：数值/日期格式化唯一入口（L1 lib 层）。
  * 背景：全站 toFixed/toLocaleString 散布 49 处（v7_app 19 / views 12 / app 15 /
