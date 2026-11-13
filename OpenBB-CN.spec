@@ -13,7 +13,7 @@
   - onedir 而非 onefile（§13.6-1）；入口为 backend/app/main.py 的冻结形态；
   - hiddenimports 显式收录 akshare 依赖树、uvicorn 动态子模块、pywebview 的
     edgechromium 后端、pythonnet/clr_loader（§13.6-2 / §13.6-5）；
-  - 随包资源：frontend（含 vendor/echarts）、assets（图标）、sdk（§13.6-3）；
+  - 随包资源：frontend（含 vendor/echarts）、assets（图标）、docs（部署文档，v3.6.0）、sdk（§13.6-3）；
   - **不随包**：data/（持仓、token、AI key）、logs/、tests/、tools/（§13.6-4 / 安全门禁）；
   - UPX 关闭：压缩会显著提高杀软启发式误报率（§15.2 误报预案），体积代价可接受。
 """
@@ -26,6 +26,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 datas = [
     ('frontend', 'frontend'),  # 静态前端（含 vendor/echarts 本地库）
     ('assets', 'assets'),      # 图标等品牌资源
+    ('docs', 'docs'),          # P5（v3.6.0）：部署文档随包分发（Tailscale/多用户/远程访问）
 ]
 # Python SDK：规范 §13.6-3 要求随包分发（当前为占位结构，见安装测试报告「已知限制」）
 if os.path.isdir('sdk'):
