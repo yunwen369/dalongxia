@@ -28,6 +28,7 @@
   var injectTableTools = function () { return W7.misc.injectTableTools.apply(null, arguments); };
   var injectWatchToolbar = function () { return W7.misc.injectWatchToolbar.apply(null, arguments); };
   var injectYjbPanel = function () { return W7.fund.injectYjbPanel.apply(null, arguments); };
+  var injectNavTrendPanel = function () { return W7.fund.injectNavTrendPanel.apply(null, arguments); };
   var preview = function () { return W7.shell.preview.apply(null, arguments); };
   var secFixed = function () { return W7.data.secFixed.apply(null, arguments); };
   var secSigned = function () { return W7.data.secSigned.apply(null, arguments); };
@@ -370,9 +371,11 @@
         injectQuoteChart();
         injectMoneyPanel();
         injectFundPanel();
+        injectNavTrendPanel();
         injectComboPanel();
         injectNewsPanel();
         injectSectorPanel();
+        injectPortfolioTrendChart();
         injectPortfolioAttrPanel();
         injectSystemPanel();
         injectAlertsToolbar();
@@ -409,6 +412,87 @@
       var dbox = $("dca-result");
       if (dbox && !dbox.querySelector(".v-kpi")) { dbox.innerHTML = dcaCache.html; }
     }
+  }
+
+  /* ---------- 31. 持仓收益走势卡（v3.5.0 · F2/R13 前端消费） ---------- */
+  var trendCache = null;  // {html, dates, mv, cost, pnl}：12s 动态刷新重渲染后回填
+
+  /** 在 #v7-trend-chart 上渲染市值/成本/盈亏三线图。 */
+  function trendChart(series) {
+    var el = $("v7-trend-chart");
+    if (!el || !window.echarts) { return; }
+    var chart = OB.chart.init(el);
+    chart.setOption({
+      animation: false,
+      legend: { top: 0, textStyle: { fontSize: 10 } },
+      grid: { left: 8, right: 12, top: 26, bottom: 8, containLabel: true },
+      tooltip: { trigger: "axis" },
+      xAxis: { type: "category", data: series.dates, axisLabel: { fontSize: 9 } },
+      yAxis: { type: "value", scale: true, axisLabel: { fontSize: 9 } },
+      series: [
+        { name: "市值", type: "line", showSymbol: false, data: series.mv,
+          lineStyle: { width: 1.6, color: "#4a9bff" } },
+        { name: "成本", type: "line", showSymbol: false, data: series.cost,
+          lineStyle: { width: 1.2, color: "#8a8f98", type: "dashed" } },
+        { name: "浮动盈亏", type: "line", showSymbol: false, data: series.pnl,
+          lineStyle: { width: 1.4, color: "#e6a23c" } }
+      ]
+    });
+    window.__trendChart = chart;
+  }
+
+  /** 组装走势卡 HTML 并写入 trendCache。items 为升序快照 [{date, market_value, cost, pnl}]。 */
+  function renderTrend(items) {
+    var dates = items.map(function (x) { return (x.date || "").slice(5); });
+    var mv = items.map(function (x) { return x.market_value; });
+    var cost = items.map(function (x) { return x.cost; });
+    var pnl = items.map(function (x) { return x.pnl; });
+    var last = items[items.length - 1] || {};
+    var html = statKpis([
+      ["快照数", String(items.length)],
+      ["最新市值(元)", secFixed(last.market_value, 2)],
+      ["最新成本(元)", secFixed(last.cost, 2)],
+      ["浮动盈亏(元)", secSignedText(last.pnl, 2)],
+      ["区间", (items[0] || {}).date + " ~ " + (last.date || "—")]
+    ]) + '<div id="v7-trend-chart" style="height:240px;margin-top:8px"></div>' +
+      '<div class="v7-sec-note">口径：交易日 15:05 后落盘的本地快照序列，缺日即断点、不补值（周末与节假日无数据点）。</div>';
+    trendCache = { html: html, dates: dates, mv: mv, cost: cost, pnl: pnl };
+    return html;
+  }
+
+  /** 持仓页注入收益走势卡（置于组合归因卡之上）。 */
+  function injectPortfolioTrendChart() {
+    if (currentId() !== "portfolio") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-trend")) { return; }
+    var card = document.createElement("div");
+    card.className = "card v7-trend";
+    card.innerHTML =
+      '<div class="card-head"><span class="card-title"><span class="badge-ico">〽</span>持仓收益走势（快照 · 最近 90 自然日）</span></div>' +
+      '<div class="v-body" id="v7-trend-body"><div class="loading">加载中…</div></div>';
+    body.insertBefore(card, body.firstChild);
+    var box = $("v7-trend-body");
+    if (trendCache) {
+      box.innerHTML = trendCache.html;
+      trendChart(trendCache);
+      return;
+    }
+    apiJson("/api/portfolio/trend?days=90").then(function (r) {
+      var b = $("v7-trend-body");
+      if (!b) { return; }
+      if (r.body && r.body.error) { b.innerHTML = '<div class="v-empty">' + esc(r.body.error) + "</div>"; return; }
+      var d = (r.body && r.body.data) || {};
+      var items = d.items || [];
+      if (!items.length) {
+        b.innerHTML = '<div class="v-empty">' + esc(d.hint || d.caliber || "尚无快照数据") + "</div>";
+        return;
+      }
+      b.innerHTML = renderTrend(items);
+      trendChart(trendCache);
+    }).catch(function () {
+      var b2 = $("v7-trend-body");
+      if (b2) { b2.innerHTML = '<div class="v-empty">持仓走势加载失败（/api/portfolio/trend）</div>'; }
+    });
   }
 
   /* ---------- 30. 组合归因与风险（v3.4.0：恢复 portfolio/attribution · portfolio/risk） ---------- */
@@ -500,6 +584,9 @@
       if (d.caliber) { html += '<div class="v7-sec-note">口径：' + esc(d.caliber) + "</div>"; }
       if ((d.missing || []).length) { html += '<div class="v7-sec-miss">缺价/缺汇率：' + d.missing.map(esc).join("；") + "</div>"; }
       box.innerHTML = html;
+    }).catch(function () {   // F14：失败态
+      var b = $("v7-pa-body");
+      if (b) { b.innerHTML = '<div class="v-empty">组合归因加载失败（/api/portfolio/attribution）</div>'; }
     });
   }
 
@@ -550,6 +637,9 @@
       if (d.caliber) { html += '<div class="v7-sec-note">口径：' + esc(d.caliber) + "</div>"; }
       if ((d.missing || []).length) { html += '<div class="v7-sec-miss">未纳入：' + d.missing.map(esc).join("；") + "</div>"; }
       box.innerHTML = html;
+    }).catch(function () {   // F14：失败态
+      var b = $("v7-pa-body");
+      if (b) { b.innerHTML = '<div class="v-empty">组合风险加载失败（/api/portfolio/risk）</div>'; }
     });
   }
 
@@ -557,8 +647,10 @@
   /* 跨域导出（W7.portfolio） */
   W7.portfolio = W7.portfolio || {};
   W7.portfolio.bindDashboardPersist = bindDashboardPersist;
+  W7.portfolio.fetchNav = fetchNav;
   W7.portfolio.injectDashboardDrag = injectDashboardDrag;
   W7.portfolio.injectPortfolioAttrPanel = injectPortfolioAttrPanel;
+  W7.portfolio.injectPortfolioTrendChart = injectPortfolioTrendChart;
   W7.portfolio.loadPortfolioAttr = loadPortfolioAttr;
   W7.portfolio.restoreCalcResults = restoreCalcResults;
   W7.portfolio.runBacktest = runBacktest;

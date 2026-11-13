@@ -131,6 +131,9 @@
         ["在管规模", g.scale_aum != null ? g.scale_aum + " 亿" : "—"],
         ["最佳回报", g.best_return != null ? g.best_return + "%" : "—"]
       ]);
+    }).catch(function () {   // F14：失败态，避免停留「加载中…」
+      var box2 = $("v7-mgr-kpis");
+      if (box2) { box2.innerHTML = '<div class="v-empty">经理画像加载失败（/api/fund/manager）</div>'; }
     });
   }
 
@@ -140,6 +143,9 @@
       var d = (r.body && r.body.data) || {};
       if (st) { st.textContent = "盘中估值：" + (d.enabled ? "已启用" : "已关闭") + " · " + (d.source || ""); }
       if (note) { note.textContent = d.caliber || ""; }
+    }).catch(function () {   // F14
+      var st = $("v7-est-state");
+      if (st) { st.textContent = "盘中估值：读取失败"; }
     });
   }
 
@@ -197,7 +203,7 @@
             deviation: (d.deviation || [])[i] };
         }), [["name", "持仓"], ["weight", "当前权重"], ["target", "目标权重"], ["deviation", "偏离"]],
           "组合诊断无持仓数据") + '<div class="v-hint" style="margin-top:6px">' + esc(d.caliber || "") + "</div>");
-      });
+      }).catch(function () { put('<div class="v-empty">组合诊断请求失败</div>'); });   // F14
       return;
     }
     if (tab === "权重建议") {
@@ -217,7 +223,7 @@
           ["base_weight", "基础%"], ["crowding", "拥挤度"],
           ["discount", "折扣", function (v) { return v == null ? "—" : String(v); }],
           ["final_weight", "最终%"], ["discount_label", "说明"]], "无权重建议"));
-      });
+      }).catch(function () { put('<div class="v-empty">权重建议请求失败</div>'); });   // F14
       return;
     }
     if (tab === "组合评估") {
@@ -248,7 +254,7 @@
         put(objTable(rows, [["code", "代码"], ["name", "名称"], ["weight", "建议权重"],
           ["annual", "年化"], ["vol", "波动率"], ["mdd", "最大回撤"], ["sharpe", "夏普"], ["days", "样本天数"]],
           "无评估结果") + '<div class="v-hint" style="margin-top:6px">' + esc(d.caliber || "") + "</div>");
-      });
+      }).catch(function () { put('<div class="v-empty">组合评估请求失败</div>'); });   // F14
       return;
     }
     if (tab === "候选池") {
@@ -263,8 +269,120 @@
             ["chg", "涨跌%", function (v) { return v == null ? "—" : Number(v).toFixed(2); }],
             ["pe", "PE", function (v) { return v == null ? "—" : Number(v).toFixed(1); }],
             ["pb", "PB", function (v) { return v == null ? "—" : Number(v).toFixed(2); }]], "候选池为空"));
-      });
+      }).catch(function () { put('<div class="v-empty">候选池请求失败</div>'); });   // F14
       return;
+    }
+  }
+
+
+  /* ---------- 28. 基金净值三档走势（v3.5.0 · F6）：近1月 / 近1年 / 成立以来（本地裁剪） ---------- */
+  var NAV_RANGES = {
+    "1m": { label: "近1月", days: 30 },
+    "1y": { label: "近1年", days: 365 },
+    "all": { label: "成立以来", days: 0 }
+  };
+  W7.st.navRange = W7.st.navRange || "1m";
+
+  /** 基金页注入净值走势卡（三档切换，数据复用组合回测分页通道）。 */
+  function injectNavTrendPanel() {
+    if (currentId() !== "fund") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-navtrend")) { return; }
+    var code = fundViewCode();
+    var card = document.createElement("div");
+    card.className = "card v7-navtrend";
+    card.innerHTML =
+      '<div class="card-head"><span class="card-title"><span class="badge-ico">∿</span>净值走势 · ' + esc(code) + "</span>" +
+        '<span class="v7-kline-tools">' + Object.keys(NAV_RANGES).map(function (k) {
+          return '<button class="v7-tab' + (k === W7.st.navRange ? " on" : "") +
+            '" data-nav-range="' + k + '" type="button">' + NAV_RANGES[k].label + "</button>";
+        }).join("") + "</span></div>" +
+        '<div class="v-body" id="v7-navtrend-body"><div class="loading">加载中…</div></div>';
+    body.insertBefore(card, body.firstChild);
+    loadNavRange(W7.st.navRange, code);
+  }
+
+  /** 从 V6_VIEWS.fund 的 api 配置解析当前基金代码（支持 #/fund?code= 覆盖后的实际值）。 */
+  function fundViewCode() {
+    var view = (window.V6_VIEWS || {}).fund || {};
+    var arr = (view.api && view.api.f) || [];
+    var m = String(arr[0] || "").match(/code=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : "017811";
+  }
+
+  /** 按当前档位渲染净值走势（缓存命中不重拉；code 变化重拉）。 */
+  function loadNavRange(range, codeForce) {
+    W7.st.navRange = range || W7.st.navRange || "1m";
+    var box = $("v7-navtrend-body");
+    if (!box) { return; }
+    var code = codeForce || fundViewCode();
+    var cached = W7.st.fundNavData;
+    if (cached && cached.code === code && cached.rows && cached.rows.length) {
+      drawNavTrend(cached.rows);
+      return;
+    }
+    if (cached && cached.code === code && cached.rows && !cached.rows.length) {
+      box.innerHTML = '<div class="v-empty">该基金无可用净值序列（/api/fund/nav 返回空）</div>';
+      return;
+    }
+    box.innerHTML = '<div class="loading">净值加载中…（全量分页，单基金首次约 2–5 秒）</div>';
+    W7.portfolio.fetchNav(code).then(function (rows) {
+      if (!rows || !rows.length) {
+        box.innerHTML = '<div class="v-empty">该基金无可用净值序列（/api/fund/nav 返回空）</div>';
+        return;
+      }
+      W7.st.fundNavData = { code: code, rows: rows };
+      drawNavTrend(rows);
+    }).catch(function (e) {
+      var b2 = $("v7-navtrend-body");
+      if (b2) { b2.innerHTML = '<div class="v-empty">' + esc(e.message || "净值加载失败") + "</div>"; }
+    });
+  }
+
+  /** 按档位本地裁剪并画图（1m=30 自然日 / 1y=365 / all=全序列）。 */
+  function drawNavTrend(rows) {
+    var box = $("v7-navtrend-body");
+    if (!box) { return; }
+    var conf = NAV_RANGES[W7.st.navRange] || NAV_RANGES["1m"];
+    var cut = rows;
+    if (conf.days > 0) {
+      var lastMs = new Date((rows[rows.length - 1].date || "").replace(/-/g, "/")).getTime();
+      var from = lastMs - conf.days * 86400000;
+      cut = rows.filter(function (x) {
+        return new Date((x.date || "").replace(/-/g, "/")).getTime() >= from;
+      });
+    }
+    if (cut.length < 2) {
+      box.innerHTML = '<div class="v-empty">该区间净值样本不足（' + cut.length + " 点），请切换更长区间</div>";
+      return;
+    }
+    var first = cut[0].nav;
+    var last = cut[cut.length - 1].nav;
+    var ret = (last / first - 1) * 100;
+    var hi = -Infinity, lo = Infinity;
+    cut.forEach(function (x) { hi = Math.max(hi, x.nav); lo = Math.min(lo, x.nav); });
+    var xs = cut.map(function (x) { return (x.date || "").slice(conf.days === 0 ? 0 : 5); });
+    box.innerHTML = statKpis([
+      ["区间涨幅", (ret >= 0 ? "+" : "") + ret.toFixed(2) + "%", ret >= 0 ? "up" : "down"],
+      ["最新净值", String(last)],
+      ["区间高点", String(hi)],
+      ["区间低点", String(lo)],
+      ["样本", cut.length + " 个净值日"]
+    ]) + '<div id="v7-navtrend-chart" style="height:230px;margin-top:8px"></div>' +
+      '<div class="v7-sec-note">口径：/api/fund/nav 全量分页拉取后按档位本地裁剪；成立以来为成立日至今全序列，不补值。</div>';
+    var el = $("v7-navtrend-chart");
+    if (el && window.echarts) {
+      var chart = OB.chart.init(el);
+      chart.setOption({
+        animation: false, grid: { left: 8, right: 12, top: 12, bottom: 8, containLabel: true },
+        tooltip: { trigger: "axis" },
+        xAxis: { type: "category", data: xs, axisLabel: { fontSize: 9 } },
+        yAxis: { type: "value", scale: true, axisLabel: { fontSize: 9 } },
+        series: [{ name: "单位净值", type: "line", showSymbol: false,
+          data: cut.map(function (x) { return x.nav; }),
+          lineStyle: { width: 1.5, color: "#4a9bff" },
+          areaStyle: { color: "rgba(74,155,255,.14)" } }]
+      });
     }
   }
 
@@ -273,9 +391,11 @@
   W7.fund = W7.fund || {};
   W7.fund.injectComboPanel = injectComboPanel;
   W7.fund.injectFundPanel = injectFundPanel;
+  W7.fund.injectNavTrendPanel = injectNavTrendPanel;
   W7.fund.injectYjbPanel = injectYjbPanel;
   W7.fund.loadCombo = loadCombo;
   W7.fund.loadEstimation = loadEstimation;
+  W7.fund.loadNavRange = loadNavRange;
   W7.fund.refreshYjb = refreshYjb;
   W7.fund.yjbQr = yjbQr;
 })();

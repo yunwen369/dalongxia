@@ -12,6 +12,7 @@
     var list = $("v7-search-list");
     if (!input || !list) { return; }
     var timer = null;
+    var seq = 0;  // R18：在途请求序号，慢响应不覆盖新请求结果（stale 丢弃）
 
     function render(items) {
       list.innerHTML = items.length
@@ -28,14 +29,20 @@
       if (!q) { list.hidden = true; return; }
       clearTimeout(timer);
       timer = setTimeout(function () {
+        var my = ++seq;
+        // R18：请求在途显示「检索中…」；该项无 data-symbol，点击不触发跳转（禁用态）
+        list.innerHTML = '<div class="v7-search-item v7-search-busy"><b>检索中…</b><span>' + esc(q) + "</span></div>";
+        list.hidden = false;
         OB.http.getJSON("/api/market/search?q=" + encodeURIComponent(q))
           .then(function (j) {
+            if (my !== seq) { return; }
             var items = (j && j.data && (j.data.items || j.data.results)) || [];
             render(items.length ? items.slice(0, 8) : DEMO_SEARCH.filter(function (x) {
               return (x.symbol + x.name).indexOf(q) >= 0;
             }));
           })
           .catch(function () {
+            if (my !== seq) { return; }
             render(DEMO_SEARCH.filter(function (x) {
               return (x.symbol + x.name).toLowerCase().indexOf(q.toLowerCase()) >= 0;
             }));

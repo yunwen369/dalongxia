@@ -242,3 +242,25 @@ body.v7-custom{font-size:var(--v7-font);}
   /* 头像纯装饰，给搜索框让位 */
   .topright .avatar { display: none; }
 }
+
+/* ---------- 表格分页条 + 列配置面板（REQ-20261105-03 #10 · 表格分页/列配置） ---------- */
+.v7-pgbar{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:12px;opacity:.92;}
+.v7-pgbar button{border:1px solid var(--border);background:none;color:inherit;border-radius:4px;
+  padding:2px 10px;font-size:12px;cursor:pointer;}
+.v7-pgbar button:disabled{opacity:.4;cursor:default;}
+.v7-pgbar select{border:1px solid var(--border);background:var(--bg-panel);color:inherit;
+  border-radius:4px;padding:2px 6px;font-size:12px;cursor:pointer;}
+.v7-colcfg{position:fixed;z-index:99999;min-width:170px;max-height:60vh;overflow:auto;
+  background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;
+  box-shadow:0 14px 36px var(--c-black-0a50);padding:8px;}
+.v7-colcfg-title{font-size:12px;opacity:.75;margin-bottom:6px;}
+.v7-colcfg label{display:block;font-size:12px;padding:3px 2px;cursor:pointer;white-space:nowrap;}
+.v7-colcfg input{vertical-align:middle;margin-right:4px;}
+.v7-colcfg-foot{margin-top:6px;border-top:1px solid var(--border);padding-top:6px;text-align:right;}
+
+/* ---------- 美股美东时段徽章（F9/R12：盘前/盘中/盘后/休市四态） ---------- */
+.v7-us-session{border:1px solid var(--border);border-radius:10px;padding:2px 10px;
+  font-size:11px;opacity:.9;white-space:nowrap;}
+
+/* ---------- 搜索「检索中…」禁用项（R18） ---------- */
+.v7-search-busy{opacity:.6;cursor:default;}

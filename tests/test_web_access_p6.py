@@ -45,11 +45,15 @@ def test_qr_data_uri_is_png():
     assert web_access.qr_data_uri("") == ""
 
 
-def test_access_endpoint_envelope():
+def test_access_endpoint_envelope(monkeypatch):
     """访问方式端点返回统一信封，入口带二维码且字段齐全。"""
     from fastapi.testclient import TestClient
 
+    from backend.app import config as config_module
     from backend.app.main import app
+
+    # 端口断言不依赖外部环境（CI/探针会话可能设 OPENBB_PORT=6903 等非默认端口）
+    monkeypatch.setattr(config_module, "PORT", 6900)
 
     client = TestClient(app)
     response = client.get("/api/system/access")

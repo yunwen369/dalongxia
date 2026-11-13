@@ -75,7 +75,158 @@
     fillWatchOptions();
   }
 
-  /* ---------- 14. 表格工具：导出 / 排序 / 分页 / 分享（D-08 / D-18） ---------- */
+  /* ---------- 14. 表格工具：导出 / 排序 / 分页 / 列配置 / 分享（D-08 / D-18 / REQ-20261105-03 #10） ---------- */
+  function tableColKey() {
+    return "v7-cols:" + (currentId() || "view");
+  }
+
+  function exportExcel(table, viewKey) {
+    var clone = table.cloneNode(true);
+    // 分页隐藏行恢复导出（data-paged 标记），列配置隐藏列保留（用户显式选择不导出）
+    Array.prototype.forEach.call(clone.querySelectorAll("tr[data-paged]"), function (tr) {
+      tr.removeAttribute("data-paged");
+      tr.style.display = "";
+    });
+    var html = '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">' +
+      '<style>td,th{border:1px solid #999;padding:2px 6px;font-size:12px}</style></head><body>' +
+      clone.outerHTML + "</body></html>";
+    var blob = new Blob(["\ufeff" + html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (viewKey || "export") + ".xls";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("已导出 Excel（.xls，Excel/WPS 可直接打开）");
+  }
+
+  // 主表数据行：排除首行 th 表头（无 thead 结构时首行是表头，不能参与分页）
+  function dataRows(table) {
+    var tbody = table.querySelector("tbody");
+    var all = tbody ? tbody.querySelectorAll("tr") : [];
+    var rows = [];
+    Array.prototype.forEach.call(all, function (tr) {
+      if (tr.querySelector(":scope > th") || (!tbody && tr.parentNode === table && tr.querySelector("th"))) { return; }
+      rows.push(tr);
+    });
+    return rows;
+  }
+
+  function applyPage(table) {
+    var st = table._pg;
+    if (!st || !st.on) { return; }
+    var rows = dataRows(table);
+    var start = (st.page - 1) * st.size;
+    Array.prototype.forEach.call(rows, function (tr, i) {
+      if (st.size < 0) {
+        tr.style.display = "";
+        tr.removeAttribute("data-paged");
+      } else if (i >= start && i < start + st.size) {
+        tr.style.display = "";
+        tr.removeAttribute("data-paged");
+      } else {
+        tr.style.display = "none";
+        tr.setAttribute("data-paged", "1");
+      }
+    });
+    var bar = table._pgBar;
+    if (bar) {
+      var total = rows.length;
+      var pages = st.size < 0 ? 1 : Math.max(1, Math.ceil(total / st.size));
+      if (st.page > pages) { st.page = pages; }
+      bar.innerHTML = "共 " + total + " 行 · 第 " + st.page + " / " + pages + " 页" +
+        ' <button type="button" data-pg="prev"' + (st.page <= 1 ? " disabled" : "") + ">上一页</button>" +
+        ' <button type="button" data-pg="next"' + (st.page >= pages ? " disabled" : "") + ">下一页</button>" +
+        ' <select data-pgsize title="每页条数">' +
+        '<option value="15"' + (st.size === 15 ? " selected" : "") + ">15/页</option>" +
+        '<option value="30"' + (st.size === 30 ? " selected" : "") + ">30/页</option>" +
+        '<option value="-1"' + (st.size < 0 ? " selected" : "") + ">全部</option>" +
+        "</select>";
+    }
+  }
+
+  function bindPagination(table, viewKey) {
+    var total = dataRows(table).length;
+    if (total <= 30) { return; } // 小表不启用分页（≤30 行全量展示）
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem("v7-pagesize:" + viewKey) || "null"); } catch (e) { saved = null; }
+    table._pg = { on: true, page: 1, size: saved === -1 || saved > 0 ? saved : 15 };
+    var bar = document.createElement("div");
+    bar.className = "v7-pgbar";
+    bar.addEventListener("click", function (event) {
+      var btn = event.target.closest ? event.target.closest("button[data-pg]") : null;
+      if (!btn) { return; }
+      if (btn.getAttribute("data-pg") === "prev") { table._pg.page = Math.max(1, table._pg.page - 1); }
+      else { table._pg.page += 1; }
+      applyPage(table);
+    });
+    bar.addEventListener("change", function (event) {
+      var sel = event.target.closest ? event.target.closest("select[data-pgsize]") : null;
+      if (!sel) { return; }
+      table._pg.size = +sel.value;
+      table._pg.page = 1;
+      try { localStorage.setItem("v7-pagesize:" + viewKey, JSON.stringify(table._pg.size)); } catch (e) { /* 隐私模式忽略 */ }
+      applyPage(table);
+    });
+    table._pgBar = bar;
+    table.parentNode.insertBefore(bar, table.nextSibling);
+    applyPage(table);
+  }
+
+  function bindColConfig(row, table, viewKey) {
+    // 表头单元格：兼容无 thead 结构（首行 th 即表头，objTable/手写表均如此）
+    var ths = table.querySelectorAll("thead th");
+    if (!ths.length) {
+      var firstTr = table.querySelector("tr");
+      ths = firstTr ? firstTr.querySelectorAll("th") : [];
+    }
+    if (!ths.length) { return; }
+    var saved = [];
+    try { saved = JSON.parse(localStorage.getItem(tableColKey()) || "[]"); } catch (e) { saved = []; }
+    // 应用记忆：列显隐（行级别 td/th 同步）
+    function setCol(idx, show) {
+      Array.prototype.forEach.call(table.querySelectorAll("tr"), function (tr) {
+        var cell = tr.children[idx];
+        if (cell) { cell.style.display = show ? "" : "none"; }
+      });
+    }
+    Array.prototype.forEach.call(ths, function (th, idx) {
+      if (saved[idx] === false) { setCol(idx, false); }
+    });
+    var btn = document.createElement("button");
+    btn.className = "v7-btn v7-colcfg-btn";
+    btn.type = "button";
+    btn.textContent = "列配置";
+    btn.addEventListener("click", function () {
+      var old = document.querySelector(".v7-colcfg");
+      if (old) { old.remove(); return; }
+      var panel = document.createElement("div");
+      panel.className = "v7-colcfg";
+      var html = '<div class="v7-colcfg-title">列显示配置（自动记忆）</div>';
+      Array.prototype.forEach.call(ths, function (th, idx) {
+        var hidden = saved[idx] === false;
+        html += '<label><input type="checkbox" data-col="' + idx + '"' + (hidden ? "" : " checked") + "> " +
+          esc(String(th.innerText || ("列 " + (idx + 1))).trim().slice(0, 14)) + "</label>";
+      });
+      panel.innerHTML = html + '<div class="v7-colcfg-foot"><button type="button" data-act="colcfg-close" class="v7-btn">关闭</button></div>';
+      panel.addEventListener("change", function (event) {
+        var box = event.target.closest ? event.target.closest("input[data-col]") : null;
+        if (!box) { return; }
+        var idx = +box.getAttribute("data-col");
+        setCol(idx, box.checked);
+        saved[idx] = box.checked;
+        try { localStorage.setItem(tableColKey(), JSON.stringify(saved)); } catch (e) { /* 隐私模式忽略 */ }
+      });
+      panel.addEventListener("click", function (event) {
+        if (event.target.closest && event.target.closest('[data-act="colcfg-close"]')) { panel.remove(); }
+      });
+      document.body.appendChild(panel);
+      var rect = btn.getBoundingClientRect();
+      panel.style.left = Math.max(8, rect.left - 80) + "px";
+      panel.style.top = Math.min(rect.bottom + 6, window.innerHeight - panel.offsetHeight - 8) + "px";
+    });
+    row.appendChild(btn);
+  }
+
   function injectTableTools() {
     var row = document.querySelector(".view-title-row");
     if (!row) { return; }
@@ -91,8 +242,28 @@
       });
       row.appendChild(share);
     }
-    var table = document.querySelector("#view-body table");
-    if (!table || row.querySelector(".v7-export")) { return; }
+    // 主表选择：取 #view-body 内行数最多的表（数据大表才是导出/分页/列配置的目标；
+    // 修复前 querySelector 取首表，sectors 页首表是 10 行小表导致分页不启用）
+    var tables = document.querySelectorAll("#view-body table");
+    var table = null, maxRows = 0;
+    Array.prototype.forEach.call(tables, function (t) {
+      var n = t.querySelectorAll("tr").length;
+      if (n > maxRows) { maxRows = n; table = t; }
+    });
+    if (!table) { return; }
+    // BUG-F7（v3.5.0）：早退判定不能只看「按钮已插」。首跑可能发生在数据大表渲染前
+    // （首表为小表 → 分页/列配置未绑到大表），大表渲染后重跑若因 export 按钮已存在
+    // 而整体早退，分页就永远建立不起来。改为：按钮段只管按钮，分页/列配置段独立幂等。
+    var viewKey = currentId() || "view";
+    // 表工具按钮（导出 CSV / 导出 Excel / 列配置）闭包捕获主表：主表可能从首跑的小表
+    // 换成后渲染的大表，所以每次重跑都「移除重插」，保证闭包始终指向当前主表。
+    var removeStale = function (sel) {
+      var old = row.querySelector(sel);
+      if (old) { old.remove(); }
+    };
+    removeStale(".v7-export");
+    removeStale(".v7-export-xls");
+    removeStale(".v7-colcfg-btn");
     var exp = document.createElement("button");
     exp.className = "v7-btn v7-export";
     exp.type = "button";
@@ -116,27 +287,54 @@
       toast("已导出 CSV（" + (lines.length - 1) + " 行）");
     });
     row.appendChild(exp);
-
-    // 排序：点击表头
-    Array.prototype.forEach.call(table.querySelectorAll("thead th"), function (th, idx) {
-      th.style.cursor = "pointer";
-      th.title = "点击排序";
-      th.addEventListener("click", function () {
-        var tbody = table.querySelector("tbody");
-        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
-        var asc = th.getAttribute("data-asc") !== "1";
-        th.setAttribute("data-asc", asc ? "1" : "0");
-        rows.sort(function (a, b) {
-          var av = (a.children[idx] || {}).innerText || "";
-          var bv = (b.children[idx] || {}).innerText || "";
-          var an = parseFloat(String(av).replace(/[^\d.\-]/g, ""));
-          var bn = parseFloat(String(bv).replace(/[^\d.\-]/g, ""));
-          if (isFinite(an) && isFinite(bn)) { return asc ? an - bn : bn - an; }
-          return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    // Excel 导出（REQ-20261105-02 #6 收尾）：.xls HTML 表格格式，Excel/WPS 免插件打开
+    var expXls = document.createElement("button");
+    expXls.className = "v7-btn v7-export-xls";
+    expXls.type = "button";
+    expXls.textContent = "导出 Excel";
+    expXls.addEventListener("click", function () { exportExcel(table, viewKey); });
+    row.appendChild(expXls);
+    // 分页/排序/列配置：绑定状态挂在主表上（table._pgTools），按钮重插不重复绑
+    if (!table._pgTools) {
+      table._pgTools = true;
+      // 表头单元格：全站主流结构是 <table><tr><th>…</th></tr>…</table>（无 thead，
+      // objTable 同构）；仅 components.js v-table 有真 thead。两种结构都兼容。
+      var headerThs = table.querySelectorAll("thead th");
+      if (!headerThs.length) {
+        var firstTr = table.querySelector("tr");
+        headerThs = firstTr ? firstTr.querySelectorAll("th") : [];
+      }
+      // 排序：点击表头（排序后重应用分页）
+      Array.prototype.forEach.call(headerThs, function (th, idx) {
+        th.style.cursor = "pointer";
+        th.title = "点击排序";
+        th.addEventListener("click", function () {
+          var tbody = table.querySelector("tbody");
+          var rows = dataRows(table);
+          var asc = th.getAttribute("data-asc") !== "1";
+          th.setAttribute("data-asc", asc ? "1" : "0");
+          rows.sort(function (a, b) {
+            var av = (a.children[idx] || {}).innerText || "";
+            var bv = (b.children[idx] || {}).innerText || "";
+            var an = parseFloat(String(av).replace(/[^\d.\-]/g, ""));
+            var bn = parseFloat(String(bv).replace(/[^\d.\-]/g, ""));
+            if (isFinite(an) && isFinite(bn)) { return asc ? an - bn : bn - an; }
+            return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+          });
+          // 排序后重挂到表头行之后（无 thead 结构时表头行是 tbody 首行）
+          var headerTr = table.querySelector("thead tr") ||
+            (tbody ? tbody.querySelector("tr") : null);
+          if (headerTr && headerTr.parentNode && headerTr.querySelector("th")) {
+            headerTr.after.apply(headerTr, rows);
+          } else if (tbody) {
+            rows.forEach(function (tr) { tbody.appendChild(tr); });
+          }
+          if (table._pg) { applyPage(table); }
         });
-        rows.forEach(function (tr) { tbody.appendChild(tr); });
       });
-    });
+      bindPagination(table, viewKey);
+      bindColConfig(row, table, viewKey);
+    }
   }
 
   /* ---------- 19. 右键菜单（恢复旧版 ctxmenu） ---------- */

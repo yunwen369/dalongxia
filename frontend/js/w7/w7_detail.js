@@ -372,6 +372,9 @@
         var ys = items.map(function (x) { return x.price != null ? x.price : x.close; });
         drawQuote(xs, ys, "分时", "line");
         if (hint) { hint.textContent = "分时 · " + (d.source || "") + " · " + (d.as_of || ""); }
+      }).catch(function () {   // F14：失败态，避免停留「行情加载中…」
+        var b3 = $("v7-quote-chart");
+        if (b3) { b3.innerHTML = '<div class="v-empty">分时数据加载失败</div>'; }
       });
       return;
     }
@@ -385,6 +388,9 @@
       var cs = items.map(function (x) { return [x.open, x.close, x.low, x.high]; });
       drawQuote(xs, cs, "K线", "candle");
       if (hint) { hint.textContent = period + " · 复权：" + adjust + " · " + (d.source || "") + " · " + (d.as_of || ""); }
+    }).catch(function () {   // F14
+      var b4 = $("v7-quote-chart");
+      if (b4) { b4.innerHTML = '<div class="v-empty">K 线数据加载失败</div>'; }
     });
   }
 
@@ -534,14 +540,22 @@
         runCrowd();
         return;
       }
-      var pat = event.target.closest ? event.target.closest("[data-pa-tab]") : null;
-      if (pat) {
-        Array.prototype.forEach.call(document.querySelectorAll("[data-pa-tab]"), function (b) {
-          b.classList.toggle("on", b === pat);
-        });
-        loadPortfolioAttr(pat.getAttribute("data-pa-tab"));
-        return;
-      }
+    var pat = event.target.closest ? event.target.closest("[data-pa-tab]") : null;
+    if (pat) {
+      Array.prototype.forEach.call(document.querySelectorAll("[data-pa-tab]"), function (b) {
+        b.classList.toggle("on", b === pat);
+      });
+      loadPortfolioAttr(pat.getAttribute("data-pa-tab"));
+      return;
+    }
+    var nvr = event.target.closest ? event.target.closest("[data-nav-range]") : null;
+    if (nvr) {
+      Array.prototype.forEach.call(document.querySelectorAll("[data-nav-range]"), function (b) {
+        b.classList.toggle("on", b === nvr);
+      });
+      W7.fund.loadNavRange(nvr.getAttribute("data-nav-range"));
+      return true;
+    }
       return false;
   }
 

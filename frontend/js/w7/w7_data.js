@@ -282,6 +282,12 @@
           return '<button class="v7-tab' + (m[0] === W7.st.sectorMarket ? " on" : "") +
             '" data-sec-market="' + m[0] + '" type="button">' + m[1] + "</button>";
         }).join("");
+      // F9/R12：美股模式下展示美东时段四态徽章（盘前/盘中/盘后/休市），避免把休市数据当实时
+      if (W7.st.sectorMarket === "us" && window.OB && OB.fmt && OB.fmt.usSession) {
+        var sess = OB.fmt.usSession();
+        html += '<span class="v7-us-session" title="美东时段判定（节假日未内置，口径见 lib/fmt.js）· ' +
+          esc(sess.phase) + '">' + esc(sess.text) + "</span>";
+      }
     }
     html += "</div>";
     if (W7.st.sectorTabState === "板块热力") {
@@ -433,10 +439,14 @@
         ]);
         html += '<div class="v7-hint" style="margin:8px 0 4px">' + esc(d.advice || "") +
           " · 源 " + esc(d.source || "—") + " · " + esc(d.as_of || "") + " · " + esc(d.market_status || "") + "</div>";
-        html += '<div class="v7-preview-table"><table><tr><th>维度</th><th>原始值</th><th>历史分位</th><th>权重</th></tr>' +
+        html += '<div class="v7-preview-table"><table><tr><th>维度</th><th>原始值</th><th>历史分位</th><th>权重</th><th>口径说明</th></tr>' +
           (d.parts || []).map(function (p) {
-            return "<tr><td>" + esc(p.label) + "</td><td>" + secFixed(p.value, 2) + esc(p.unit || "") +
-              "</td><td>" + secFixed(p.pct, 1) + "</td><td>" + secFixed((p.weight || 0) * 100, 0) + "%</td></tr>";
+            var refOnly = !p.weight;  // 权重 0 = 仅参考分项（换手率/相关性/融资余额强度）
+            return "<tr><td>" + esc(p.label) +
+              (refOnly ? ' <span style="opacity:.6;font-size:11px">仅参考</span>' : "") + "</td><td>" +
+              secFixed(p.value, 2) + esc(p.unit || "") +
+              "</td><td>" + secFixed(p.pct, 1) + "</td><td>" + secFixed((p.weight || 0) * 100, 0) + "%</td><td>" +
+              (p.note ? '<span style="opacity:.75">' + esc(p.note) + "</span>" : "—") + "</td></tr>";
           }).join("") + "</table></div>";
         var ex = d.extra || {};
         if (ex.constituent_count != null) {
@@ -453,6 +463,9 @@
           html += '<div class="v7-sec-miss">缺失维度：' + (d.missing || []).map(esc).join("；") + "</div>";
         }
         target.innerHTML = html;
+      }).catch(function () {   // F14：失败态，避免停留「计算中…」
+        var t2 = $("v7-sec-crowd-body");
+        if (t2) { t2.innerHTML = '<div class="v-empty">拥挤度查询失败（/api/sector/crowding）</div>'; }
       });
   }
 

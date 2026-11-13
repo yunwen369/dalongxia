@@ -94,6 +94,49 @@
       if (isNaN(d.getTime())) { return NA; }
       var h = d.getHours(), mi = d.getMinutes();
       return OB.fmt.date(d) + " " + (h < 10 ? "0" + h : h) + ":" + (mi < 10 ? "0" + mi : mi);
+    },
+
+    /**
+     * 美股时段四态（设计基准 R12：美股分时空态）。
+     * 以美东时间（America/New_York，自动处理夏令时）判定：
+     * 盘前 04:00–09:30 / 盘中 09:30–16:00 / 盘后 16:00–20:00 / 休市（含周末全天）。
+     * 法定节假日表未内置（节假日按交易日时段显示，口径在徽章 title 注明）。
+     * Returns: {phase: '盘前'|'盘中'|'盘后'|'休市', text: '美股盘中 · 10:32(美东)', open: bool}
+     */
+    usSession: function (now) {
+      var d = now instanceof Date ? now : new Date();
+      var parts = {};
+      try {
+        // 用 en-US 区域格式化提取美东时区时分（浏览器原生 API，无外部依赖）
+        var s = d.toLocaleString("en-US", {
+          timeZone: "America/New_York", hour12: false,
+          weekday: "short", hour: "2-digit", minute: "2-digit"
+        });
+        // 形如 "Fri, 10:32" 或 "Fri 10:32:00 AM"（hour12:false 下通常 24 小时制）
+        var wm = s.match(/^[A-Za-z]{3}/);
+        var hm = s.match(/(\d{1,2}):(\d{2})/);
+        parts.weekday = wm ? wm[0] : "";
+        parts.minutes = hm ? (+hm[1]) * 60 + (+hm[2]) : 0;
+      } catch (e) {
+        return { phase: "休市", text: "美股时段未知", open: false };
+      }
+      var wd = parts.weekday;
+      var minutes = parts.minutes;
+      var isWeekend = wd === "Sat" || wd === "Sun";
+      var phase = "休市";
+      var open = false;
+      if (!isWeekend) {
+        if (minutes >= 240 && minutes < 570) { phase = "盘前"; open = true; }
+        else if (minutes >= 570 && minutes < 960) { phase = "盘中"; open = true; }
+        else if (minutes >= 960 && minutes < 1200) { phase = "盘后"; open = true; }
+      }
+      var hh = Math.floor(minutes / 60), mm = minutes % 60;
+      var clock = (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm);
+      return {
+        phase: isWeekend ? "休市" : phase,
+        text: "美股" + (isWeekend ? "休市（周末）" : phase) + " · " + clock + "（美东）",
+        open: open
+      };
     }
   };
 })();

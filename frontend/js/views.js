@@ -17,15 +17,38 @@
 
   V.today = {
     title: "今日看点", group: "dashboard", sidebar: "overview", template: "dashboard", crumb: ["市场总览", "今日看点"],
-    api: { idx: ["/api/market/index?market=a", "index"], sen: ["/api/sentiment/market", "sentiment"], news: ["/api/news/flash", "newsFlash"] },
+    api: { idx: ["/api/market/index?market=a", "index"], sen: ["/api/sentiment/market", "sentiment"], news: ["/api/news/flash", "newsFlash"], brief: ["/api/sentiment/brief?limit=4", "brief"] },
     render: function (m) {
       var indices = (d(m, "idx").items || []).map(function (x) {
         return [esc(x.name), '<span class="mono">' + num(x.price) + '</span> <span class="' + cls(x.pct) + '">' + pct(x.pct) + "</span>"];
       });
       var sen = d(m, "sen");
+      var briefs = (d(m, "brief").items || []);
+      var briefCards = "";
+      if (briefs.length) {
+        var b = briefs[0];
+        var dims = (b.dimensions || []).map(function (x) {
+          return [x.label || x.key, esc(x.value_text || x.detail || "—")];
+        });
+        briefCards = card("定时研判 · 最新（" + esc(b.kind === "pre" ? "盘前" : "盘后") + " " + esc(b.date) + "）",
+          kpis([["信号", esc(b.signal), "", function (v) { return '<b>' + v + "</b>"; }],
+            ["维度得分", b.score == null ? "—" : (b.score > 0 ? "+" + b.score : b.score)],
+            ["口径", "确定性规则"]], dims.slice(0, 4)),
+          "/api/sentiment/brief", "研");
+        if (briefs.length > 1) {
+          var prev = briefs[1];
+          briefCards += card("上一期研判（" + esc(prev.kind === "pre" ? "盘前" : "盘后") + " " + esc(prev.date) + "）",
+            kpis([["信号", esc(prev.signal)], ["维度得分", prev.score == null ? "—" : prev.score]]),
+            "/api/sentiment/brief", "前");
+        }
+      } else {
+        briefCards = card("定时研判", '<div class="v-empty">暂无落库研判（盘前 08:30 / 盘后 15:30 自动生成）</div>',
+          "/api/sentiment/brief", "研");
+      }
       return card("指数快照", kpis(indices), "/api/market/index", "指") +
         card("市场情绪", kpis([["温度", num(sen.temperature, 1)], ["判定", esc(sen.level)],
           ["正面", sen.positive], ["负面", sen.negative]]), "/api/sentiment/market", "情") +
+        briefCards +
         card("今日快讯", feed(d(m, "news").items, 8), "/api/news/flash", "讯");
     }
   };
@@ -252,9 +275,68 @@
     render: function (m) {
       var data = d(m, "m");
       var q = data.quadrant || {};
+      var cards = { };
+      (data.indicators || []).forEach(function (x) { cards[x.key] = x; });
+      var fed = cards.fed_funds || {};
+      var ten = cards.bond_10y || {};
+      var spread = cards.term_spread || {};
+      // 利率罗盘（设计基准 P3「FED 罗盘」）：政策利率水平档位 × 决议方向 → 象限
+      // 利率档位（%）：<1 宽松 / 1–2.5 中性 / 2.5–4 紧缩 / ≥4 限制性
+      function rateZone(v) {
+        if (v == null) { return "—"; }
+        if (v < 1) { return "宽松"; }
+        if (v < 2.5) { return "中性"; }
+        if (v < 4) { return "紧缩"; }
+        return "限制性";
+      }
+      function dirText(d2) {
+        if (d2 === "up") { return "加息通道"; }
+        if (d2 === "down") { return "降息通道"; }
+        return "利率持平";
+      }
+      var fedVal = fed.value;
+      var fedKpis = [
+        ["联邦基金利率", fedVal == null ? "—" : num(fedVal, 2) + "%"],
+        ["决议方向", fedVal == null ? "—" : dirText(fed.direction)],
+        ["利率档位", rateZone(fedVal)],
+        ["决议日期", esc(fed.period || "—")]
+      ];
+      if (fedVal != null && fed.period) {
+        fedKpis.push(["数据截止", esc(fed.period) + " 决议"]);
+      }
+      var compassHtml;
+      if (fedVal != null) {
+        // 指针角度：利率 0–6% 映射 -90°（宽松）到 +90°（限制性）
+        var angle = Math.max(-90, Math.min(90, ((fedVal - 3) / 3) * 90));
+        compassHtml =
+          '<div class="v-compass">' +
+          '<svg viewBox="0 0 220 120" role="img" aria-label="利率罗盘">' +
+          '<path d="M20 110 A90 90 0 0 1 200 110" fill="none" stroke="var(--border)" stroke-width="14"/>' +
+          '<path d="M20 110 A90 90 0 0 1 200 110" fill="none" stroke="var(--c-cyan-65)" stroke-width="3" opacity="0.35"/>' +
+          '<text x="16" y="118" font-size="11" fill="var(--c-cyan-65)">宽松 0%</text>' +
+          '<text x="176" y="118" font-size="11" fill="var(--c-red-65)">限制 6%</text>' +
+          '<g transform="rotate(' + angle.toFixed(1) + ' 110 110)">' +
+          '<line x1="110" y1="110" x2="110" y2="34" stroke="var(--c-orange-55)" stroke-width="4" stroke-linecap="round"/>' +
+          '<circle cx="110" cy="110" r="6" fill="var(--c-orange-55)"/></g>' +
+          '<text x="110" y="72" font-size="15" text-anchor="middle" fill="var(--c-white-100)" font-weight="bold">' +
+          num(fedVal, 2) + "%</text>" +
+          '<text x="110" y="88" font-size="11" text-anchor="middle" fill="var(--c-white-100)" opacity="0.8">' +
+          esc(dirText(fed.direction)) + " · " + esc(rateZone(fedVal)) + "</text>" +
+          "</svg></div>";
+      } else {
+        compassHtml = '<div class="v-empty">美联储利率暂不可取（' + esc(fed.reason || "通道异常") + "）</div>";
+      }
       return card("周期象限", kpis([["阶段", esc(q.stage)], ["增长", esc(q.growth)],
         ["通胀", esc(q.inflation)], ["窗口", q.window + " 期"], ["可用指标", data.available_count + "/" + data.total_count]]),
         "/api/macro/overview", "宏") +
+        card("利率罗盘（美国政策利率）", compassHtml +
+          '<div class="v-hint">口径：金十数据美联储利率决议（存在发布延迟，以「决议日期」为准）；' +
+          "档位划分 0–6% 五档映射（&lt;1 宽松 / 1–2.5 中性 / 2.5–4 紧缩 / ≥4 限制性）。</div>",
+          "/api/macro/overview · fed_funds", "盘") +
+        card("利率对照（中国）", kpis([["10Y 国债", ten.value == null ? "—" : num(ten.value, 2) + "%"],
+          ["期限利差", spread.value == null ? "—" : num(spread.value, 2) + "%"],
+          ["利差状态", spread.value == null ? "—" : (spread.value < 0 ? "倒挂" : "正常")]]),
+          "/api/macro/overview · bond_10y", "债") +
         card("结论", '<div class="v-note">' + esc(q.conclusion || "—") + "</div>",
           "/api/macro/overview · quadrant", "结") +
         card("宏观指标", table([["name", "指标", "40%"], ["value", "最新值", "30%"],
@@ -379,13 +461,31 @@
 
   V.mgr = {
     title: "经理画像", group: "portfolio", sidebar: "my", template: "detail", crumb: ["组合", "经理画像"],
-    api: { f: ["/api/fund/performance?code=017811", "fundPerf"] },
+    api: { mgr: ["/api/fund/manager?code=017811", "mgr"], f: ["/api/fund/performance?code=017811", "fundPerf"] },
     render: function (m) {
+      var mgr = d(m, "mgr") || {};
       var f = d(m, "f");
-      return card("业绩代理（经理画像专用端点本稿未接入，以下为真实基金业绩）",
-        kpis([["基金", esc(f.name || "—")], ["单位净值", num(f.unit_nav, 4)],
-          ["日涨跌", pct(f.day_growth || 0), cls(f.day_growth || 0)], ["净值日期", esc(f.end_date)]]),
-        "/api/fund/performance · 口径已标注", "理") +
+      var head;
+      if (mgr.found) {
+        var g = mgr.manager || {};
+        head = card("经理画像（/api/fund/manager · 支持 #/mgr?code= 切换）",
+          kpis([["经理", esc(g.name || "—")], ["所属公司", esc(g.company || "—")],
+            ["任职年限", num(g.tenure_years, 1) + " 年"],
+            ["在管规模", num(g.scale_aum, 2) + " 亿"], ["在管产品", g.fund_count || 0],
+            ["最佳回报", pct(g.best_return || 0), cls(g.best_return || 0)]]),
+          "/api/fund/manager", "经") +
+          card("在管产品（" + (g.funds || []).length + " 只 · 东财经理长表按姓名+公司聚合）",
+            table([["code", "代码", "26%"], ["name", "名称", "74%"]],
+              g.funds || [], "暂无在管产品数据"), "/api/fund/manager · manager.funds", "管");
+      } else {
+        head = card("经理画像", '<div class="v-empty">' + esc(mgr.reason || mgr.caliber || "未命中该基金的经理档案") +
+          "</div>", "/api/fund/manager", "经");
+      }
+      return head +
+        card("业绩代理（同 code 基金真实业绩）",
+          kpis([["基金", esc(f.name || "—")], ["单位净值", num(f.unit_nav, 4)],
+            ["日涨跌", pct(f.day_growth || 0), cls(f.day_growth || 0)], ["净值日期", esc(f.end_date)]]),
+          "/api/fund/performance · 口径已标注", "理") +
         card("年度业绩", table([["period", "区间", "34%"], ["nav", "净值", "33%", "num", plainNum],
           ["rank", "排名", "33%", "num"]], f.annual), "/api/fund/performance · annual", "年");
     }
@@ -393,14 +493,31 @@
 
   V.alerts = {
     title: "提醒中心", group: "system", sidebar: "sys", template: "list", crumb: ["提醒中心"],
-    api: { a: ["/api/alerts/events", "alerts"] },
+    api: { a: ["/api/alerts/events", "alerts"], r: ["/api/alerts", "rules"] },
     render: function (m) {
       var a = d(m, "a");
+      var r = d(m, "r") || {};
+      var subs = (r.rules || []).filter(function (x) { return x.type === "subscription"; });
+      var otherRules = (r.rules || []).filter(function (x) { return x.type !== "subscription"; });
+      var subEvents = (a.events || []).filter(function (x) { return x.type === "subscription"; });
       return card("提醒概览", kpis([["事件数", (a.events || []).length], ["未读", a.unread],
-        ["数据时间", esc(a.as_of)]]), "/api/alerts/events", "警") +
-        card("事件列表", table([["type", "类型", "30%"], ["title", "内容", "50%"],
+        ["规则数", (r.rules || []).length], ["订阅流", subs.length], ["数据时间", esc(a.as_of)]]), "/api/alerts/events", "警") +
+        card("订阅流（板块订阅公告 · type=subscription）",
+          table([["target", "订阅对象", "26%"], ["metric", "条件", "30%"],
+            ["enabled", "启用", "14%", "", function (v) { return v ? '<span class="up">是</span>' : '<span class="dim">否</span>'; }],
+            ["note", "备注", "30%"]], subs, "当前无订阅规则（在「编辑提醒」中可新增 type=subscription）"),
+          "/api/alerts · rules(type=subscription)", "订") +
+        card("订阅事件（事件流级 24h 去重）",
+          table([["type", "类型", "20%"], ["title", "内容", "56%"], ["created_at", "时间", "24%"]],
+            subEvents, "暂无订阅事件（规则命中后按日去重产生）"),
+          "/api/alerts/events · type=subscription", "事") +
+        card("事件列表（全部）", table([["type", "类型", "30%"], ["title", "内容", "50%"],
           ["created_at", "时间", "20%"]], a.events, "当前无提醒事件（真实空数据）"),
-          "/api/alerts/events", "事");
+          "/api/alerts/events", "全") +
+        card("普通规则（price/index 等非订阅类）",
+          table([["target", "对象", "26%"], ["type", "类型", "20%"], ["metric", "条件", "30%"],
+            ["enabled", "启用", "24%", "", function (v) { return v ? '<span class="up">是</span>' : '<span class="dim">否</span>'; }]],
+            otherRules, "暂无普通规则"), "/api/alerts · rules", "规");
     }
   };
 

@@ -240,6 +240,9 @@
       }
       if (d.caliber) { html += '<div class="v7-sec-note">口径：' + esc(d.caliber) + "</div>"; }
       target.innerHTML = html;
+    }).catch(function () {   // F14：失败态，避免停留「生成中…」
+      var b3 = $("v7-news-body");
+      if (b3) { b3.innerHTML = '<div class="v-empty">AI 摘要请求失败（/api/ai/summary）</div>'; }
     });
   }
 
