@@ -189,7 +189,7 @@ def main() -> None:
         for _ in range(12):
             cdp.call("Page.navigate", {"url": f"{args.base_url}/#/home"})
             time.sleep(2)
-            probe = eval_js(cdp, "(document.getElementById('page-title')||{}).textContent||''")
+            probe = eval_js(cdp, "(document.getElementById('view-title')||{}).textContent||''")
             if probe and str(probe).strip():
                 ready = True
                 break
@@ -206,7 +206,7 @@ def main() -> None:
             runtime_errs = [e for e in errs if e.get("method") == "Runtime.exceptionThrown"]
 
             state = eval_js(cdp, "JSON.stringify({"
-                            "\"title\": (document.getElementById('page-title')||{}).textContent||'',"
+                            "\"title\": (document.getElementById('view-title')||{}).textContent||'',"
                             "\"nav\": (document.querySelector('#main-nav .nav-item.active')||{}).textContent||'',"
                             "\"container\": (function(){var el=document.getElementById('page-" + view + "')||document.getElementById('viewport');return el?el.children.length:0;})(),"
                             "\"ds\": (function(){var el=document.getElementById('page-" + view + "');return el?el.getAttribute('data-state'):null;})(),"
@@ -249,7 +249,7 @@ def main() -> None:
                 pt = loc
                 click_at(cdp, pt["x"], pt["y"])
                 time.sleep(1.5)
-                after = eval_js(cdp, "(document.getElementById('page-title')||{}).textContent||''")
+                after = eval_js(cdp, "(document.getElementById('view-title')||{}).textContent||''")
                 results[-1]["sidebar_click"] = {"text": pt["text"], "coords": [pt["x"], pt["y"]], "title_after": after or ""}
 
         # 筛选器页：点击「执行筛选」验证结果表
@@ -273,7 +273,7 @@ def main() -> None:
             pt = bell
             click_at(cdp, pt["x"], pt["y"])
             time.sleep(2)
-            title = eval_js(cdp, "(document.getElementById('page-title')||{}).textContent||''")
+            title = eval_js(cdp, "(document.getElementById('view-title')||{}).textContent||''")
             badge = eval_js(cdp, "(function(){var e=document.getElementById('alerts-unread');return e?e.textContent.trim():'';})()")
             results.append({
                 "view": "alerts-bell",

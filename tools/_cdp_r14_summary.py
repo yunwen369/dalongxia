@@ -82,6 +82,20 @@ def main() -> None:
             })()""")
             print("auth:", authed)
             time.sleep(1.0)
+            # 登录墙清除闸门（2026-11-13 回归批次加固）：auth 读回 {} 时 cookie 可能
+            # 晚于首次 goto 才生效，news 视图会撞登录墙造成 R14_1/2 假阴。
+            # 整页 reload 后轮询 view-body 就绪（SPA 已鉴权），再进判据。
+            cdp.call("Page.navigate", {"url": base + "/"})
+            ready = False
+            for _ in range(12):
+                time.sleep(2)
+                probe = eval_js(cdp, "!!document.getElementById('view-body')")
+                if probe:
+                    ready = True
+                    break
+            print("auth-gate ready:", ready)
+            if not ready:
+                raise RuntimeError("鉴权后仍处登录墙（view-body 未出现），不作结论")
 
         # R14-1 资讯工具市场下拉
         goto(cdp, base, "news", 5.0)
