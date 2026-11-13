@@ -24,7 +24,7 @@ sudo usermod -aG docker $USER && newgrp docker
 mkdir -p /opt/openbb-cn && cd /opt/openbb-cn
 
 # 2. 下载 compose 文件（或手工复制仓库根的 docker-compose.yml）
-curl -o docker-compose.yml https://raw.githubusercontent.com/OWNER/openbb-cn/main/docker-compose.yml
+curl -o docker-compose.yml https://raw.githubusercontent.com/yunwen369/openbb-cn/main/docker-compose.yml
 
 # 3. 配置环境变量（口令必设；AI 可选）
 cat > .env <<'EOF'
@@ -45,7 +45,7 @@ curl -s http://127.0.0.1:6900/api/health   # {"data":...,"error":null,...}
 
 浏览器访问 `http://服务器IP:6900`，输入口令登录。
 
-> 镜像路径 `ghcr.io/OWNER/openbb-cn` 中的 `OWNER` 换成实际 GitHub 用户名/组织名（全小写）。
+> 镜像路径 `ghcr.io/yunwen369/openbb-cn`（GitHub 用户名在镜像路径中全小写）。
 
 ## 三、配置详解
 

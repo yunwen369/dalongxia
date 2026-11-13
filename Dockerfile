@@ -30,7 +30,7 @@ FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="OpenBB 中文投研工作台" \
       org.opencontainers.image.description="受 OpenBB Workspace 启发的中文本地投研工作台（A股/港股/美股/基金）" \
-      org.opencontainers.image.source="https://github.com/OWNER/openbb-cn" \
+      org.opencontainers.image.source="https://github.com/yunwen369/openbb-cn" \
       org.opencontainers.image.licenses="MIT"
 
 # 时区（时区契约：北京时间）；PYTHONUNBUFFERED 使探针/日志即时可见

@@ -39,7 +39,7 @@ docker run -d --name openbb-cn -p 6900:6900 \
   -e OPENBB_ACCESS_PASSWORD=你的访问口令 \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   --restart unless-stopped \
-  ghcr.io/OWNER/openbb-cn:latest
+  ghcr.io/yunwen369/openbb-cn:latest
 ```
 
 镜像标签：`latest`（最新发布版）/ `3.6`（大版本） / `3.6.0`（精确版本）。

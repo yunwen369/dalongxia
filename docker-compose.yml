@@ -9,8 +9,8 @@
 
 services:
   openbb-cn:
-    # 部署时把 OWNER 换成实际 GitHub 用户名/组织名（ghcr.io 镜像路径全小写）
-    image: ghcr.io/owner/openbb-cn:latest
+    # 镜像随 GitHub tag 自动发布（ghcr.io 镜像路径全小写）
+    image: ghcr.io/yunwen369/openbb-cn:latest
     container_name: openbb-cn
     ports:
       - "6900:6900"          # 左侧可改宿主端口，如 "8080:6900"
