@@ -47,6 +47,7 @@ INDICATOR_META: Dict[str, Tuple[str, str, int]] = {
     "m1_m2": ("M1−M2 剪刀差", "pt", 1),
     "bond_10y": ("10Y 国债", "%", 2),
     "term_spread": ("期限利差 10Y−1Y", "%", 2),
+    "fed_funds": ("美联储联邦基金利率", "%", 2),
     "social_financing": ("社融存量同比", "%", 1),
 }
 
@@ -299,6 +300,40 @@ def _fetch_yield() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     return [ten_indicator, spread_indicator], parsed[-24:]
 
 
+def _fetch_fed_funds() -> Dict[str, Any]:
+    """美联储联邦基金利率（设计基准 P3「FED 罗盘」数据源，P5 批次接入）。
+
+    数据源：``macro_bank_usa_interest_rate``（金十数据口径，美联储利率决议报告
+    逐次公布值）。取「今值」非空的最后两次决议：最新值 + 上一次值（供方向判定）。
+    金十口径存在发布延迟（实测最后有效决议可能落后当期数月），period 如实透出
+    决议日期，由前端标注「数据截止」——不虚构当期值。
+
+    Returns:
+        Dict[str, Any]: fed_funds 指标卡。
+
+    Raises:
+        ValueError: 返回空或全部「今值」缺失。
+    """
+    import akshare as ak
+
+    frame = ak.macro_bank_usa_interest_rate()
+    parsed: List[Dict[str, Any]] = []
+    for row in _frame_rows(frame):
+        value = _to_float(row.get("今值"))
+        date_text = str(row.get("日期") or "")[:10]
+        if value is not None and date_text:
+            parsed.append({"period": date_text, "value": value})
+    parsed.sort(key=lambda item: item["period"])
+    if not parsed:
+        raise ValueError("美联储利率返回空")
+    last = parsed[-1]
+    prev = parsed[-2] if len(parsed) > 1 else None
+    return _build_indicator(
+        "fed_funds", last["value"], prev["value"] if prev else None, last["period"],
+        "金十数据/akshare",
+    )
+
+
 def _fetch_social_financing() -> Dict[str, Any]:
     """社融存量同比（当前无可用源，按空契约返回）。
 
@@ -456,11 +491,22 @@ def _load_overview() -> Dict[str, Any]:
         indicators.append(_build_indicator("term_spread", None, None, None, "中债", "国债通道异常"))
         series["bond"] = []
 
+    try:
+        fed_indicator = _fetch_fed_funds()
+        indicators.append(fed_indicator)
+        if fed_indicator.get("available"):
+            sources.append("美联储利率")
+    except Exception as exc:  # noqa: BLE001 - 单指标失败不影响其他
+        logger.info("美联储利率取数失败：%s", type(exc).__name__)
+        failures.append(f"美联储利率（{type(exc).__name__}）")
+        indicators.append(_build_indicator("fed_funds", None, None, None, "金十数据", "美联储利率通道异常"))
+
     indicators.append(_fetch_social_financing())
     failures.append("社融（源站已失效，待换源）")
 
     # 指标按看板顺序排列（不依赖取数顺序）
-    order = ["pmi", "pmi_service", "cpi", "ppi", "m2", "m1_m2", "bond_10y", "term_spread", "social_financing"]
+    order = ["pmi", "pmi_service", "cpi", "ppi", "m2", "m1_m2", "bond_10y", "term_spread",
+             "fed_funds", "social_financing"]
     indicators.sort(key=lambda item: order.index(item["key"]) if item["key"] in order else 99)
 
     quadrant = _build_quadrant(series.get("pmi") or [], series.get("ppi") or [])

@@ -97,14 +97,14 @@ def test_social_financing_follows_empty_contract() -> None:
 
 # ---------------------------------------------------------------- 接口契约
 def test_macro_overview_contract(client: TestClient) -> None:
-    """接口返回结构：9 个指标 + 象限 + 序列，且每个指标都带可用性标记。"""
+    """接口返回结构：10 个指标（v3.5.0 增美联储联邦基金利率）+ 象限 + 序列，每个指标都带可用性标记。"""
     body = client.get("/api/macro/overview").json()
     assert body["error"] is None
     data = body["data"]
-    assert len(data["indicators"]) == 9
+    assert len(data["indicators"]) == 10
     keys = [item["key"] for item in data["indicators"]]
     assert keys == ["pmi", "pmi_service", "cpi", "ppi", "m2", "m1_m2",
-                    "bond_10y", "term_spread", "social_financing"]
+                    "bond_10y", "term_spread", "fed_funds", "social_financing"]
     for item in data["indicators"]:
         assert "available" in item
         if not item["available"]:

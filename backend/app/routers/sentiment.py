@@ -21,6 +21,7 @@ from backend.app.core import cache
 from backend.app.core.errors import pack_success, ErrorCode, api_error, bad_request
 from backend.app.datasource import breadth as breadth_provider
 from backend.app.datasource import news as news_provider
+from backend.app.datasource import sector as sector_provider
 from backend.app.datasource import sentiment as sentiment_engine
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,40 @@ def _samples(items: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]
             }
         )
     return result
+
+
+def _market_margin() -> Dict[str, Any]:
+    """市场两融维度（设计基准 P3 / R5 同源，P5 批次接入 /market 响应）。
+
+    复用 ``sector.get_margin_by_board``（唯一实现层：沪深两融明细按行业成分
+    聚合 + 横截面分位，6 小时缓存），此处只做市场级汇总——总额为已覆盖行业
+    加总（非全市场口径，明细源仅覆盖两融标的），强度榜取前 5。失败降级为
+    ``available=False``，不影响情绪主体。
+
+    Returns:
+        dict: ``{available, total_balance_yi, boards_covered, top, source, as_of, caliber}``。
+    """
+    caliber = "沪深两融明细按行业成分聚合（同拥挤度融资余额强度口径）；总额=已覆盖行业加总，非全市场"
+    try:
+        snap = sector_provider.get_margin_by_board(kind="industry")
+        items = snap.get("items") or []
+        total = round(sum(float(item.get("balance_yi") or 0) for item in items), 1)
+        return {
+            "available": bool(items),
+            "total_balance_yi": total if items else None,
+            "boards_covered": len(items),
+            "top": items[:5],
+            "source": snap.get("source"),
+            "as_of": snap.get("as_of"),
+            "caliber": caliber,
+        }
+    except Exception as exc:  # noqa: BLE001 - 两融维度失败不拖垮情绪主体
+        logger.info("市场两融维度取数失败：%s", type(exc).__name__)
+        return {
+            "available": False, "total_balance_yi": None, "boards_covered": 0,
+            "top": [], "source": None, "as_of": None,
+            "caliber": caliber, "error": "两融数据暂不可用",
+        }
 
 
 @router.get("/stock")
@@ -160,11 +195,41 @@ def sentiment_market(
     aggregate["board"] = board or None
     # FN-01：首页「市场情绪」组件复用本接口，附带沪深两市涨跌家数（同页双指标，不另造接口）
     aggregate["breadth"] = breadth_provider.market_breadth()
+    # P3 两融维度：市场杠杆水平与行业强度榜（R5 同源口径）
+    aggregate["margin"] = _market_margin()
     return pack_success(
         aggregate,
         "财联社" if region == "cn" else "东财/新浪/同花顺",
         "本地规则引擎聚合；温度为派生指标（50 + 均分×500，裁剪 0–100）",
         items[0].get("time") if items else None, "情绪快照", False,
+    )
+
+
+@router.get("/brief")
+def sentiment_brief(
+    kind: str = Query("all", description="pre=盘前 / post=盘后 / all=全部"),
+    limit: int = Query(10, ge=1, le=60),
+) -> Dict[str, Any]:
+    """定时研判（设计基准 P3）：盘前/盘后确定性规则研判落库读取。
+
+    Args:
+        kind: pre / post / all。
+        limit: 返回条数上限。
+
+    Returns:
+        dict: 统一返回结构 `{data, error, error_code}`。
+    """
+    mode = (kind or "all").strip().lower()
+    if mode not in ("all", "pre", "post"):
+        return bad_request("kind 仅支持 all/pre/post")
+    from backend.app.datasource import morning_brief
+
+    items = morning_brief.list_briefs(limit=limit, kind=None if mode == "all" else mode)
+    return pack_success(
+        {"items": items, "count": len(items), "kind": mode},
+        "本地规则聚合",
+        "确定性规则五档研判（宽度+情绪温度+拥挤度+利率），非 AI 输出；盘前 ≥08:30 / 盘后 ≥15:30 各一份",
+        items[0].get("generated_at") if items else None, "研判落库", False,
     )
 
 

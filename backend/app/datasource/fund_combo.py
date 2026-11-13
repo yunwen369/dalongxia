@@ -349,6 +349,21 @@ def _hard_exclusion(code: str) -> Dict[str, Any]:
     }
 
 
+def hard_exclusion(code: str) -> Dict[str, Any]:
+    """R7 三条硬性排除判定（公开入口，供 /api/fund/info 等外部模块复用）。
+
+    与 :func:`_hard_exclusion` 同一实现（唯一实现层约束）；此别名只为避免
+    跨模块引用下划线私有名。
+
+    Args:
+        code: 6 位基金代码。
+
+    Returns:
+        dict: ``{status, reasons, metrics, profile_missing}``。
+    """
+    return _hard_exclusion(code)
+
+
 def evaluate(codes: List[str], risk_profile: str = "balanced") -> Dict[str, Any]:
     """批量评估基金并给出六维打分、相关性、目标权重（不涉及用户持仓）。
 

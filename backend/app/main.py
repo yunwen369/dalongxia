@@ -271,6 +271,26 @@ def _concept_spotcheck_loop() -> None:
         time.sleep(1800)  # dup-ok: 定时调度守护循环（周期任务非失败重试退避），retry 机制不适用
 
 
+def _brief_loop() -> None:
+    """盘前/盘后研判调度（设计基准 P3）：每 15 分钟检查调度条件。
+
+    盘前（工作日 ≥08:30）与盘后（工作日 ≥15:30）各一次，当日缺档才生成；
+    确定性规则聚合（见 morning_brief 模块 docstring），失败只记日志。
+    """
+    from backend.app.datasource import morning_brief
+
+    while True:
+        try:
+            for kind in ("pre", "post"):
+                result = morning_brief.ensure_today(kind)
+                if result.get("written"):
+                    logger.info("研判已落库：%s %s（%s）",
+                                result.get("date"), kind, result.get("signal"))
+        except Exception as exc:  # noqa: BLE001 - 研判失败不影响主服务
+            logger.info("研判调度异常：%s", type(exc).__name__)
+        time.sleep(900)  # dup-ok: 定时调度守护循环（周期任务非失败重试退避），retry 机制不适用
+
+
 def _fundflow_warm_loop() -> None:
     """板块四档预热（R5）：启动后台逐板块构建成分映射并聚合四档。
 
@@ -365,6 +385,14 @@ def create_app() -> FastAPI:
         """启动概念排行抽检调度线程（守护线程，异常不影响主服务）。"""
         threading.Thread(
             target=_concept_spotcheck_loop, daemon=True, name="concept-spotcheck"
+        ).start()
+
+    # 第十轮 P3：盘前 08:30 / 盘后 15:30 定时研判落库（确定性规则，五档信号）
+    @application.on_event("startup")
+    def _start_brief() -> None:
+        """启动研判调度线程（守护线程，异常不影响主服务）。"""
+        threading.Thread(
+            target=_brief_loop, daemon=True, name="morning-brief"
         ).start()
 
     # 第十轮 P3：板块四档预热（**默认关闭**，需显式 OPENBB_FUNDFLOW_WARM=1）

@@ -240,6 +240,16 @@ def fund_info(code: str = Query(..., description="6 位基金代码")) -> Dict[s
         return api_error(ErrorCode.UPSTREAM_ERROR, "基金档案暂不可用，请稍后点击刷新重试。",
                          data={"code": symbol})
     data = result["data"]
+    # R7 三态判定挂载（P5 批次）：规模/年限/清盘风险三条件 + 基础档案，
+    # 复用 fund_combo.hard_exclusion（唯一实现层）；失败降级 unknown 不阻塞档案主体。
+    try:
+        from backend.app.datasource import fund_combo as fund_combo_provider
+
+        data["exclusion"] = fund_combo_provider.hard_exclusion(symbol)
+    except Exception as exc:  # noqa: BLE001 - 三态失败不拖垮档案
+        logger.info("基金三态判定失败：%s（%s）", symbol, type(exc).__name__)
+        data["exclusion"] = {"status": "unknown", "reasons": [], "metrics": {},
+                             "profile_missing": [f"判定失败（{type(exc).__name__}）"]}
     return pack_success(data, data.get("source") or "蛋卷", data.get("caliber") or "",
                         data.get("end_date"), "档案快照", False)
 

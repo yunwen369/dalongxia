@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from typing import Any, Dict, List
 
@@ -490,7 +492,8 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     local_strength = str(payload.get("strength") or "").strip()
     prompt = (
         "你是中文投研助手。请复核下面这条财经资讯对指定板块/个股的利好利空判断，"
-        "只输出 JSON：{\"sentiment\":\"利好|利空|中性\",\"strength\":\"强|中|弱\",\"reason\":\"不超过80字\"}。\n"
+        "只输出 JSON：{\"sentiment\":\"利好|利空|中性\",\"strength\":\"强|中|弱\","
+        "\"confidence\":0到100的整数置信度,\"reason\":\"不超过80字\"}。\n"
         f"板块：{board or '未指定'}\n标题：{title}\n正文：{content[:800]}\n"
         f"本地规则初评：{local_label or '未提供'}/{local_strength or '未提供'}"
     )
@@ -531,16 +534,39 @@ def news_ai_review(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         return api_error(ErrorCode.UPSTREAM_ERROR, "AI 返回内容无法解析，请检查模型是否兼容 OpenAI 格式。",
                          data={"reviewed": False})
 
+    # P3 结构化：解析 AI 的 JSON（容错 ```json 围栏与前后缀文字），失败保留 raw 不冒充
+    parsed: Dict[str, Any] = {"sentiment": None, "strength": None, "confidence": None, "reason": None}
+    try:
+        match = re.search(r"\{.*\}", text, re.S)
+        if match:
+            candidate = json.loads(match.group(0))
+            if isinstance(candidate, dict):
+                label = str(candidate.get("sentiment") or "").strip()
+                if label in ("利好", "利空", "中性"):
+                    parsed["sentiment"] = label
+                strength = str(candidate.get("strength") or "").strip()
+                if strength in ("强", "中", "弱"):
+                    parsed["strength"] = strength
+                conf = candidate.get("confidence")
+                if isinstance(conf, (int, float)) and 0 <= float(conf) <= 100:
+                    parsed["confidence"] = round(float(conf), 1)
+                reason = str(candidate.get("reason") or "").strip()
+                if reason:
+                    parsed["reason"] = reason[:120]
+    except Exception as exc:  # noqa: BLE001 - 解析失败保留 raw
+        logger.info("AI 复核 JSON 解析失败（保留 raw）：%s", type(exc).__name__)
+    parsed["raw"] = text[:2000]
+
     return pack_success(
         {
             "reviewed": True,
             "model": ai.model,
             "elapsed_ms": int((time.time() - started) * 1000),
             "local": {"sentiment": local_label or None, "strength": local_strength or None},
-            "review": {"raw": text[:2000]},
+            "review": parsed,
         },
         "用户配置 AI",
-        "AI 复核结果仅供参考，不写入缓存、不参与 sentiment 接口计算",
+        "AI 复核结果仅供参考，不写入缓存、不参与 sentiment 接口计算；confidence 为 AI 自报置信度（0-100）",
         None,
         "AI 复核",
         False,
