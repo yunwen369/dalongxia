@@ -192,7 +192,36 @@
       });
   }
 
-  /* ---------- 34. AI 财报摘要（v3.4.0：恢复 ai/summary） ---------- */
+  /* ---------- 34. AI 财报摘要（v3.4.0：恢复 ai/summary；v3.6.0：R14 三市场） ---------- */
+  /** AI 摘要三段式渲染主体（key_table/points/risks），资讯页与 fin/ann 注入卡共用。 */
+  function aiSummaryHtml(d, mkt) {
+    if (d.status === "no_content" || !d.summary) {
+      return '<div class="v-empty">' + esc(d.caliber || "正文不可得，未生成摘要（不造数）") + "</div>";
+    }
+    var s = d.summary || {};
+    var html = '<div class="v7-hint" style="margin-bottom:6px">' + esc(d.title || "") +
+      " · 市场 " + esc(String(d.market || mkt).toUpperCase()) +
+      " · 原文 " + esc(String(d.source_text_chars || 0)) + " 字" +
+      (d.truncated ? "（已截断）" : "") + " · 模型 " + esc(d.model || "—") +
+      (d.cached ? " · 命中缓存" : "") + "</div>";
+    if ((s.key_table || []).length) {
+      html += '<div class="v7-preview-table"><table><tr><th>关键指标</th><th>数值</th><th>同比</th></tr>' +
+        s.key_table.map(function (x) {
+          return "<tr><td>" + esc(x.metric) + "</td><td>" + esc(x.value) + "</td><td>" + esc(x.yoy || "—") + "</td></tr>";
+        }).join("") + "</table></div>";
+    }
+    if ((s.points || []).length) {
+      html += '<div class="v7-hint" style="margin:8px 0 2px">要点</div><ul class="v7-ai-ul">' +
+        s.points.map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("") + "</ul>";
+    }
+    if ((s.risks || []).length) {
+      html += '<div class="v7-hint" style="margin:8px 0 2px">风险与不确定事项</div><ul class="v7-ai-ul">' +
+        s.risks.map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("") + "</ul>";
+    }
+    if (d.caliber) { html += '<div class="v7-sec-note">口径：' + esc(d.caliber) + "</div>"; }
+    return html;
+  }
+
   /** 资讯页「AI 摘要」页签的渲染主体。 */
   function loadAiSummary() {
     var box = $("v7-news-body");
@@ -203,45 +232,98 @@
       box.innerHTML = '<div class="v-empty">请填写公告代码（或公告标题）后再生成摘要</div>';
       return;
     }
+    /* R14：市场取自资讯工具下拉（默认 a，与 v3.5.0 前行为一致）。 */
+    var mkt = (W7.st && W7.st.newsInput && W7.st.newsInput.market) || "a";
     box.innerHTML = '<div class="loading">AI 摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
     apiJson("/api/ai/summary", {
       method: "POST",
-      body: JSON.stringify({ market: "a", code: code, title: title, pub_time: "", doc_url: "" })
+      body: JSON.stringify({ market: mkt, code: code, title: title, pub_time: "", doc_url: "" })
     }).then(function (r) {
       var target = $("v7-news-body");
       if (!target) { return; }
-      var d = (r.body && r.body.data) || {};
       if (r.body && r.body.error) {
         target.innerHTML = '<div class="v-empty">' + esc(r.body.error) + "</div>";
         return;
       }
-      if (d.status === "no_content" || !d.summary) {
-        target.innerHTML = '<div class="v-empty">' + esc(d.caliber || "正文不可得，未生成摘要（不造数）") + "</div>";
-        return;
-      }
-      var s = d.summary || {};
-      var html = '<div class="v7-hint" style="margin-bottom:6px">' + esc(d.title || "") +
-        " · 原文 " + esc(String(d.source_text_chars || 0)) + " 字" +
-        (d.truncated ? "（已截断）" : "") + " · 模型 " + esc(d.model || "—") +
-        (d.cached ? " · 命中缓存" : "") + "</div>";
-      if ((s.key_table || []).length) {
-        html += '<div class="v7-preview-table"><table><tr><th>关键指标</th><th>数值</th><th>同比</th></tr>' +
-          s.key_table.map(function (x) {
-            return "<tr><td>" + esc(x.metric) + "</td><td>" + esc(x.value) + "</td><td>" + esc(x.yoy || "—") + "</td></tr>";
-          }).join("") + "</table></div>";
-      }
-      if ((s.points || []).length) {
-        html += '<div class="v7-hint" style="margin:8px 0 2px">要点</div><ul class="v7-ai-ul">' +
-          s.points.map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("") + "</ul>";
-      }
-      if ((s.risks || []).length) {
-        html += '<div class="v7-hint" style="margin:8px 0 2px">风险与不确定事项</div><ul class="v7-ai-ul">' +
-          s.risks.map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("") + "</ul>";
-      }
-      if (d.caliber) { html += '<div class="v7-sec-note">口径：' + esc(d.caliber) + "</div>"; }
-      target.innerHTML = html;
+      target.innerHTML = aiSummaryHtml((r.body && r.body.data) || {}, mkt);
     }).catch(function () {   // F14：失败态，避免停留「生成中…」
       var b3 = $("v7-news-body");
+      if (b3) { b3.innerHTML = '<div class="v-empty">AI 摘要请求失败（/api/ai/summary）</div>'; }
+    });
+  }
+
+  /* ---------- 34b. R14：fin / ann 视图注入 AI 摘要卡（走 w7 注入层，不改 VIEWS 定义） ---------- */
+  /** 财报摘要 / 公告库视图注入卡：市场 + 代码 + 标题，与资讯工具共用 W7.st.newsInput。 */
+  function injectFinSummaryCard() {
+    var id = currentId();
+    if (id !== "fin" && id !== "ann") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-fin-ai")) { return; }
+    if (!W7.st.newsInput) { W7.st.newsInput = { sector: "", code: "", title: "", market: "a" }; }
+    var st = W7.st.newsInput;
+    var card = document.createElement("div");
+    card.className = "card v7-fin-ai";
+    card.innerHTML =
+      '<div class="card-head"><span class="card-title"><span class="badge-ico">✦</span>AI 财报摘要</span>' +
+        '<span class="card-note">三市场（A股 / 港股 / 美股）· 公告正文结构化</span></div>' +
+        '<div class="v-body">' +
+          '<div class="v7-form" style="margin-bottom:8px">' +
+            '<div><label>市场</label><select id="v7-finai-market">' +
+              [["a", "A股"], ["hk", "港股"], ["us", "美股"]].map(function (x) {
+                return '<option value="' + x[0] + '"' + (x[0] === (st.market || "a") ? " selected" : "") + ">" + x[1] + "</option>";
+              }).join("") +
+            "</select></div>" +
+            '<div><label>公告代码</label><input id="v7-finai-code" value="' + esc(st.code || "") + '" placeholder="A股 600519 / 港股 00700 / 美股 AAPL"></div>' +
+            '<div><label>公告标题（可空）</label><input id="v7-finai-title" value="' + esc(st.title || "") + '" placeholder="如 2026年第三季度报告"></div>' +
+            '<div><button class="v7-btn primary" data-act="fin-ai-run" type="button">生成摘要</button></div>' +
+          "</div>" +
+          '<div id="v7-finai-body"><div class="v7-hint">填写公告代码（或公告标题）后点「生成摘要」；约 10–40 秒。</div></div>' +
+        "</div>";
+    body.insertBefore(card, body.firstChild);
+    card.addEventListener("input", function (ev) {
+      var t = ev.target;
+      if (!t || !t.id) { return; }
+      if (t.id === "v7-finai-market") { W7.st.newsInput.market = t.value; }
+      else if (t.id === "v7-finai-code") { W7.st.newsInput.code = t.value; }
+      else if (t.id === "v7-finai-title") { W7.st.newsInput.title = t.value; }
+    });
+    card.addEventListener("change", function (ev) {
+      var t = ev.target;
+      if (t && t.id === "v7-finai-market" && t.value) { W7.st.newsInput.market = t.value; }
+    });
+  }
+
+  /** fin/ann 摘要卡的执行主体（data-act="fin-ai-run"）。 */
+  function runFinAiSummary() {
+    var box = $("v7-finai-body");
+    if (!box) { return; }
+    var codeEl = $("v7-finai-code"), titleEl = $("v7-finai-title"), mktEl = $("v7-finai-market");
+    var code = ((codeEl && codeEl.value) || "").trim();
+    var title = ((titleEl && titleEl.value) || "").trim();
+    var mkt = (mktEl && mktEl.value) || (W7.st.newsInput && W7.st.newsInput.market) || "a";
+    if (W7.st.newsInput) {
+      W7.st.newsInput.market = mkt;
+      if (code) { W7.st.newsInput.code = code; }
+      if (title) { W7.st.newsInput.title = title; }
+    }
+    if (!code && !title) {
+      box.innerHTML = '<div class="v-empty">请填写公告代码（或公告标题）后再生成摘要</div>';
+      return;
+    }
+    box.innerHTML = '<div class="loading">AI 摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
+    apiJson("/api/ai/summary", {
+      method: "POST",
+      body: JSON.stringify({ market: mkt, code: code, title: title, pub_time: "", doc_url: "" })
+    }).then(function (r) {
+      var target = $("v7-finai-body");
+      if (!target) { return; }
+      if (r.body && r.body.error) {
+        target.innerHTML = '<div class="v-empty">' + esc(r.body.error) + "</div>";
+        return;
+      }
+      target.innerHTML = aiSummaryHtml((r.body && r.body.data) || {}, mkt);
+    }).catch(function () {
+      var b3 = $("v7-finai-body");
       if (b3) { b3.innerHTML = '<div class="v-empty">AI 摘要请求失败（/api/ai/summary）</div>'; }
     });
   }
@@ -251,7 +333,9 @@
   W7.ai = W7.ai || {};
   W7.ai.bindAi = bindAi;
   W7.ai.injectAiTestPanel = injectAiTestPanel;
+  W7.ai.injectFinSummaryCard = injectFinSummaryCard;
   W7.ai.loadAiSummary = loadAiSummary;
   W7.ai.runAiTest = runAiTest;
+  W7.ai.runFinAiSummary = runFinAiSummary;
   W7.ai.saveEdit = saveEdit;
 })();

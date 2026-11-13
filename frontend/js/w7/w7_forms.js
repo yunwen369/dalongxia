@@ -12,6 +12,7 @@
   var preview = function () { return W7.shell.preview.apply(null, arguments); };
   var refreshYjb = function () { return W7.fund.refreshYjb.apply(null, arguments); };
   var runAiTest = function () { return W7.ai.runAiTest.apply(null, arguments); };
+  var runFinAiSummary = function () { return W7.ai.runFinAiSummary.apply(null, arguments); };
   var runBacktest = function () { return W7.portfolio.runBacktest.apply(null, arguments); };
   var runConnectorTests = function () { return W7.misc.runConnectorTests.apply(null, arguments); };
   var runDca = function () { return W7.portfolio.runDca.apply(null, arguments); };
@@ -136,6 +137,10 @@
       }
       if (act === "ai-test") {
         runAiTest();
+        return;
+      }
+      if (act === "fin-ai-run") {
+        runFinAiSummary();
         return;
       }
       if (act === "sys-cache-clear") {

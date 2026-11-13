@@ -109,7 +109,8 @@
 
   /* ---------- 28. 资讯工具（v3.4.0：ai-feed / board-tree / sector-search / financial-detail） ---------- */
   var newsTabState = "AI 资讯流";
-  W7.st.newsInput = { sector: "半导体", code: "", title: "" };
+  /* R14（v3.6.0）：newsInput 增加市场字段（a/hk/us），财报正文 / AI 摘要三市场共用。 */
+  W7.st.newsInput = { sector: "半导体", code: "", title: "", market: "a" };
   /** 输入框优先、状态兜底（12 秒刷新会重建卡片，输入值必须持久）。 */
   function newsVal(id, fallback) {
     var el = $(id);
@@ -144,7 +145,12 @@
           "</div>" +
           '<div class="v7-form" style="margin-bottom:8px">' +
             '<div><label>板块（板块资讯用）</label><input id="v7-news-sector" value="' + esc(W7.st.newsInput.sector) + '"></div>' +
-            '<div><label>公告代码（财报正文 / AI 摘要用）</label><input id="v7-news-code" value="' + esc(W7.st.newsInput.code) + '" placeholder="如 600519"></div>' +
+            '<div><label>市场（财报正文 / AI 摘要用）</label><select id="v7-news-market">' +
+              [["a", "A股"], ["hk", "港股"], ["us", "美股"]].map(function (x) {
+                return '<option value="' + x[0] + '"' + (x[0] === (W7.st.newsInput.market || "a") ? " selected" : "") + ">" + x[1] + "</option>";
+              }).join("") +
+            "</select></div>" +
+            '<div><label>公告代码（财报正文 / AI 摘要用）</label><input id="v7-news-code" value="' + esc(W7.st.newsInput.code) + '" placeholder="A股 600519 / 港股 00700 / 美股 AAPL"></div>' +
             '<div><label>公告标题（AI 摘要用，可空）</label><input id="v7-ai-title" value="' + esc(W7.st.newsInput.title) + '" placeholder="如 2026年第三季度报告"></div>' +
           "</div>" +
           '<div id="v7-news-body"><div class="loading">加载中…</div></div>' +
@@ -156,6 +162,17 @@
       if (t.id === "v7-news-sector") { W7.st.newsInput.sector = t.value; }
       else if (t.id === "v7-news-code") { W7.st.newsInput.code = t.value; }
       else if (t.id === "v7-ai-title") { W7.st.newsInput.title = t.value; }
+    });
+    /* R14：市场下拉用 change 事件（select 不触发 input 兼容路径），输入值必须持久。 */
+    card.addEventListener("change", function (ev) {
+      var t = ev.target;
+      if (t && t.id === "v7-news-market" && t.value) {
+        W7.st.newsInput.market = t.value;
+        var codeEl = $("v7-news-code");
+        if (codeEl && !codeEl.value.trim()) {
+          codeEl.placeholder = t.value === "hk" ? "如 00700" : t.value === "us" ? "如 AAPL" : "如 600519";
+        }
+      }
     });
     loadNews(newsTabState);
   }
@@ -224,11 +241,16 @@
     if (tab === "财报正文") {
       var code = newsVal("v7-news-code", W7.st.newsInput.code);
       if (!code) { put('<div class="v-empty">请填写公告代码</div>'); return; }
-      apiJson("/api/news/financial-detail?market=a&code=" + encodeURIComponent(code) + "&title=").then(function (r) {
+      /* R14：市场取自下拉（默认 a，与 v3.5.0 前行为一致）。有标题时先搜公告列表定位文档，再取正文。 */
+      var mkt = W7.st.newsInput.market || "a";
+      var title = newsVal("v7-ai-title", W7.st.newsInput.title);
+      var detailUrl = "/api/news/financial-detail?market=" + encodeURIComponent(mkt) +
+        "&code=" + encodeURIComponent(code) + "&title=" + encodeURIComponent(title || "");
+      apiJson(detailUrl).then(function (r) {
         var d = (r.body && r.body.data) || {};
         if (r.body && r.body.error) { put('<div class="v-empty">' + esc(r.body.error) + "</div>"); return; }
         var text = d.content || d.text || d.body || "";
-        put(text ? '<div class="v7-hint">' + esc(d.title || "") + '</div><div class="v7-pre">' +
+        put(text ? '<div class="v7-hint">' + esc(d.title || "") + " · 市场 " + esc(mkt.toUpperCase()) + '</div><div class="v7-pre">' +
           esc(String(text).slice(0, 4000)) + "</div>" : '<div class="v-empty">未取到正文（' + esc(d.note || "需从公告列表行传入标题/链接") + "）</div>");
       });
       return;
