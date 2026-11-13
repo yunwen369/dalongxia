@@ -81,6 +81,12 @@ data/*.sqlite
 data/*.sqlite3
 frontend/data/cache/
 
+# ---------- 测试与构建产物（cf5adfa 事故根因修复：outputs/ 曾夹带真实凭据副本误入库，2026-11-13 开源批次起整目录禁入） ----------
+outputs/
+build/
+dist/
+.pytest_cache/
+
 # ---------- 编辑器 / 系统文件 ----------
 .vscode/
 .idea/
