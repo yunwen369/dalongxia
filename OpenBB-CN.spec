@@ -16,6 +16,12 @@
   - 随包资源：frontend（含 vendor/echarts）、assets（图标）、docs（部署文档，v3.6.0）、sdk（§13.6-3）；
   - **不随包**：data/（持仓、token、AI key）、logs/、tests/、tools/（§13.6-4 / 安全门禁）；
   - UPX 关闭：压缩会显著提高杀软启发式误报率（§15.2 误报预案），体积代价可接受。
+  - **V8 运行库（py_mini_racer）必随包**：akshare 的新浪通道（`stock_zh_index_daily` /
+    `stock_zh_a_daily` 等）用 `py_mini_racer.MiniRacer()` 执行新浪返回的 JS。该库按
+    ``sys._MEIPASS/py_mini_racer/{mini_racer.dll,icudtl.dat}`` 定位（见 py_mini_racer/_dll.py
+    `_open_dll` 的 PyInstaller 分支），缺失即抛 `LibNotFoundError`；PyInstaller 不会自动收集其
+    包内 DLL 与 ICU 数据（ctypes 动态加载 + 非 import 依赖），必须显式 collect_all。
+    v3.6.1 修复：此前未收集 → 冻结形态下指数K线（新浪）恒失败（D-1）。
 """
 
 import os
@@ -69,6 +75,35 @@ for package in ('webview', 'pythonnet', 'clr_loader', 'bottle', 'proxy_tools'):
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
+
+# ---------------- V8 运行库：py_mini_racer（必收，v3.6.1 修复 D-1） ----------------
+# akshare 的新浪通道（stock_zh_index_daily / stock_zh_a_daily 等）用 py_mini_racer.MiniRacer()
+# 执行新浪返回的 JS；该库按 sys._MEIPASS/py_mini_racer/{mini_racer.dll,icudtl.dat} 定位
+# （见 py_mini_racer/_dll.py::_open_dll 的 PyInstaller 分支），缺失即抛 LibNotFoundError。
+# PyInstaller 无法静态发现（ctypes 动态加载 + 包内数据文件），必须显式 collect_all；
+# collect_all 的 dest 为包目录名，正好落在 _internal/py_mini_racer/。
+# 注意：必须放在上面 `binaries = []` 初始化之后，否则本次收集会被清空。
+_sw = ('mini_racer.dll', 'icudtl.dat')
+_pmr_datas, _pmr_binaries, _pmr_hidden = collect_all('py_mini_racer')
+# 动态库走 binaries（dest = 包目录名），数据文件走 datas；同一文件不重复登记，避免覆盖冲突
+_bin_names = {os.path.basename(src).lower() for src, _dest in _pmr_binaries}
+datas += [(src, dest) for src, dest in _pmr_datas
+          if os.path.basename(src).lower() not in _bin_names]
+binaries += list(_pmr_binaries)
+hiddenimports += _pmr_hidden
+# fail-fast：两个 V8 文件必须落在 py_mini_racer\ 子目录（库按 sys._MEIPASS/py_mini_racer/ 定位）
+_placed = {os.path.basename(src).lower(): dest.replace("\\", "/")
+           for src, dest in (list(datas) + list(binaries))}
+for _need in _sw:
+    if _need not in _placed:
+        raise SystemExit(
+            f"[spec] V8 运行库缺少 {_need}：py_mini_racer 收集失败，禁止打包"
+            "（冻结形态下 akshare 新浪通道将不可用，D-1）"
+        )
+    if not _placed[_need].endswith("py_mini_racer"):
+        raise SystemExit(f"[spec] V8 运行库 {_need} 落位错误：dest={_placed[_need]}，应为 py_mini_racer\\")
+print(f"[spec] py_mini_racer 已收集：datas={len(_pmr_datas)} binaries={len(_pmr_binaries)} "
+      f"hiddenimports={len(_pmr_hidden)}；落位={ {k: _placed[k] for k in _sw} }")
 
 a = Analysis(
     ['backend/app/main.py'],

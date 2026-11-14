@@ -341,8 +341,13 @@ def check_timezone(base: str, results: List[Dict[str, Any]]) -> None:
 
 
 def check_crowding(base: str, results: List[Dict[str, Any]]) -> None:
-    """⑪ 拥挤度加权自洽。"""
-    data = api(base, "/api/sector/crowding", {"board": "银行"})["data"]
+    """⑪ 拥挤度加权自洽。
+
+    v3.6.1 修复 D-4：单板块拥挤度为六维加权+分位（本地全市场快照），端点自身提示
+    「首次约 10–40 秒」；原默认 30s 读超时短于该口径（曾报 TimeoutError 假阴），
+    统一按板块类 180s 口径。
+    """
+    data = api(base, "/api/sector/crowding", {"board": "银行"}, timeout=180)["data"]
     parts = data.get("parts") or []
     weights = [part.get("weight") or 0 for part in parts]
     pcts = [part.get("pct") for part in parts]

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 import tempfile
 from pathlib import Path
 from typing import Iterator, Optional
@@ -27,6 +28,20 @@ logger = logging.getLogger(__name__)
 
 _APPLIED = False  # 幂等标记，避免重复复制证书与覆盖环境变量
 _CERT_PATH: Optional[Path] = None  # 实际生效的 ASCII 证书路径
+_LAST_NOTE = ""  # 代理对齐结果（供启动后日志复述，见 last_note）
+
+
+def last_note() -> str:
+    """返回代理对齐的结论文案（供日志已就绪后复述）。
+
+    背景：本模块在 datasource 导入期即被调用（必须先于 akshare 导入），
+    而日志文件句柄在 ``main._setup_logging()`` 期间才就绪，此处缓存的结论
+    由启动流程在日志就绪后补记一次，避免「改了环境却无迹可查」。
+
+    Returns:
+        str: 结论文案；无代理变量时为空串。
+    """
+    return _LAST_NOTE
 
 
 def _iter_candidate_dirs() -> Iterator[Path]:
@@ -79,13 +94,89 @@ def _select_cert_dir() -> Optional[Path]:
     return None
 
 
+def _direct_reachable(host: str = "push2his.eastmoney.com", port: int = 443,
+                      timeout: float = 3.0) -> bool:
+    """探测「不经代理的直连」对本项目数据域是否真正可用（v3.6.1 D-7）。
+
+    判据严格：必须取回 **HTTP 响应行**（``HTTP/`` 开头）才算可达。
+    仅 TCP/TLS 建立成功不算——本机实测存在「TLS 握手成功但服务端直接断开、
+    返回 0 字节」的出网策略（东财域），若只判握手会被误判成可达，
+    进而在依赖代理的机器上错误地摘掉代理。
+
+    Args:
+        host: 探测目标主机（取东财 K 线同域，贴合真实调用）。
+        port: 端口。
+        timeout: 连接与读取超时（秒）。
+
+    Returns:
+        bool: 直连可真正取回 HTTP 响应返回 True。
+    """
+    import ssl  # 局部导入：仅探测路径需要
+
+    request = (
+        f"GET / HTTP/1.0\r\nHost: {host}\r\n"
+        "User-Agent: Mozilla/5.0\r\nAccept: */*\r\n\r\n"
+    ).encode("ascii")
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                tls.settimeout(timeout)
+                tls.sendall(request)
+                head = tls.recv(16)
+        reachable = head.startswith(b"HTTP/")
+        if not reachable:
+            logger.info("网络自修复：直连探测无 HTTP 响应（%s，收到 %d 字节）", host, len(head))
+        return reachable
+    except OSError as exc:
+        logger.info("网络自修复：直连探测不可达（%s：%s）", host, type(exc).__name__)
+        return False
+
+
+def _align_akshare_proxy() -> int:
+    """让 akshare 的请求与项目既有策略一致地直连（v3.6.1 修复 D-7，条件化）。
+
+    背景：项目自家请求一律走 ``trust_env=False``（见 :func:`make_session`，规范 §6.5
+    「代理异常时自动回退直连」），但 **akshare 内部直接用 ``requests.get``**，
+    会读取 ``HTTP_PROXY/HTTPS_PROXY`` 环境变量。本机残留（或工具/沙箱注入的）代理
+    不可达或按域拦截时，akshare 东财系接口会整片报 ``ProxyError``，
+    被上游降级链记为 ``NonRetryableError``。
+
+    处置（条件化，避免误伤「必须走代理才能出网」的机器）：
+    1. 进程内无代理变量 → 无需处理；
+    2. 有代理变量且**直连可达** → 移除代理变量，akshare 改直连（与自家请求一致）；
+    3. 有代理变量且直连不可达 → **保留代理不动**（说明该机器依赖代理出网）。
+
+    不打印变量值（代理 URL 可能含凭据），只记录键名与数量。
+
+    Returns:
+        int: 实际移除的变量个数（0 表示未改动）。
+    """
+    keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy")
+    global _LAST_NOTE
+    present = [k for k in keys if os.environ.get(k)]
+    if not present:
+        _LAST_NOTE = ""
+        return 0
+    if not _direct_reachable():
+        _LAST_NOTE = (f"检测到代理变量 {','.join(present)}，但直连不可达 → 保持代理配置不变（D-7）")
+        logger.info("网络自修复：%s", _LAST_NOTE)
+        return 0
+    removed = [k for k in keys if os.environ.pop(k, None) is not None]
+    _LAST_NOTE = f"已移除进程内代理变量 {','.join(removed)}（直连可达，akshare 改直连，D-7）"
+    logger.info("网络自修复：%s", _LAST_NOTE)
+    return len(removed)
+
+
 def apply_netfix() -> Optional[Path]:
     """执行网络环境自修复（幂等）。
 
     动作：
-    1. 把 certifi 的 cacert.pem 复制到纯 ASCII 目录；
-    2. 注入 CURL_CA_BUNDLE / SSL_CERT_FILE / REQUESTS_CA_BUNDLE；
-    3. 记录日志（仅路径，不含任何密钥）。
+    1. 让 akshare 与自家请求一致地直连（条件化，见 :func:`_align_akshare_proxy`）；
+    2. 把 certifi 的 cacert.pem 复制到纯 ASCII 目录；
+    3. 注入 CURL_CA_BUNDLE / SSL_CERT_FILE / REQUESTS_CA_BUNDLE；
+    4. 记录日志（仅路径/键名，不含任何密钥）。
 
     Returns:
         Optional[Path]: 生效的证书路径；失败时返回 None，调用方可继续运行。
@@ -95,6 +186,7 @@ def apply_netfix() -> Optional[Path]:
         return _CERT_PATH
 
     _APPLIED = True
+    _align_akshare_proxy()
     source = Path(certifi.where())
     target_dir = _select_cert_dir()
     if target_dir is None:

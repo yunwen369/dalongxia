@@ -280,9 +280,12 @@ def gate(target: Path, port: int) -> bool:
     Notes:
         阶段 9：pyflakes 静态检查与全量 pytest 已并入 ``tools/release_gate.py``，
         本函数不再单独实现，避免两套门禁漂移；任一步失败即禁止发版。
+        v3.6.1：显式加 ``-u``（无缓冲）——v3.6.0 批次曾因 stdout 全缓冲导致门禁
+        在 pytest 期间长时间 0 字节输出，被误判为「假死」。
     """
     script = PROJECT_DIR / "tools" / "release_gate.py"
-    code = _run([sys.executable, str(script), "--artifact", str(target), "--port", str(port)],
+    code = _run([sys.executable, "-u", str(script), "--artifact", str(target),
+                 "--port", str(port)],
                 PROJECT_DIR, "发版门禁（打包产物实测）")
     return code == 0
 

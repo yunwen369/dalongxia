@@ -365,7 +365,7 @@ def sector_kline(
             key="sector:kline",
         )
 
-    result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
+    result = cache.get_or_load(cache_key, utils.kline_cache_ttl(), loader)
     if result.get("error"):
         # 空/错分离（原型 §7.1）：板块名写错属空态（给下一步动作），
         # 通道故障属错误态（可重试）。第八轮起同花顺已走纯 HTTP，不再有
@@ -583,7 +583,7 @@ def sector_trend(
             validator=lambda value: bool(value.get("series")),
         )
 
-    result = cache.get_or_load(cache_key, config.TTL["kline"], loader)
+    result = cache.get_or_load(cache_key, utils.kline_cache_ttl(), loader)
     if result.get("error"):
         return failure_pack(result, {"series": [], "boards": names})
     data = result["data"] or {}

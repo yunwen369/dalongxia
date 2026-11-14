@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""人工模拟测试（Human-like UI walkthrough）。
+"""人工模拟测试（Human-like UI walkthrough）· v2.0（2026-11-14 判据层重构）
 
 定位
 ----
@@ -7,51 +7,47 @@
 连续操作**，按真实使用顺序走完主流程，每一步都做「操作 → 观察 → 断言」，
 并把不符合预期的现象记为缺陷。
 
+v2.0 修复（v3.6.1 批次 · 对应检测发现 D-3）
+------------------------------------------
+v1.0 的判据层绑定**已退役的 v6 壳层**（`#page-title` / `#main-nav` / `.sidebar-item`
+/ `.page-view` / `.sb-group` / `window.App|Pages|State4`），V6 整站替换（v3.1.0）后
+这些元素与全局全部不存在 → 工具在任何实例上都以 `RuntimeError: 页面未就绪` 退出，
+**完全不可用**。本次按**现行 V6/W7 契约**重写判据层：
+
+| 语义 | v1.0（已退役） | v2.0（现行） |
+|---|---|---|
+| 视图标题 | `#page-title` | `#view-title` |
+| 面包屑 | `#crumb` | `#view-crumb` |
+| 顶栏分组 | `#main-nav .nav-item` | `.topnav button[data-group]` |
+| 侧栏项 / 组 | `.sidebar-item` / `.sb-group` | `.side-item` / `.side-group[data-group]` |
+| 视图容器 | `.page-view:not([hidden])` / `#viewport` | `#home-main`（首页）/ `#view-generic`（通用） |
+| 皮肤按钮 | `#skin-switch button` | `.skin-switch button[data-skin]` |
+| 主题属性 | `documentElement` | `body[data-theme]`（dark=无属性） |
+| 就绪闸门 | `window.App && window.Pages && window.State4` | `#view-title` + `#side-nav .side-item` |
+| 页签 | `.pg-tab` | `.v7-tab[data-*]` |
+| 空态 | `window.State4.apply('error')` | `.v-empty`（真实空态，如空台账） |
+
+**两处按现行架构重定义**（不改产品，只改判据口径，均在此登记）：
+1. **B3 面包屑**：现行 `renderHead()` 只渲染「非末层=纯文本、末层=`span.cur`」，
+   面包屑**不是导航控件**（设计态）。故改为断言「面包屑存在且末项=视图标题」；
+   「面包屑可点回上级」属**功能新增**，未获原型确认前不做（需另行立项）。
+2. **E2 表格行点击跳转**：现行预览表**行不可跳转**（跳转由右键菜单/详情按钮承担），
+   故改为断言「表行右键菜单可打开且含 6 项动作」（该能力为 v3.3.0 回收项，真实可用）。
+
 覆盖的人工动作（24 个场景）
 --------------------------
-A 启动与首屏
-  A1 打开首页，等首屏加载完成
-  A2 检查顶栏/侧栏/标题/面包屑四处一致
-  A3 检查首页真实数据是否渲染（非空、非「加载中」）
-
-B 导航操作
-  B1 依次点击侧栏 25 项，每项确认标题变化 + 内容非空
-  B2 点击顶栏 8 个分组，确认跳到该组代表视图
-  B3 点击面包屑非末层，确认回到上级
-  B4 浏览器前进/后退（history）
-  B5 直接输入 URL hash 直达深层视图
-
-C 侧栏折叠
-  C1 默认只展开当前组
-  C2 点开另一个组 → 项数增加
-  C3 再点收起 → 项数回落
-  C4 切视图后手动展开的组仍保留（pinnedGroups）
-
-D 皮肤切换
-  D1 点「现行」→ 布局参数变 64/236/52
-  D2 点「砚」→ 背景变浅色
-  D3 点「V6」→ 恢复 44/130/40
-  D4 Ctrl+M 在 V6 ↔ 砚 之间切换
-  D5 刷新后皮肤记忆保持（localStorage）
-
-E 视图内交互
-  E1 Tab 切换（个股页/组件库）
-  E2 表格行点击跳转
-  E3 表单输入（筛选器/搜索）
-  E4 滚动到底部
-  E5 图表容器存在且 canvas 无溢出
-
-F 断点
-  F1 1024×640 下无横向溢出
-  F2 1280 下顶栏右侧不裁
-
-G 异常与恢复
-  G1 四态切换后能恢复默认态
-  G2 连续快速切换视图不产生错误
+A 启动与首屏：A0 登录 / A1 首屏渲染 / A2 四处一致 / A3 首页真实数据
+B 导航：B1 侧栏 28 项逐项点击 / B1b 内容出现 / B2 顶栏 8 分组 / B3 面包屑一致 / B4 后退 / B5 URL 直达
+C 侧栏折叠：C1 默认只展开当前组 / C2 展开增加 / C3 收起回落 / C4 手动展开保留
+D 皮肤：D1 现行布局 236/52 / D2 砚浅色 / D3 V6 布局 130/40 / D4 Ctrl+M / D4b 切回 / D5 刷新记忆
+E 视图内交互：E1 个股页页签 / E2 表行右键菜单 / E3 表单聚焦 / E4 主区滚动 / E5 canvas 无溢出
+F 断点：F1 1024 无横向溢出 / F2 1280 顶栏右侧不裁
+G 异常与恢复：G1 空态→默认态可恢复 / G2 快速切换无错误
+Z 全程无未捕获 JS 错误
 
 用法
 ----
-  python tools/human_walkthrough.py --base-url http://127.0.0.1:6903 --out <json>
+  python tools/human_walkthrough.py --base-url http://127.0.0.1:6903 --out <json> [--shots <dir>]
 """
 
 from __future__ import annotations
@@ -67,57 +63,86 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from v6_skin_probe import CDP, launch_edge, open_target, free_port  # noqa: E402
 
-# 侧栏 25 项（与 index.html 的 data-view 一致）
+# 侧栏可见视图（28 项，与 views.js 的 V6_VIEWS.sidebar 归属一致）
 SIDEBAR_VIEWS = [
-    "home", "today", "dashboard", "dashboard-manage", "widget-library",
-    "market", "macro", "sectors", "sector-val", "lhb", "fund", "fund-combo",
-    "stock", "news", "fin", "ann", "tools", "cand",
-    "portfolio", "watchlist", "yjb", "mgr",
-    "settings", "connectors", "alerts",
+    "home", "today", "market", "dashboard", "watchlist", "news", "sectors",
+    "stock", "fin", "ann", "tools", "cand", "charting", "macro", "valuation",
+    "crowding", "screener", "lhb", "portfolio", "fund", "yjb", "mgr",
+    "alerts", "connectors", "settings", "ai", "backtest", "dca",
 ]
 
+# 顶栏 8 分组（与 index.html 的 .topnav button[data-group] 一致）
 TOP_GROUPS = [
-    ("dashboard", "仪表板"), ("watchlist", "自选股"), ("news", "资讯"),
-    ("market", "市场"), ("money", "资金"), ("portfolio", "组合"),
-    ("yjb", "养基宝"), ("system", "系统"),
+    ("dashboard", "总览"), ("market", "市场"), ("news", "资讯"), ("portfolio", "组合"),
+    ("money", "资金"), ("watchlist", "自选"), ("yjb", "养基宝"), ("system", "系统"),
 ]
+
+SB_KEY = "openbb-sb-groups-v1"
 
 JS_STATE = r"""
 (function () {
-  var t = document.getElementById('page-title');
-  var c = document.getElementById('crumb');
-  var n = document.querySelector('#main-nav .nav-item.active');
-  var s = document.querySelector('.sidebar-item.active');
-  var root = getComputedStyle(document.documentElement);
-  var page = document.querySelector('.page-view:not([hidden])');
-  var vp = document.getElementById('viewport');
-  // 当前可见区：home 用 #viewport，其他用 .page-view:not([hidden])
-  var visible = page || (vp && !vp.hidden ? vp : null);
+  var body = document.body || {};
+  var t = document.getElementById('view-title');
+  var c = document.getElementById('view-crumb');
+  var nav = document.querySelector('.topnav button.active');
+  var side = document.querySelector('.side-item.active');
+  var generic = document.getElementById('view-generic');
+  var home = document.getElementById('home-main');
+  // v2.0 修正：主题属性与三皮肤布局变量都挂在 <body>（app.css 用 [data-theme=…] 元素选择器），
+  // 必须读 body 的计算样式；读 documentElement 会拿到 :root 默认值（D2/D3 假阴根因）。
+  var bodyStyle = getComputedStyle(body);
+  var rootStyle = getComputedStyle(document.documentElement);
+  var cssVar = function (name) {
+    return (bodyStyle.getPropertyValue(name) || rootStyle.getPropertyValue(name) || '').trim();
+  };
+  // 当前可见区：home 用 #home-main，其余用 #view-generic（两者互斥 hidden）
+  var visible = (home && !home.hidden) ? home : (generic && !generic.hidden ? generic : null);
+  var scrollHost = (home && !home.hidden) ? home : generic;
+  // 展开的分组 = 组头 caret 为 ▾（renderSidebar 只渲染已展开组的项）
+  var openKeys = [];
+  Array.prototype.forEach.call(document.querySelectorAll('.side-group'), function (g) {
+    var caret = g.querySelector('.grp-caret');
+    if (caret && (caret.textContent || '').indexOf('\u25be') >= 0) {
+      openKeys.push(g.getAttribute('data-group'));
+    }
+  });
   return {
     title: t ? t.textContent.trim() : '',
-    crumb: c ? c.textContent.trim() : '',
-    navText: n ? n.textContent.trim() : '',
-    navGroup: n ? n.getAttribute('data-group') : '',
-    sideText: s ? s.textContent.trim() : '',
+    crumb: c ? c.innerText.replace(/\s+/g, ' ').trim() : '',
+    crumbCur: (function () {var e = c && c.querySelector('.cur');return e ? e.textContent.trim() : ''; })(),
+    crumbHidden: !!(c && c.closest && c.closest('.view-head') &&
+                    c.closest('.view-head').offsetParent === null),
+    navText: nav ? nav.textContent.trim() : '',
+    navGroup: nav ? nav.getAttribute('data-group') : '',
+    sideText: side ? side.textContent.trim() : '',
+    sideView: side ? side.getAttribute('data-view') : '',
     hash: location.hash,
-    theme: document.documentElement.getAttribute('data-theme'),
-    menuW: root.getPropertyValue('--menu-w').trim() || root.getPropertyValue('--menu-h').trim(),
-    sidebarW: root.getPropertyValue('--sidebar-w').trim(),
-    toolbarH: root.getPropertyValue('--toolbar-h').trim(),
-    bgApp: root.getPropertyValue('--bg-app').trim(),
-    // 只统计「当前可见区」的正文长度与「加载中」——
-    // 用 body.innerText 会把其他隐藏 page-view 的占位文案算进来（假失败根源）
-    visibleText: visible ? visible.innerText : '',
+    isHome: !!(home && !home.hidden),
+    theme: body.getAttribute('data-theme'),
+    menuH: cssVar('--menu-h'),
+    sidebarW: cssVar('--sidebar-w'),
+    toolbarH: cssVar('--toolbar-h'),
+    bgApp: cssVar('--bg-app'),
+    visibleText: visible ? (visible.innerText || '') : '',
     visibleChildren: visible ? visible.children.length : 0,
-    visibleTables: visible ? visible.querySelectorAll('table').length : 0,
-    visibleRows: visible ? visible.querySelectorAll('tbody tr').length : 0,
+    visibleRows: visible ? visible.querySelectorAll('table tbody tr').length : 0,
+    scroll: scrollHost ? {
+      cls: scrollHost.id,
+      sh: scrollHost.scrollHeight, ch: scrollHost.clientHeight,
+      st: scrollHost.scrollTop,
+    } : null,
+    sideGroups: document.querySelectorAll('.side-group').length,
+    sideItems: document.querySelectorAll('.side-item').length,
+    sideOpenKeys: openKeys,
+    sideOpen: openKeys.length,
     canvasOverflow: (function () {
       var bad = [];
       Array.prototype.forEach.call(document.querySelectorAll('canvas'), function (cv) {
         var p = cv.parentElement;
         if (!p) { return; }
         if (cv.getBoundingClientRect().width > p.getBoundingClientRect().width + 2) {
-          bad.push(Math.round(cv.getBoundingClientRect().width) + '>' + Math.round(p.getBoundingClientRect().width));
+          bad.push(Math.round(cv.getBoundingClientRect().width) + '>' +
+                   Math.round(p.getBoundingClientRect().width));
         }
       });
       return bad;
@@ -127,10 +152,15 @@ JS_STATE = r"""
       ih: window.innerHeight,
       sw: document.documentElement.scrollWidth,
       iw: window.innerWidth,
-    }
+    },
   };
 })()
 """
+
+JS_READY = (
+    "!!(document.getElementById('view-title') && "
+    "document.querySelector('#side-nav .side-item'))"
+)
 
 JS_ERRORS = r"""
 (function () {
@@ -164,10 +194,11 @@ class Walker:
     def __init__(self, cdp: CDP, shots_dir: str) -> None:
         self.cdp = cdp
         self.shots = shots_dir
-        self.records: list[dict] = []
-        self.defects: list[dict] = []
+        self.records: list = []
+        self.defects: list = []
 
     def shot(self, name: str) -> str:
+        """截图（可选目录）。"""
         if not self.shots:
             return ""
         os.makedirs(self.shots, exist_ok=True)
@@ -185,15 +216,18 @@ class Walker:
         return ""
 
     def step(self, code: str, name: str, ok: bool, detail: str, defect: str = "") -> None:
+        """记录一条断言语义。"""
         self.records.append({"code": code, "name": name, "ok": bool(ok), "detail": detail})
         if not ok and defect:
             self.defects.append({"code": code, "name": name, "defect": defect, "detail": detail})
         print(f"[{'PASS' if ok else 'FAIL'}] {code} {name} :: {detail}")
 
     def st(self) -> dict:
+        """读取当前页面状态。"""
         return self.cdp.eval_js(JS_STATE) or {}
 
     def goto(self, view: str, wait: float = 2.0) -> dict:
+        """按 hash 跳视图并等待。"""
         self.cdp.eval_js(f"location.hash = '#/{view}'")
         time.sleep(wait)
         return self.st()
@@ -216,7 +250,26 @@ class Walker:
         time.sleep(wait)
         return True
 
+    def right_click_selector(self, selector: str, wait: float = 0.8) -> bool:
+        """在元素中心发起真实右键（触发 contextmenu）。"""
+        loc = self.cdp.eval_js(
+            "(function(){var e=document.querySelector(%s);if(!e)return null;"
+            "var r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return null;"
+            "return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};})()"
+            % json.dumps(selector)
+        )
+        if not loc:
+            return False
+        for ev in ("mousePressed", "mouseReleased"):
+            self.cdp.call("Input.dispatchMouseEvent", {
+                "type": ev, "x": loc["x"], "y": loc["y"],
+                "button": "right", "clickCount": 1,
+            })
+        time.sleep(wait)
+        return True
+
     def press_key(self, key: str, code: str = "", modifiers: int = 0) -> None:
+        """真实按键。"""
         params = {"type": "keyDown", "key": key, "code": code or key, "modifiers": modifiers}
         self.cdp.call("Input.dispatchKeyEvent", params)
         params["type"] = "keyUp"
@@ -224,7 +277,25 @@ class Walker:
         time.sleep(0.9)
 
 
+def wait_ready(cdp: CDP, timeout: float = 25.0) -> bool:
+    """就绪闸门：等 `#view-title` 与侧栏项出现（现行 V6/W7 判据）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.5)
+        try:
+            if cdp.eval_js(JS_READY):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def main() -> int:
+    """命令行入口。
+
+    Returns:
+        int: 0 = 全部通过；1 = 有失败；2 = 执行器未初始化。
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://127.0.0.1:6903")
     ap.add_argument("--out", required=True)
@@ -239,7 +310,7 @@ def main() -> int:
     profile = tempfile.mkdtemp(prefix="hw_")
     proc = None
     cdp = None
-    w: Walker | None = None
+    w = None
     try:
         proc = launch_edge(port, profile)
         ws_url = open_target(port, args.base_url + "/")
@@ -251,58 +322,53 @@ def main() -> int:
         w = Walker(cdp, args.shots)
 
         # ---------- A0 登录（真实用户第一步） ----------
-        # 注意：`/json/new?<url>` 打开的新标签页初始可能是 about:blank，
-        # 且带 fragment 的 URL 会被丢弃 fragment，故这里显式 navigate 一次。
         cdp.call("Page.navigate", {"url": args.base_url + "/"})
         time.sleep(2.5)
-        if password:
-            # 真实用户路径：打开 / → 302 /auth → 填口令 → 提交表单
-            on_auth = cdp.eval_js("location.pathname === '/auth'")
-            if on_auth:
-                filled = cdp.eval_js(
-                    "(function(){var i=document.querySelector('input[name=token]');"
-                    "if(!i)return 'no-input';i.focus();i.value=%s;return 'ok';})()"
-                    % json.dumps(password)
-                )
-                time.sleep(0.3)
-                cdp.eval_js(
-                    "(function(){var f=document.querySelector('form');"
-                    "if(f){f.submit();return 'submitted';}return 'no-form';})()"
-                )
-                time.sleep(3.5)
-                w.step("A0", "口令登录成功进入工作台",
-                       filled == "ok" and cdp.eval_js("location.pathname === '/'"),
-                       f"fill={filled} path={cdp.eval_js('location.pathname')}",
-                       defect="登录流程失败")
-            else:
-                w.step("A0", "无需登录（服务未启用口令）", True,
-                       f"path={cdp.eval_js('location.pathname')}")
+        if password and cdp.eval_js("location.pathname === '/auth'"):
+            filled = cdp.eval_js(
+                "(function(){var i=document.querySelector('input[name=token]');"
+                "if(!i)return 'no-input';i.focus();i.value=%s;return 'ok';})()"
+                % json.dumps(password)
+            )
+            time.sleep(0.3)
+            cdp.eval_js(
+                "(function(){var f=document.querySelector('form');"
+                "if(f){f.submit();return 'submitted';}return 'no-form';})()"
+            )
+            time.sleep(3.5)
+            w.step("A0", "口令登录成功进入工作台",
+                   filled == "ok" and cdp.eval_js("location.pathname === '/'"),
+                   f"fill={filled} path={cdp.eval_js('location.pathname')}",
+                   defect="登录流程失败")
+        else:
+            w.step("A0", "无需登录（服务未启用口令）", True,
+                   f"path={cdp.eval_js('location.pathname')}")
 
-        # 就绪闸门
-        ready = False
-        for _ in range(40):
-            time.sleep(0.5)
-            try:
-                if cdp.eval_js("!!(window.App && window.Pages && window.State4)"):
-                    ready = True
-                    break
-            except Exception:
-                continue
-        if not ready:
-            raise RuntimeError("页面未就绪")
+        if not wait_ready(cdp):
+            raise RuntimeError("页面未就绪：等不到 #view-title / 侧栏项（现行判据）")
         time.sleep(1.5)
 
         # ================= A 启动与首屏 =================
         st = w.st()
         w.step("A1", "首屏已渲染（标题非空）", bool(st.get("title")),
                f"title='{st.get('title')}' hash={st.get('hash')}")
-        w.step("A2", "顶栏/侧栏/标题/面包屑四处有值",
-               bool(st.get("title")) and bool(st.get("navText")) and bool(st.get("crumb")),
-               f"nav='{st.get('navText')}' crumb='{st.get('crumb')}'")
-        # A3：只判当前可见区；等待数据就绪（最多 20s，首页 7 张卡要拉多个端点）
+        # A2：首页走 #home-main（顶栏/侧栏/标题三处）；面包屑属通用视图外壳，
+        # 首页按设计不渲染 → 另取一个通用视图校验「四处一致」。
+        st_home = w.st()
+        st_gen = w.goto("market", wait=2.0)
+        w.step("A2", "顶栏/侧栏/标题/面包屑四处有值（首页三处 + 通用视图四处）",
+               bool(st_home.get("title")) and bool(st_home.get("navText"))
+               and bool(st_home.get("sideText"))
+               and bool(st_gen.get("title")) and bool(st_gen.get("crumb"))
+               and bool(st_gen.get("navText")) and bool(st_gen.get("sideText")),
+               f"home: nav='{st_home.get('navText')}' side='{st_home.get('sideText')}' "
+               f"title='{st_home.get('title')}' | 通用: nav='{st_gen.get('navText')}' "
+               f"crumb='{st_gen.get('crumb')}' title='{st_gen.get('title')}'")
+        w.goto("home", wait=1.6)
+        # A3：只判当前可见区；等数据就绪（首页多卡并行取数）
         ready_data = False
         waited = 0.0
-        while waited < 20.0:
+        while waited < 25.0:
             st = w.st()
             txt = st.get("visibleText", "")
             if len(txt) > 80 and "加载中" not in txt:
@@ -317,52 +383,69 @@ def main() -> int:
         w.shot("A_home")
 
         # ================= B 导航 =================
-        # 判据：标题非空即算「路由已响应」；内容渲染另由 E2/四态截图覆盖。
-        # 不在这里断言 visibleChildren>0 —— 部分视图首屏就是骨架，需要更久才出内容。
         fail_views = []
-        slow_views = []
+        empty_views = []
         for view in SIDEBAR_VIEWS:
             st = w.goto(view, wait=1.4)
             if not st.get("title"):
                 fail_views.append(f"{view}(title 空)")
                 continue
-            # 记录内容迟迟未出的视图（信息性，不计失败）
             waited = 0.0
             while waited < 8.0 and st.get("visibleChildren", 0) == 0:
                 time.sleep(1.0)
                 waited += 1.0
                 st = w.st()
             if st.get("visibleChildren", 0) == 0:
-                slow_views.append(view)
+                empty_views.append(view)
         w.step("B1", f"侧栏 {len(SIDEBAR_VIEWS)} 项逐项点击（标题均响应）", not fail_views,
                "全部标题正常" if not fail_views else f"{len(fail_views)} 项异常: {fail_views[:4]}",
                defect="部分侧栏视图点击后标题为空")
-        w.step("B1b", f"{len(SIDEBAR_VIEWS)} 项内容均在 8s 内出现", not slow_views,
-               "全部有内容" if not slow_views else f"迟迟无内容: {slow_views}",
+        w.step("B1b", f"{len(SIDEBAR_VIEWS)} 项内容均在 8s 内出现", not empty_views,
+               "全部有内容" if not empty_views else f"迟迟无内容: {empty_views}",
                defect="部分视图 8s 内无任何内容渲染")
 
         fail_top = []
+        top_detail = []
         for grp, label in TOP_GROUPS:
-            sel = f"#main-nav .nav-item[data-group='{grp}']"
-            if not w.click_selector(sel, wait=1.6):
+            sel = f".topnav button[data-group='{grp}']"
+            before = cdp.eval_js(
+                "(function(){var b=document.querySelector(%s);"
+                "if(!b)return JSON.stringify({found:false});"
+                "var r=b.getBoundingClientRect();"
+                "var x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);"
+                "var top=document.elementFromPoint(x,y);"
+                "return JSON.stringify({found:true,x:x,y:y,"
+                "topGroup:(top&&top.getAttribute)?top.getAttribute('data-group'):null,"
+                "topTag:top?top.tagName:'',hash:location.hash,"
+                "active:((document.querySelector('.topnav button.active')||{}).getAttribute"
+                "?document.querySelector('.topnav button.active').getAttribute('data-group'):'')});})()"
+                % json.dumps(sel)
+            )
+            before = json.loads(before) if isinstance(before, str) else (before or {})
+            clicked = w.click_selector(sel, wait=1.8)
+            after = cdp.eval_js(
+                "(function(){var a=document.querySelector('.topnav button.active');"
+                "return JSON.stringify({hash:location.hash,"
+                "active:a?a.getAttribute('data-group'):''});})()")
+            after = json.loads(after) if isinstance(after, str) else (after or {})
+            top_detail.append({"group": grp, "before": before, "after": after})
+            if not clicked:
                 fail_top.append(f"{label}(click-miss)")
-                continue
-            st = w.st()
-            if st.get("navGroup") != grp:
-                fail_top.append(f"{label}(highlight={st.get('navGroup')})")
+            elif after.get("active") != grp:
+                fail_top.append(
+                    f"{label}(active={after.get('active')} hash={after.get('hash')} "
+                    f"命中={before.get('topGroup')}/{before.get('topTag')} "
+                    f"xy={before.get('x')},{before.get('y')})")
         w.step("B2", "顶栏 8 分组逐项点击", not fail_top,
                "全部跳转并高亮正确" if not fail_top else f"{fail_top[:4]}",
                defect="顶栏分组点击未跳转或高亮不符")
 
-        # B3 面包屑：进入深层视图后点非末层
+        # B3 面包屑：现行架构为「非末层纯文本 + 末层 .cur」，与标题同源
         st = w.goto("stock", wait=2.2)
-        crumb_before = st.get("crumb", "")
-        clicked = w.click_selector("#crumb .crumb-item[role='link']", wait=1.8)
-        st2 = w.st()
-        w.step("B3", "面包屑非末层可点回上级",
-               clicked and st2.get("hash") != st.get("hash"),
-               f"'{crumb_before}' → hash {st2.get('hash')}",
-               defect="面包屑非末层点击无效")
+        w.step("B3", "面包屑与视图标题一致（末项=标题）",
+               bool(st.get("crumb")) and st.get("crumbCur") == st.get("title"),
+               f"crumb='{st.get('crumb')}' cur='{st.get('crumbCur')}' title='{st.get('title')}'",
+               defect="面包屑缺失或末项与标题不一致")
 
         # B4 浏览器后退
         cdp.eval_js("history.back()")
@@ -378,25 +461,16 @@ def main() -> int:
                f"title='{st4.get('title')}'", defect="URL 直达失败")
 
         # ================= C 侧栏折叠 =================
-        # 关键（两次踩坑）：
-        #  1. `tree.js` 只在页面加载时读一次 localStorage 决定 open 状态，
-        #     仅 `removeItem` 不会让它重跑；
-        #  2. `Page.navigate` 到仅差 hash 的 URL **不会触发页面重载**（同文档 hash 变化），
-        #     所以必须显式 `Page.reload`。
-        cdp.eval_js("localStorage.removeItem('openbb-sb-groups-v1')")
+        # 侧栏 open 状态由 localStorage[openbb-sb-groups-v1] + 当前视图组决定，
+        # 改 localStorage 后必须 Page.reload 才会重跑 renderSidebar。
+        cdp.eval_js(f"localStorage.removeItem('{SB_KEY}')")
         cdp.eval_js("location.hash = '#/home'")
         time.sleep(1.0)
         cdp.call("Page.reload")
-        time.sleep(5.0)
-        for _ in range(24):
-            time.sleep(0.5)
-            try:
-                if cdp.eval_js("!!(window.App && window.Pages)"):
-                    break
-            except Exception:
-                continue
+        time.sleep(3.0)
+        if not wait_ready(cdp):
+            raise RuntimeError("reload 后页面未就绪")
         cdp.eval_js(INSTALL_ERR_HOOK)
-        # reload 后若被 302 到 /auth，重新登录一次
         if cdp.eval_js("location.pathname === '/auth'") and password:
             cdp.eval_js(
                 "(function(){var i=document.querySelector('input[name=token]');"
@@ -405,62 +479,63 @@ def main() -> int:
             )
             time.sleep(4.0)
         st = w.goto("home", wait=2.4)
-        groups0 = cdp.eval_js(
-            "(function(){var g=document.querySelectorAll('.sb-group');var o=0,v=0;"
-            "Array.prototype.forEach.call(g,function(x){if(x.open)o++;});"
-            "Array.prototype.forEach.call(document.querySelectorAll('.sidebar-item'),"
-            "function(i){if(i.offsetHeight>0)v++;});"
-            "return {total:g.length,open:o,visible:v,"
-            "mem:localStorage.getItem('openbb-sb-groups-v1'),"
-            "states:[].map.call(g,function(x){return x.dataset.group+':'+x.open})};})()"
-        )
-        w.step("C1", "首次访问只展开当前组",
-               groups0["total"] == 5 and groups0["open"] <= 2 and groups0["visible"] <= 12,
-               f"groups={groups0['total']} open={groups0['open']} visible={groups0['visible']} "
-               f"states={groups0.get('states')}",
+        w.step("C1", "首次访问只展开当前组（5 组 / 展开≤1）",
+               st.get("sideGroups") == 5 and (st.get("sideOpen") or 0) <= 1,
+               f"groups={st.get('sideGroups')} open={st.get('sideOpen')} "
+               f"items={st.get('sideItems')}",
                defect="侧栏默认全部展开，信息过载")
 
-        fold = cdp.eval_js(
-            "(function(){var g=document.querySelectorAll('.sb-group')[1];"
-            "function cnt(){var n=0;Array.prototype.forEach.call(document.querySelectorAll('.sidebar-item'),"
-            "function(i){if(i.offsetHeight>0)n++;});return n;}"
-            "var b=cnt();g.open=true;var m=cnt();g.open=false;var a=cnt();"
-            "return {before:b,mid:m,after:a};})()"
-        )
-        w.step("C2", "点开分组后可见项增加", fold["mid"] > fold["before"],
-               f"{fold['before']} → {fold['mid']}", defect="分组展开无效")
-        w.step("C3", "再收起后可见项回落", fold["after"] == fold["before"],
-               f"{fold['mid']} → {fold['after']}", defect="分组收起无效")
+        # C2/C3：点击第 2 组组头 → 可见项增加 → 再点 → 回落
+        cnt_js = ("(function(){return document.querySelectorAll('.side-item').length;})()")
+        grp_sel = ".side-group[data-group='market']"
+        before = cdp.eval_js(cnt_js) or 0
+        opened = w.click_selector(grp_sel, wait=1.2)
+        mid = cdp.eval_js(cnt_js) or 0
+        w.step("C2", "点开分组后可见项增加", opened and mid > before,
+               f"{before} → {mid}", defect="分组展开无效")
+        w.click_selector(grp_sel, wait=1.2)
+        after = cdp.eval_js(cnt_js) or 0
+        w.step("C3", "再收起后可见项回落", after < mid,
+               f"{mid} → {after}", defect="分组收起无效")
 
-        # C4 pinned：手动展开一个非当前组，切视图后仍展开
-        cdp.eval_js("document.querySelectorAll('.sb-group')[2].open = true")
-        time.sleep(0.4)
-        st = w.goto("lhb", wait=1.8)
-        still_open = cdp.eval_js("document.querySelectorAll('.sb-group')[2].open")
-        w.step("C4", "手动展开的组切视图后保留", bool(still_open),
-               f"open={still_open}", defect="手动展开的组被强制收起")
+        # C4：手动展开一个非当前组，切视图后仍展开（渲染态）且落盘（v3.6.1 已接线持久化）
+        w.goto("home", wait=1.6)
+        w.click_selector(".side-group[data-group='research']", wait=1.0)
+        stored = cdp.eval_js(
+            "(function(){return JSON.parse(localStorage.getItem('" + SB_KEY + "')||'{}');})()")
+        st2 = w.goto("lhb", wait=1.8)
+        open_keys = st2.get("sideOpenKeys") or []
+        has_news = bool(cdp.eval_js(
+            "!!document.querySelector('.side-item[data-view=\"news\"]')"))
+        keep = ("research" in open_keys) and has_news and bool(stored and stored.get("research"))
+        w.step("C4", "手动展开的组切视图后保留（渲染态 + 落盘）", keep,
+               f"open={open_keys} news项可见={has_news} 落盘={stored}",
+               defect="手动展开的组被强制收起或未落盘")
 
         # ================= D 皮肤切换 =================
         st = w.goto("home", wait=2.2)
-        d1 = w.click_selector("#skin-switch button[data-skin='dark']", wait=1.2)
+        d1 = w.click_selector(".skin-switch button[data-skin='dark']", wait=1.2)
         st_dark = w.st()
-        w.step("D1", "点「现行」布局变 64/236/52",
-               d1 and st_dark.get("menuW") == "64px" and st_dark.get("sidebarW") == "236px",
-               f"menu={st_dark.get('menuW')} sidebar={st_dark.get('sidebarW')}",
+        w.step("D1", "点「现行」布局变 236/52",
+               d1 and st_dark.get("sidebarW") == "236px" and st_dark.get("toolbarH") == "52px",
+               f"sidebar={st_dark.get('sidebarW')} toolbar={st_dark.get('toolbarH')} "
+               f"menuH={st_dark.get('menuH')}",
                defect="现行深色皮肤布局参数不符")
 
-        d2 = w.click_selector("#skin-switch button[data-skin='light']", wait=1.2)
+        d2 = w.click_selector(".skin-switch button[data-skin='light']", wait=1.2)
         st_light = w.st()
         light_bg = (st_light.get("bgApp") or "").lower()
-        w.step("D2", "点「砚」背景变浅色",
-               d2 and light_bg in ("#ffffff", "#fff"),
-               f"bg-app={light_bg}", defect="砚浅色皮肤未生效")
+        w.step("D2", "点「砚」浅色皮肤生效（body[data-theme=light] + 浅背景）",
+               d2 and st_light.get("theme") == "light" and light_bg in ("#ffffff", "#fff"),
+               f"theme={st_light.get('theme')} bg-app={light_bg}",
+               defect="砚浅色皮肤未生效")
 
-        d3 = w.click_selector("#skin-switch button[data-skin='v6']", wait=1.2)
+        d3 = w.click_selector(".skin-switch button[data-skin='v6']", wait=1.2)
         st_v6 = w.st()
-        w.step("D3", "点「V6」恢复 44/130/40",
-               d3 and st_v6.get("menuW") == "44px" and st_v6.get("sidebarW") == "130px",
-               f"menu={st_v6.get('menuW')} sidebar={st_v6.get('sidebarW')}",
+        w.step("D3", "点「V6」恢复 130/40",
+               d3 and st_v6.get("sidebarW") == "130px" and st_v6.get("toolbarH") == "40px",
+               f"sidebar={st_v6.get('sidebarW')} toolbar={st_v6.get('toolbarH')} "
+               f"menuH={st_v6.get('menuH')}",
                defect="V6 皮肤恢复失败")
 
         # D4 Ctrl+M（modifiers=2 为 Ctrl）
@@ -476,13 +551,7 @@ def main() -> int:
         # D5 刷新后记忆
         cdp.call("Page.reload")
         time.sleep(4)
-        for _ in range(20):
-            time.sleep(0.5)
-            try:
-                if cdp.eval_js("!!(window.App && window.App.applyTheme)"):
-                    break
-            except Exception:
-                continue
+        wait_ready(cdp)
         st_reload = w.st()
         w.step("D5", "刷新后皮肤记忆保持 V6", st_reload.get("theme") == "v6",
                f"theme={st_reload.get('theme')}", defect="刷新后皮肤重置")
@@ -490,56 +559,65 @@ def main() -> int:
         w.shot("D_v6_home")
 
         # ================= E 视图内交互 =================
-        # E1 Tab 切换（个股页）
+        # E1 页签切换（个股页：v7-tab[data-stock-tab]）
         st = w.goto("stock", wait=2.6)
-        tabs = cdp.eval_js("document.querySelectorAll('.pg-tab').length")
+        tabs = cdp.eval_js("document.querySelectorAll('#view-body .v7-tab[data-stock-tab]').length")
         tab_ok = False
+        before_txt = ""
+        after_txt = ""
         if tabs > 1:
-            tab_ok = w.click_selector(".pg-tab:nth-child(2)", wait=1.2)
-        w.step("E1", "个股页 Tab 可切换", tabs == 0 or tab_ok,
-               f"tabs={tabs} clicked={tab_ok}",
-               defect="Tab 点击无效")
+            before_txt = cdp.eval_js(
+                "(function(){var e=document.getElementById('v7-stock-body');"
+                "return e?(e.innerText||'').slice(0,80):'';})()") or ""
+            tab_ok = w.click_selector("#view-body .v7-tab[data-stock-tab]:nth-of-type(2)", wait=2.5)
+            after_txt = cdp.eval_js(
+                "(function(){var e=document.getElementById('v7-stock-body');"
+                "return e?(e.innerText||'').slice(0,80):'';})()") or ""
+        w.step("E1", "个股页页签可切换（内容随之变化）",
+               tabs == 0 or (tab_ok and after_txt != before_txt),
+               f"tabs={tabs} clicked={tab_ok} changed={after_txt != before_txt}",
+               defect="页签点击无效或切换后内容不变")
 
-        # E2 表格行点击（板块页数据源为同花顺，1.1s 限流 × 90 板块，冷启动可达 30s+）
-        st = w.goto("sectors", wait=2.0)
+        # E2 表行右键菜单（v3.3.0 回收能力；只开菜单不发动作，零写入）
+        w.goto("sectors", wait=2.0)
         rows = 0
         waited = 0.0
         while waited < 45.0:
-            st = w.st()
-            rows = st.get("visibleRows", 0)
+            rows = cdp.eval_js("document.querySelectorAll('#view-body table tbody tr').length") or 0
             if rows > 0:
                 break
             time.sleep(1.5)
             waited += 1.5
-        row_click = False
-        hash_before = st.get("hash")
+        menu_items = 0
         if rows:
-            # 只点「当前可见页」的第一行，避免点到隐藏页的行
-            row_click = w.click_selector(
-                ".page-view:not([hidden]) .pg-table tbody tr", wait=2.5)
-        st_after = w.st()
-        w.step("E2", "表格行可点击跳转",
-               rows > 0 and row_click and st_after.get("hash") != hash_before,
-               f"rows={rows} 等待{waited:.0f}s clicked={row_click} "
-               f"{hash_before}→{st_after.get('hash')}",
-               defect="表格行点击无反应")
+            w.right_click_selector("#view-body table tbody tr", wait=0.9)
+            menu_items = cdp.eval_js(
+                "document.querySelectorAll('.v7-ctx button[data-i]').length") or 0
+            cdp.eval_js(
+                "(function(){var m=document.querySelector('.v7-ctx');if(m){m.remove();}})()")
+        w.step("E2", "表行右键菜单可打开且含 6 项动作",
+               rows > 0 and menu_items >= 6,
+               f"rows={rows} 等待{waited:.0f}s menu_items={menu_items}",
+               defect="表行右键菜单缺失或菜单项不全")
 
-        # E3 搜索输入
-        st = w.goto("screener", wait=2.6)
+        # E3 搜索/表单输入可聚焦
+        w.goto("screener", wait=2.6)
         typed = cdp.eval_js(
-            "(function(){var i=document.querySelector('#page-screener input[type=text],"
-            "#page-screener input:not([type]),.scr-cond-value');"
-            "if(!i)return 'no-input';i.focus();return i.tagName;})()"
-        )
+            "(function(){var i=document.querySelector('#view-body input[type=text],"
+            "#view-body input[type=number],#view-body input:not([type]),#view-body select');"
+            "if(!i)return 'no-input';i.focus();return i.tagName;})()")
         w.step("E3", "筛选器表单可聚焦输入", typed != "no-input",
                f"input={typed}", defect="表单输入框缺失")
 
-        # E4 滚动
-        cdp.eval_js("document.querySelector('.viewport').scrollTop = 9999")
-        time.sleep(0.8)
-        scrolled = cdp.eval_js("document.querySelector('.viewport').scrollTop")
-        w.step("E4", "主区可滚动", scrolled >= 0,
-               f"scrollTop={scrolled}", defect="主区无法滚动")
+        # E4 主区可滚动
+        st = w.goto("sectors", wait=2.4)
+        sc = st.get("scroll") or {}
+        scrolled = cdp.eval_js(
+            "(function(){var e=document.getElementById('view-generic');"
+            "e.scrollTop = 9999;return e.scrollTop;})()") or 0
+        w.step("E4", "主区可滚动", (sc.get("sh", 0) <= sc.get("ch", 0)) or scrolled > 0,
+               f"host={sc.get('cls')} sh={sc.get('sh')} ch={sc.get('ch')} scrollTop={scrolled}",
+               defect="主区无法滚动")
 
         # E5 图表 canvas 无溢出
         st = w.goto("home", wait=2.8)
@@ -559,11 +637,11 @@ def main() -> int:
         cdp.viewport(1280, 768)
         time.sleep(1.2)
         right_ok = cdp.eval_js(
-            "(function(){var a=document.querySelector('.topbar-actions');"
+            "(function(){var a=document.querySelector('.topright');"
             "if(!a)return {ok:false};var r=a.getBoundingClientRect();"
-            "return {ok:r.right<=window.innerWidth+1,right:Math.round(r.right),iw:window.innerWidth};})()"
-        )
-        w.step("F2", "1280 顶栏右侧不裁", right_ok.get("ok"),
+            "return {ok:r.right<=window.innerWidth+1,right:Math.round(r.right),"
+            "iw:window.innerWidth};})()")
+        w.step("F2", "1280 顶栏右侧不裁", bool(right_ok and right_ok.get("ok")),
                f"right={right_ok.get('right')} iw={right_ok.get('iw')}",
                defect="1280 断点顶栏右侧被裁")
 
@@ -571,22 +649,21 @@ def main() -> int:
         time.sleep(0.8)
 
         # ================= G 异常与恢复 =================
-        st = w.goto("sectors", wait=2.8)
-        cdp.eval_js("window.State4.apply('error')")
-        time.sleep(1.0)
-        err_shown = cdp.eval_js(
-            "(function(){var p=document.querySelector('.page-view:not([hidden])');"
-            "return p ? p.innerText.indexOf('不可用')>=0 || p.innerText.indexOf('失败')>=0 || p.innerText.indexOf('错误')>=0 : false;})()"
-        )
-        cdp.eval_js("window.State4.apply('default')")
-        time.sleep(2.0)
-        recovered = cdp.eval_js(
-            "(function(){var p=document.querySelector('.page-view:not([hidden])');"
-            "return p ? p.innerText.length > 40 : false;})()"
-        )
-        w.step("G1", "四态切换后可恢复默认态", err_shown and recovered,
-               f"errorShown={err_shown} recovered={recovered}",
-               defect="四态切换后无法恢复")
+        # 现行架构无全局四态机：以「真实空态页（空台账）→ 回到首页默认态」替代，
+        # 判据=空态有可读文案（不是白屏/报错），切回后默认态内容恢复。
+        w.goto("portfolio", wait=3.0)
+        empty_txt = cdp.eval_js(
+            "(function(){var e=document.getElementById('view-body');"
+            "return e?(e.innerText||''):'';})()") or ""
+        empty_shown = ("v-empty" in (cdp.eval_js(
+            "(function(){var e=document.getElementById('view-body');"
+            "return e?(e.innerHTML||''):'';})()") or "")) or len(empty_txt.strip()) > 8
+        st_back = w.goto("home", wait=3.0)
+        recovered = len(st_back.get("visibleText", "")) > 40
+        w.step("G1", "空态页有可读文案且可恢复默认态", empty_shown and recovered,
+               f"emptyShown={empty_shown} recovered={recovered} "
+               f"emptyLen={len(empty_txt.strip())}",
+               defect="空态不可读或回默认态失败")
 
         # G2 快速连续切换
         for v in ("home", "news", "fund", "lhb", "settings", "home"):

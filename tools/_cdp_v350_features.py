@@ -339,9 +339,11 @@ def main() -> None:
             })()""")
             if pos2.get("found"):
                 click_at(cdp, pos2["x"], pos2["y"])
-            # 拥挤度单查为后端聚合计算（六维加权+分位），接口可达 20s+；轮询等待结果表
+            # 拥挤度单查为后端聚合计算（六维加权+分位），端点自身提示「首次约 10–40 秒」；
+            # v3.6.1 修复 D-4：原等待上限 8×2.5s=20s 低于该口径 → 冷启动时假阴
+            # （实测 20s 时仍在「计算中…」，长等待版 3s 内即命中）。上限提到 24×2.5s=60s。
             info = {"box": False}
-            for _ in range(8):
+            for _ in range(24):
                 time.sleep(2.5)
                 info = check(cdp, """(function(){
                     var box = document.getElementById('v7-sec-crowd-body');

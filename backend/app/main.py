@@ -99,6 +99,14 @@ def _setup_logging() -> None:
 
 _setup_logging()
 
+# 网络环境自修复：必须早于 akshare 导入（规范 §6.5）。放在这里显式调用，
+# 保证「代理对齐结论」写进日志文件（datasource 导入期的调用早于日志句柄就绪）。
+from backend.app.core import netfix as _netfix  # noqa: E402 - 需在日志就绪后立即执行
+
+_netfix.apply_netfix()
+if _netfix.last_note():
+    logger.info("网络自修复：%s", _netfix.last_note())
+
 
 def _port_in_use(host: str, port: int) -> bool:
     """检测端口是否已有服务监听。
@@ -734,16 +742,49 @@ def _run_frozen_serve_only() -> None:
         logger.info("仅服务模式已退出")
 
 
+def _warm_first_screen() -> None:
+    """预热首屏关键端点（v3.6.1 D-2 修复）。
+
+    背景：首屏可用时间由「最慢的首屏请求」决定。指数四卡 / 4 个指数迷你走势
+    （``/api/market/index-kline``，四只指数逐个真实取数）/ 市场情绪 / 行业板块
+    原先都无预热，用户首次打开必须等真实上游（实测 8–18 秒）。
+
+    这里以**本机 HTTP 自调用**方式预热：与前端实际请求走完全相同的路由与缓存键
+    （直接调 provider 会绕过路由层缓存键，预热无效）。会话取 ``netfix.make_session()``
+    （trust_env=False），不受本机残留代理影响。
+    """
+    from backend.app.core import netfix
+
+    base = f"http://127.0.0.1:{config.PORT}"
+    urls = [
+        "/api/market/index?market=a",
+        "/api/market/index-kline?symbol=000001&period=daily&limit=60",
+        "/api/market/index-kline?symbol=399001&period=daily&limit=60",
+        "/api/market/index-kline?symbol=399006&period=daily&limit=60",
+        "/api/market/index-kline?symbol=000300&period=daily&limit=60",
+        "/api/sentiment/market",
+        "/api/sector/industry",
+    ]
+    session = netfix.make_session()
+    for url in urls:
+        try:
+            response = session.get(base + url, timeout=120)
+            logger.info("首屏预热 %s → HTTP %s", url, response.status_code)
+        except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+            logger.info("首屏预热失败（不影响启动）%s：%s", url, type(exc).__name__)
+
+
 def _bg_prewarm() -> None:
     """后台预热（守护线程，失败不影响启动）。
 
-    覆盖两项冷启动较慢的数据，使首次点击即命中缓存：
+    覆盖冷启动较慢、且用户最先看到的数据，使首次点击即命中缓存：
+    0. **首屏关键端点**（v3.6.1 D-2）：指数四卡 / 4 个指数迷你走势 / 市场情绪 / 行业板块；
     1. **拥挤度排行**（第二轮检测 P1-1：冷启动 44.4s 超 15s 预期）——
        第八轮已改纯 HTTP，90 个行业约 20 秒；
     2. **板块四档资金流**（降级点 G-1）——需逐板块构建成分映射（同花顺 1.1s 限流），
        首次约数分钟；映射落盘后 7 天内不再重复翻页，之后每 10 分钟只刷新四档数值。
 
-    预热顺序：先排行（快、用户最先看到），再四档（慢、有磁盘缓存）。
+    预热顺序：先首屏（用户最先看到），再排行（快），最后四档（慢、有磁盘缓存）。
     """
     import time
 
@@ -751,6 +792,7 @@ def _bg_prewarm() -> None:
     from backend.app.datasource import sector as sector_provider
 
     time.sleep(6)  # 等服务就绪，避免与启动探测抢网络
+    _warm_first_screen()
     try:
         result = sector_provider.get_crowding_rankings(kind="industry", limit=50)
         cache_module.set("sector:crowding:rankings:industry:50", result, 3600)

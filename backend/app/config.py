@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "大龙虾投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "3.6.0"  # 语义化版本号：3.6.0 = R14 三市场财报中文摘要（前端三入口+市场选择）+ P5 docs 随包分发 + 门禁A 材料豁免登记
-BUILD_TAG = "v3.6.0-20261113"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "3.6.1"  # 语义化版本号：3.6.1 = P0 修复——打包产物补收 py_mini_racer（V8 运行库），恢复冻结形态下 akshare 新浪 K 线通道；并修复首屏迷你走势阻塞、K 线缓存时段分流、启动预热扩展
+BUILD_TAG = "v3.6.1-20261114"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
@@ -233,7 +233,11 @@ ADJUST_VALUES = ("", "qfq", "hfq")
 TTL: Dict[str, int] = {
     "realtime_quote": 15,  # 实时报价 / 大盘指数快照
     "index_quote": 15,  # 指数行情快照
-    "kline": 60,  # 历史 K 线
+    "kline": 60,  # 历史 K 线（盘中：保实时性）
+    # v3.6.1（D-2 修复）：非盘中/休市时段，日 K 的最后一根在收盘后不再变化，
+    # 仍按 60s 缓存会让每次打开软件都重走一遍上游（4 个指数迷你走势串行 ≈ 8–10s）。
+    # 由 datasource.utils.kline_cache_ttl() 按交易时段分流取值（盘后/周末 900s）。
+    "kline_after_hours": 900,  # 历史 K 线（非盘中/休市）
     "minute": 30,  # 分时数据
     "sector": 30,  # 板块行情
     "fund_flow": 60,  # 资金流向

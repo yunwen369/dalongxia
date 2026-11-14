@@ -44,7 +44,10 @@
   ];
   var VIEW_IDS = Object.keys(VIEWS);
   var APP_VER = "";        // 由 /api/health 回填（侧栏页脚展示真实版本，不再写死）
-  var pinnedGroups = {};     // 用户手动展开/折叠的分组；未登记的组只随当前视图自动展开
+  // 用户手动展开/折叠的分组；未登记的组只随当前视图自动展开。
+  // v3.6.1 修复 D-3：V6 重写后只留内存态、丢掉了落盘（旧 v6 tree.js 有持久化，
+  // OB.config.KEYS.SB_GROUPS 亦登记为「侧栏分组折叠记忆」契约键）→ 启动读取 + 变更写回。
+  var pinnedGroups = OB.store.getJSON(OB.config.KEYS.SB_GROUPS, {}) || {};
 
   /** 拉取真实接口，失败时按 key 降级为演示数据。（阶段2：fetch 骨架收编 OB.http.getJSON） */
   async function getJSON(path, demoKey) {
@@ -128,7 +131,12 @@
     var asOf = (result.data && result.data.as_of) || "—";
     $("as-of").textContent = "as_of: " + asOf;
     var sparks = host.querySelectorAll(".spark");
-    await Promise.all(Array.prototype.map.call(sparks, async function (node, i) {
+    // v3.6.1（D-2 修复）：迷你走势改为**不阻塞主流程**。
+    // 原实现 `await Promise.all(...)` 会等 4 个 index-kline 逐个真实取数完成
+    // （受 V8 串行 + 上游限流，实测 8–18 秒），把 main() 第二波渲染
+    // （风险等级 / 行业排行 / K 线 / AI 要点）一并拖到同一时长。
+    // 现在立即返回，走势在后台补齐；失败仍照旧给「走势无数据」并标记降级来源。
+    Promise.all(Array.prototype.map.call(sparks, async function (node, i) {
       var code = items[i] ? items[i].symbol : "000001";
       var kline = await getJSON(API.indexKline(code), "indexKline");
       var rows = (kline.data && kline.data.items) || [];
@@ -139,7 +147,7 @@
         var tag = $("src-index-" + i);
         if (tag) { tag.classList.add("demo"); tag.textContent = "演示数据·非真实行情（走势）"; }
       }
-    }));
+    })).catch(function () { /* 迷你走势非关键路径，失败不影响主渲染 */ });
     return { items: items, demo: result.demo, data: result.data };
   }
 
@@ -474,6 +482,8 @@
         var key = group.getAttribute("data-group");
         var currentGroup = (VIEWS[currentViewId()] || {}).sidebar;
         pinnedGroups[key] = !groupOpen(key, currentGroup);
+        // 落盘（v3.6.1 D-3）：跨会话保住用户手动展开/折叠的分组
+        OB.store.setJSON(OB.config.KEYS.SB_GROUPS, pinnedGroups);
         renderSidebar(currentViewId());
       }
     });

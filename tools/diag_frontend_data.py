@@ -53,9 +53,9 @@ VIEWS = ["home", "market", "sectors", "stock", "news", "fund", "macro", "valuati
          "alerts", "today", "fin", "ann", "mgr", "tools", "cand", "fund-combo"]
 
 STATE_JS = """JSON.stringify({
-  title: (document.getElementById('page-title')||{}).textContent||'',
+  title: (document.getElementById('view-title')||{}).textContent||'',
   bodyLen: (document.body||{}).innerText ? document.body.innerText.length : 0,
-  emptyHints: Array.from(document.querySelectorAll('.pg-empty,[data-state="empty"]'))
+  emptyHints: Array.from(document.querySelectorAll('.v-empty,[data-state="empty"]'))
       .map(function(x){return (x.innerText||'').slice(0,40);}).slice(0,3),
   tables: document.querySelectorAll('table').length,
   rows: document.querySelectorAll('tbody tr').length,

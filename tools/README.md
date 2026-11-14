@@ -13,7 +13,9 @@
 | `check_nav_tree.py` | **导航单一配置完整性**（判据源 2026-11-12 改为 `views.js` 的 `V6_VIEWS`：视图 id 唯一 / title 齐备 / crumb 末项=title / group 命中顶栏 / sidebar 命中分组且无空组 / 仅 `-edit` 可为 null） | `python tools/check_nav_tree.py` |
 | `nav_consistency_probe.py` | **导航三处一致动态探针**（逐侧栏视图读真实渲染的顶栏/侧栏/面包屑；审查报告 §九 #4） | `python tools/nav_consistency_probe.py --base <url> --out nav.json` |
 | `review_recheck.py` | ⛔**已退役（2026-11-12）**：默认拒跑（退出码 2），需 `--legacy` 才执行。原：断言基于 v2.x 壳层选择器，47 项为选择器漂移；四处一致/交互/皮肤已由 nav_consistency + functional + landing + v34_panels 覆盖，移动端已由 `mobile_layout_probe.py`（14 项）覆盖。保留作历史取证 | **审查报告 §九 九项复核动态判定**（三视口×双主题 101 项：移动端/F5/四处一致/键盘/对比度/侧栏层级/卡片内容；原 `_ad_hoc` 脚本 2026-11-10 转正） | `python tools/review_recheck.py --base <url> --out <证据目录>` |
-| `diag_frontend_data.py` | **前端数据加载诊断**（登录后逐视图采集 fetch 失败/JS 异常，区分接口 401/404/超时 vs 渲染失败；复用 ui_clickthrough 的 CDP harness） | `python tools/diag_frontend_data.py --base <url> --token <口令> --out diag.json` |
+| `diag_frontend_data.py` | **前端数据加载诊断**（登录后逐视图采集 fetch 失败/JS 异常，区分接口 401/404/超时 vs 渲染失败；复用 ui_clickthrough 的 CDP harness。v3.6.1 修复 D-3：标题判据 `#page-title`→`#view-title`、空态 `.pg-empty`→`.v-empty`） | `python tools/diag_frontend_data.py --base <url> --token <口令> --out diag.json` |
+| `human_walkthrough.py` | **人工模拟连续操作走查**（v2.0 / 2026-11-14 判据层重构：24 场景 A 启动·B 导航·C 侧栏折叠·D 三皮肤·E 视图内交互·F 断点·G 空态恢复·Z 无 JS 异常）。v3.6.1 修复 D-3：v1.0 判据绑定已退役 v6 壳层（`#page-title`/`#main-nav`/`.sidebar-item`/`window.App|Pages|State4`）→ 任何实例都 `RuntimeError: 页面未就绪`；现按现行 V6/W7 契约重写（见文件头映射表；B3 面包屑改为「末项=标题」、E2 改为「表行右键菜单 6 项」，因现行面包屑非导航控件、预览表行不跳转） | `python tools/human_walkthrough.py --base-url <url> --out <json> [--shots <dir>]` |
+| `v6_skin_probe.py` | ⛔**已退役（2026-11-12）**：断言层对应 v6 旧壳层（`--menu-w`/`window.App.applyTheme`/NAV_TREE），默认拒跑（退出码 2），需 `--legacy`。**CDP 原语（`CDP`/`launch_edge`/`open_target`/`free_port`）仍被 `human_walkthrough`/`ui_clickthrough`/`shoot_states` 复用，不得改为导入期报错**；其残留 v6 选择器只存在于退役断言层，不参与任何判据 | `python tools/v6_skin_probe.py`（退役）/ `--legacy`（历史取证） |
 | `comment_rate_check.py` | 注释率快查 | `python tools/comment_rate_check.py` |
 | `docstring_audit.py` | 注释率审计（出 JSON/MD） | `python tools/docstring_audit.py --out-json <p> --out-md <p>` |
 | `docstring_fill.py` | docstring 批量补齐（--dry-run/--apply/--js） | `python tools/docstring_fill.py --dry-run` |
@@ -23,12 +25,12 @@
 | `evidence_symbol_store.py` | 符号共享 store 取证 | `python tools/evidence_symbol_store.py` |
 | `hash_manifest.py` | 归档哈希清单 | `python tools/hash_manifest.py <目录>` |
 | `make_icon.py` | 生成打包图标 | 封装前 |
-| `scan_ui_leaks.py` | UI 泄漏扫描 | `python tools/scan_ui_leaks.py` |
+| `scan_ui_leaks.py` | UI 泄漏扫描（v3.6.1 修复 D-3：标题判据 `#page-title`→`#view-title`） | `python tools/scan_ui_leaks.py --base-url <url> --out <json>` |
 | `stress_v8.py` | 同花顺 V8 并发回归 | `python tools/stress_v8.py -u` |
 | `yjb_scan.py` | 养基宝扫码助手 | `python tools/yjb_scan.py new\|poll\|status` |
 | `ui_clickthrough.py` | 通用 CDP harness（CDP/launch_chrome/page_ws/set_viewport/click_at/eval_js）+ 全页真实点击（含就绪闸门，白屏不再记 0 错误） | `python tools/ui_clickthrough.py --base-url http://127.0.0.1:6903` |
 | `probe_endpoints.py` | 端点全量探针（116 条，分类 DATA/EMPTY_OK/DEGRADED/SKIPPED） | `python tools/probe_endpoints.py --base <url> --out <json>` |
-| `cross_validate.py` | 双源交叉验证 12 项（报价/指数/K线/板块/资金流/净值/汇率/时区/拥挤度/美股分时） | `python tools/cross_validate.py --base <url> --out <json>` |
+| `cross_validate.py` | 双源交叉验证 12 项（报价/指数/K线/板块/资金流/净值/汇率/时区/拥挤度/美股分时；v3.6.1 修复 D-4：拥挤度单查读超时 30s→180s，对齐端点冷启动口径） | `python tools/cross_validate.py --base <url> --out <json>` |
 | `release_gate.py` | 发版门禁（pyflakes + 全量 pytest + 端点扫描 + 界面资源四段） | `python tools/release_gate.py --artifact 正式环境 --port 6916` |
 | `build_and_gate.py` | 打包 + 版本三元派生（`sync_nsi()`）+ 门禁串联 | `python tools/build_and_gate.py` |
 | `probe_v6_landing.py` | V6 定稿工程落地取证：解析原型引用端点并与本地服务逐条 HTTP 探测 | `python tools/probe_v6_landing.py --base http://127.0.0.1:6903` |
@@ -40,7 +42,7 @@
 | `check_dup_patterns.py` | **后端重复模式门禁**（RF-20261112-01 阶段6：P1 手写退避循环→retry_call/retry_until；P2 信封专属字段 error_code 字面量→core/errors.py 唯一实现；ast 剥 docstring 防文案误报；`# dup-ok: 原因` 行级备案豁免，errors.py/resilient.py 唯一实现层整体豁免） | `python tools/check_dup_patterns.py` |
 | `css_tokenize_migration.py` | **CSS 全量硬编码色值 token 化迁移**（v3.4.2 批次：app.css/v7.css 全部 hex/rgba 字面量→`var(--c-*)` 常量 token（166 个，:root 定义），三主题块定义行与注释保护，RGB(A) 解析逐位断言保证值等价；一次性迁移工具，重跑须先 git 还原） | `python tools/css_tokenize_migration.py [--apply]` |
 | `probe_equivalence_diff.py` | **改前/改后探针 JSON 深度对拍**（v3.4.2 批次：baseline/after 三份探针 JSON 递归 diff，时变键与内嵌时间戳归一；views[9].cards(news)/views[10].cards(fin) 为数据条数驱动时变字段，甄别后豁免） | `python tools/probe_equivalence_diff.py` |
-| `_cdp_v350_features.py` | **v3.5.0 新功能 CDP 界面专项探针**（REQ-20261105-02..05 批次：经理画像 F1 / 持仓走势卡 F2 / 订阅流 F3 / 利率罗盘 F4 / 定时研判卡 F5 / 净值三档 F6 / 表格分页 F7 / 列配置 F8 / 美股四态徽章 F9+R12 / 拥挤度分项口径列 F12 / 搜索禁用态 R18，11 项真实浏览器点击；口令实例自动 /auth。F5/F7/F12 异步慢接口轮询等待；F8 前清 `v7-cols:sectors` 记忆防 profile 复用污染） | `python tools/_cdp_v350_features.py --base http://127.0.0.1:6903 --out <json>` |
+| `_cdp_v350_features.py` | **v3.5.0 新功能 CDP 界面专项探针**（REQ-20261105-02..05 批次：经理画像 F1 / 持仓走势卡 F2 / 订阅流 F3 / 利率罗盘 F4 / 定时研判卡 F5 / 净值三档 F6 / 表格分页 F7 / 列配置 F8 / 美股四态徽章 F9+R12 / 拥挤度分项口径列 F12 / 搜索禁用态 R18，11 项真实浏览器点击；口令实例自动 /auth。F5/F7/F12 异步慢接口轮询等待（v3.6.1 修复 D-4：F12 等待上限 20s→60s，对齐「首次约 10–40 秒」端点口径）；F8 前清 `v7-cols:sectors` 记忆防 profile 复用污染） | `python tools/_cdp_v350_features.py --base http://127.0.0.1:6903 --out <json>` |
 | `_cdp_r14_summary.py` | **R14 三市场财报中文摘要 CDP 专项探针**（5 判据：资讯工具市场下拉渲染 / 市场切换状态持久 / fin 视图注入卡 / ann 卡共用状态 / 执行链可达；口令实例自动 /auth。2026-11-13 回归批次加固：auth 后加登录墙清除闸门——整页 reload + 轮询 `view-body` 就绪，防 cookie 生效晚于首次 goto 造成 R14_1/2 假阴） | `python tools/_cdp_r14_summary.py --base http://127.0.0.1:6903 --out <json>` |
 | `_diag_r14_news_inject.py` | **登录墙/注入链一次性诊断**（v3.6.0 回归批次定位 R14_1 假阴根因所用：分步 dump 登录墙状态 / view-body / `.v7-news` / 下拉 / W7 注册 / 控制台错误；口令 json 转义注入。可复用于任何「SPA 渲染到哪一层」的分层诊断） | `python tools/_diag_r14_news_inject.py`（BASE/TOKEN 内置读 env） |
 | `ui_clickthrough.py` | **19 视图全遍历 clickthrough + 截图**（控制台错误捕获 / 视图标题 / 交互点击；2026-11-13 修复：就绪判据 `page-title` → `view-title`——V6 整站替换（v3.1.0）后旧元素退役导致探针无法就绪） | `python tools/ui_clickthrough.py --base-url http://127.0.0.1:6905 --out <json> --shots <dir>` |

@@ -275,7 +275,15 @@ button { font-family: inherit; cursor: pointer; }
 .topbar {
   height: var(--menu-h);
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) auto;
+  /* v3.6.1 修复 D-8：第三列原为 auto（=max-content），右状态区实测占 1016px，
+     把第二列导航区挤到 90–196px，而 .topnav 是 overflow:hidden →
+     8 个分组按钮里 6–7 个被裁掉、点不到（顶栏导航主干道失效，实测仅「总览」可点）。
+     现改为「导航优先、状态区可压缩」：
+       第2列 minmax(0, max-content) —— 空间够时按内容展开（8 个按钮全可见），
+                                        空间不够时可收缩（不会把整行挤出行外）；
+       第3列 minmax(0, 1fr)         —— 吸收剩余空间并右对齐（.topright 已 overflow:hidden，
+                                        内容超出时按既有窄屏规则隐藏次要项，而不是挤压导航）。 */
+  grid-template-columns: var(--sidebar-w) minmax(0, max-content) minmax(0, 1fr);
   align-items: center;
   padding: 0;
   background: var(--bg-panel);
@@ -309,7 +317,7 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--c-white-100); box-shadow: inset 0 0 0 1px var(--c-cyan-65a55);
 }
 
-.topright { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); padding: 0 9px; flex: none; white-space: nowrap; overflow: hidden; }
+.topright { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); padding: 0 9px; flex: none; white-space: nowrap; overflow: hidden; min-width: 0; justify-content: flex-end; }
 
 .skin-switch { display: flex; gap: 2px; background: var(--bg-widget-2); padding: 2px; border-radius: 6px; border: 1px solid var(--border); }
 .skin-switch button { border: 0; background: transparent; color: var(--text-dim); font-size: 11px; padding: 4px 7px; border-radius: 4px; }
@@ -530,6 +538,13 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
 .err { color: var(--up); font-size: 11px; }
 
 /* ---------- 窄屏顶栏：隐藏次要状态，避免挤压导航与头像 ---------- */
+/* v3.6.1（D-8）：原规则只在 ≤1280 才隐藏，而 1280–1440 区间右状态区已把导航挤坏
+   （实测 1342 宽下导航容器仅 90–196px）。故把「隐藏次要状态」提前到 ≤1440，
+   与新的列优先级配合，保证 8 个分组按钮始终可点、且皮肤/头像等关键项不被裁。 */
+@media (max-width: 1440px) {
+  .topright .hide-sm, .dev-badge { display: none; }
+  .topnav button { padding: 5px 6px; font-size: 11px; }
+}
 @media (max-width: 1280px) {
   .topright .hide-sm, .dev-badge, .top-ico { display: none; }
   .topnav button { padding: 5px 6px; font-size: 11px; }
@@ -537,6 +552,9 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
 @media (max-width: 1100px) {
   .topnav .nav-ico { display: none; }
   .topnav button { padding: 5px 5px; }
+  /* D-8 配套：1100 以下空间不足，先让右状态区让位（次要状态徽章/布局菜单），
+     保证导航 + 搜索 + 提醒 + 皮肤切换仍可用 */
+  .topright .v7-badge, .topright .v7-layout { display: none; }
 }
 
 /* ---------- 双断点 ---------- */

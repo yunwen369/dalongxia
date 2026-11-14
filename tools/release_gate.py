@@ -261,6 +261,61 @@ def _check_credentials(artifact: Path) -> Dict[str, Any]:
     return {"dir": str(data_dir), "files": files, "ok": ok}
 
 
+def _check_v8_runtime(artifact: Path) -> Dict[str, Any]:
+    """核对 V8 运行库（py_mini_racer）是否随包落位。
+
+    背景（v3.6.1 修复 D-1）：akshare 的新浪通道（``stock_zh_index_daily`` /
+    ``stock_zh_a_daily``）用 ``py_mini_racer.MiniRacer()`` 执行新浪返回的 JS，库按
+    ``sys._MEIPASS/py_mini_racer/{mini_racer.dll,icudtl.dat}`` 定位。此前 spec 未收集
+    该包，冻结形态下指数K线（新浪）恒抛 ``LibNotFoundError``，而既有门禁只查
+    health / frontend / yjb，覆盖不到该通道 → 缺口静默逃逸一个版本周期。
+
+    Args:
+        artifact: 产物目录。
+
+    Returns:
+        dict: ``{dir, files:{名:{exists,bytes}}, ok}``。
+    """
+    pkg_dir = artifact / "_internal" / "py_mini_racer"
+    files: Dict[str, Any] = {}
+    for name in ("mini_racer.dll", "icudtl.dat"):
+        path = pkg_dir / name
+        files[name] = {"exists": path.exists(),
+                       "bytes": path.stat().st_size if path.exists() else 0}
+    ok = all(files[n]["exists"] and files[n]["bytes"] > 0 for n in files)
+    return {"dir": str(pkg_dir), "files": files, "ok": ok}
+
+
+def _check_v8_channel(base: str) -> Dict[str, Any]:
+    """动态核对冻结形态下 V8 数据通道可用（指数K线 新浪路径）。
+
+    Args:
+        base: 产物服务基址。
+
+    Returns:
+        dict: ``{http_ok, items, source, elapsed, ok, error}``。
+    """
+    import time as _time
+
+    url = f"{base}/api/market/index-kline?symbol=000001&period=daily&limit=60"
+    started = _time.time()
+    payload, error = _get_json(url, timeout=120.0)
+    elapsed = round(_time.time() - started, 2)
+    data = (payload or {}).get("data") or {}
+    items = data.get("items") or []
+    return {
+        "url": url,
+        "http_ok": bool(payload),
+        "items": len(items),
+        "source": data.get("source"),
+        "caliber": data.get("caliber"),
+        "error_code": (payload or {}).get("error_code"),
+        "error": (payload or {}).get("error") or error,
+        "elapsed": elapsed,
+        "ok": bool(payload) and len(items) > 0,
+    }
+
+
 def _launch(artifact: Path, port: int) -> subprocess.Popen:
     """以「仅服务」模式启动打包产物（无窗口）。
 
@@ -364,6 +419,7 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
 
     report["checks"]["frontend"] = _check_frontend(artifact)
     report["checks"]["credentials"] = _check_credentials(artifact)
+    report["checks"]["v8_runtime"] = _check_v8_runtime(artifact)
 
     if _port_open("127.0.0.1", port):
         report["notes"].append(f"门禁端口 {port} 已被占用：请换 --port 或先释放该端口")
@@ -380,6 +436,18 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
             report["notes"].append("打包产物启动 90 秒内未就绪：查看产物目录 logs/app.log")
             report["exit_code"] = 2
             return report
+
+        # ---------- V8 数据通道（冻结形态专项，v3.6.1 加固）----------
+        # 必须放在 health 之后立即执行：该通道失败时接口耗时可达 8–17s（重试链），
+        # 若排在 yjb 之后会拖慢整条门禁；且它是「打包缺口」的唯一动态判据。
+        report["checks"]["v8_channel"] = _check_v8_channel(base)
+        report["steps"].append({
+            "step": "3a. V8 数据通道（指数K线 新浪路径，冻结形态专项）",
+            "ok": bool(report["checks"]["v8_channel"].get("ok")),
+            "detail": {"items": report["checks"]["v8_channel"].get("items"),
+                       "elapsed": report["checks"]["v8_channel"].get("elapsed"),
+                       "error_code": report["checks"]["v8_channel"].get("error_code")},
+        })
 
         status_payload, status_err = _get_json(f"{base}/api/fund/yjb/status")
         report["responses"]["status"] = status_payload or {"error": status_err}
@@ -442,8 +510,18 @@ def run_gate(artifact: Path, port: int, keep_running: bool = False) -> Dict[str,
         })
 
         gate_ok = all(report["checks"][key]["ok"]
-                      for key in ("frontend", "credentials", "status", "collect", "holdings"))
+                      for key in ("frontend", "credentials", "v8_runtime", "v8_channel",
+                                  "status", "collect", "holdings"))
         report["passed"] = bool(gate_ok) and all(s.get("ok") for s in report["steps"])
+        if not report["checks"]["v8_runtime"]["ok"]:
+            report["notes"].append(
+                "V8 运行库未随包落位（_internal/py_mini_racer 缺 mini_racer.dll / icudtl.dat）："
+                "冻结形态下 akshare 新浪通道必抛 LibNotFoundError，禁止发版（D-1）")
+        if not report["checks"]["v8_channel"]["ok"]:
+            report["notes"].append(
+                "V8 数据通道实测失败（/api/market/index-kline 无 items）："
+                f"error_code={report['checks']['v8_channel'].get('error_code')}，"
+                "优先核对 _internal/py_mini_racer 与网络/上游可用性（D-1）")
         if not report["checks"]["credentials"]["ok"]:
             report["notes"].append(
                 "凭据未落位：把源码树 data/yjb_token.json、yjb_secret.json 复制到产物 data/，"
@@ -487,6 +565,14 @@ def _print_report(report: Dict[str, Any]) -> None:
     print(f"[{'OK' if cred.get('ok') else 'FAIL'}] 凭据落位　{detail}")
     health = checks.get("health") or {}
     print(f"[{'OK' if health.get('ready') else 'FAIL'}] 服务就绪　build={health.get('build')}")
+    v8r = checks.get("v8_runtime") or {}
+    v8f = (v8r.get("files") or {})
+    v8d = "，".join(f"{name}={info.get('bytes')}B" for name, info in v8f.items())
+    print(f"[{'OK' if v8r.get('ok') else 'FAIL'}] V8 运行库　{v8d}")
+    v8c = checks.get("v8_channel") or {}
+    print(f"[{'OK' if v8c.get('ok') else 'FAIL'}] V8 数据通道　"
+          f"/market/index-kline items={v8c.get('items')} elapsed={v8c.get('elapsed')}s "
+          f"err={v8c.get('error_code')}")
     status = checks.get("status") or {}
     print(f"[{'OK' if status.get('ok') else 'FAIL'}] /yjb/status　bound={status.get('bound')} "
           f"secret={status.get('secret_configured')} channel={status.get('channel_available')}")

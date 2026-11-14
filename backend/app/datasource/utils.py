@@ -143,6 +143,33 @@ def bj_now_aware() -> datetime:
     return datetime.now(BEIJING_TZ)
 
 
+def kline_cache_ttl(now: Optional[datetime] = None) -> int:
+    """K 线缓存有效期（按交易时段分流，v3.6.1 D-2 修复）。
+
+    盘中（09:15–15:00 工作日）用短缓存 ``config.TTL["kline"]`` 保实时性；
+    其余时段（盘前/盘后/周末）日 K 的最后一根已不再变化，用长缓存
+    ``config.TTL["kline_after_hours"]``，避免每次打开软件都重走一遍上游
+    （首屏 4 个指数迷你走势串行真实取数 ≈ 8–10 秒）。
+
+    Args:
+        now: 可注入的当前时间（仅测试用）；缺省取北京时间 :func:`bj_now`。
+
+    Returns:
+        int: 缓存秒数。
+
+    Notes:
+        无交易日历（不判法定假日）：假日若落在工作日盘中时段仍走短缓存，
+        结果与修复前一致（不劣化）；假日盘后走长缓存，正确。
+    """
+    moment = now or bj_now()
+    if moment.weekday() >= 5:
+        return config.TTL["kline_after_hours"]
+    current = moment.time()
+    if clock_time(9, 15) <= current <= clock_time(15, 0):
+        return config.TTL["kline"]
+    return config.TTL["kline_after_hours"]
+
+
 def today_bj() -> date:
     """取当前北京日期。
 

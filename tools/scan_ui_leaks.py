@@ -78,7 +78,7 @@ SCAN = r"""
     bare:(bareHits.length>=2?bareHits:[]).slice(0,10),
     snake:(snakeHits.length>=2?snakeHits:[]).slice(0,10),
     bad:(text.match(badRe)||[]).slice(0,10),
-    title:(document.getElementById('page-title')||{innerText:''}).innerText.trim(),
+    title:(document.getElementById('view-title')||{innerText:''}).innerText.trim(),
     len:text.length
   };
 })()

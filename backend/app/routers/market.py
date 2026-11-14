@@ -172,7 +172,7 @@ def market_index_kline(
         # key：指数 K 线冷启动避免反复先撞失效源（P1-04）
         return with_fallback(candidates, empty_value=[], key=f"market:index-kline:{normalized_code}")
 
-    result = _cached(cache_key, config.TTL["kline"], loader)
+    result = _cached(cache_key, utils.kline_cache_ttl(), loader)
     if result.get("error"):
         return failure_pack(result, {"items": [], "code": normalized_code, "period": period})
     items = result["data"]
@@ -347,7 +347,7 @@ def market_kline(
         # key：A 股东财 push2 本机被重置，记住上次命中源避免每次冷启动先等失效源（P1-04）
         return with_fallback(candidates, empty_value=[], key=f"market:kline:{normalized_market}")
 
-    result = _cached(cache_key, config.TTL["kline"], loader)
+    result = _cached(cache_key, utils.kline_cache_ttl(), loader)
     if result.get("error"):
         return failure_pack(result, {"items": [], "symbol": code, "market": normalized_market})
     items = result["data"]

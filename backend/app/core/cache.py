@@ -252,7 +252,7 @@ def stats() -> Dict[str, int]:
 CACHE_TTL: tuple = (
     ("realtime_quote / index_quote", 15, "实时报价（个股/指数）"),
     ("minute", 30, "分时"),
-    ("kline", 60, "K 线"),
+    ("kline", "60 / 900", "K 线（盘中 60；盘后与休市 900，日K收盘后不再变化）"),
     ("sector / fund_flow", "30 / 60", "板块与资金流"),
     ("news_flash / sentiment", "60 / 300", "快讯与情绪"),
     ("fund_nav", 300, "基金净值"),
