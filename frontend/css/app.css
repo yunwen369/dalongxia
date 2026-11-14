@@ -899,3 +899,65 @@ body[data-theme="v6"] .v-legend-row { border-bottom-color: var(--c-cyan-75a24); 
 .v6-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--c-cyan-28); }
 .v6-modal-foot button { border: 1px solid var(--c-cyan-46); background: transparent; color: var(--text-dim); border-radius: 5px; padding: 6px 14px; font-size: 11px; cursor: pointer; }
 .v6-modal-foot button.primary { background: linear-gradient(180deg,var(--c-cyan-49-2),var(--c-cyan-36)); border-color: var(--c-cyan-57-2); color: var(--c-white-100); font-weight: 600; }
+
+/* ============================================================
+ * v3.7.0 · REQ-20261115-01 看盘体验补齐（新增公共件样式）
+ * 云图 treemap / 指数卡（带走势）/ 三级板块选择器 / 完整 K 线 / 资金流入流出 / 快讯原文
+ * 全部走主题变量与色值常量，三皮肤（V6 / 现行 / 砚）表现一致
+ * ============================================================ */
+
+/* ---------- 云图（面积∝成交额 · 色∝涨跌幅） ---------- */
+.v-tm { position: relative; width: 100%; height: 360px; background: var(--bg-widget-2);
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.v-tm-board { height: 420px; }
+.v-tm-cell { position: absolute; border: 1px solid var(--c-black-4a55); overflow: hidden; cursor: pointer;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+.v-tm-cell:hover { outline: 2px solid var(--c-white-100); outline-offset: -2px; z-index: 3; }
+.v-tm-n { font-size: 11px; color: var(--c-white-100); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96%; }
+.v-tm-p { font-family: var(--font-mono); font-size: 12px; color: var(--c-white-100); }
+.v-tm-a { font-size: 9px; color: var(--c-white-100); opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96%; }
+.v-tm-cell.small .v-tm-n { font-size: 10px; }
+.v-tm-cell.tiny .v-tm-n, .v-tm-cell.tiny .v-tm-a { display: none; }
+
+/* ---------- 指数卡（带迷你走势） ---------- */
+.v-idx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.v-idx-card { min-height: 104px; }
+.v-idx-row { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 4px; }
+.spark { min-height: 26px; }
+.spark svg { display: block; width: 100%; height: 26px; }
+
+/* ---------- 三级板块选择器 ---------- */
+.v-bp { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+.v-bp select, .v-bp input { border: 1px solid var(--border); background: var(--bg-widget-2); color: var(--text);
+  border-radius: 5px; font-size: 11px; padding: 4px 6px; }
+.v-bp input { width: 118px; }
+.v-bp-list { position: absolute; top: 27px; left: 0; z-index: 40; min-width: 240px; max-height: 260px; overflow: auto;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 22px var(--c-black-0a70); }
+.v-bp-g { font-size: 10px; color: var(--text-dim); padding: 4px 8px; background: var(--bg-widget-2); position: sticky; top: 0; }
+.v-bp-i { padding: 4px 8px; font-size: 11px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+.v-bp-i:hover { background: var(--accent); color: var(--c-white-100); }
+
+/* ---------- 完整 K 线容器 ---------- */
+.v-kline { width: 100%; height: 320px; min-height: 280px; }
+
+/* ---------- 资金流入 / 流出 ---------- */
+.v7-ff { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.v7-ff-row { display: grid; grid-template-columns: 92px 1fr 82px; gap: 6px; align-items: center; font-size: 11px; margin: 3px 0; }
+.v7-ff-bar { position: relative; height: 12px; background: var(--bg-widget-2); border-radius: 3px; overflow: hidden; display: block; }
+.v7-ff-bar i { position: absolute; top: 0; bottom: 0; }
+.v7-ff-bar i.in { left: 50%; background: linear-gradient(90deg, var(--c-red-45a35), var(--up)); }
+.v7-ff-bar i.out { right: 50%; background: linear-gradient(270deg, var(--c-green-38a40), var(--down)); }
+
+/* ---------- 快讯原文入口 ---------- */
+.v7-news-meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.v7-news-src { color: var(--accent); white-space: nowrap; text-decoration: none; }
+.v7-news-src:hover { text-decoration: underline; }
+.v7-news-src.muted { color: var(--text-dim); }
+
+.v-feed-src { color: var(--accent); font-size: 11px; white-space: nowrap; text-decoration: none; }
+.v-feed-src:hover { text-decoration: underline; }
+
+#view-body th.sortable { cursor: pointer; user-select: none; }
+#view-body th.sortable::after { content: "⇅"; opacity: .45; margin-left: 4px; font-size: 10px; }
+#view-body th.sortable[data-asc="1"]::after { content: "▲"; opacity: 1; }
+#view-body th.sortable[data-asc="0"]::after { content: "▼"; opacity: 1; }

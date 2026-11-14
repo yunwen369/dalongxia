@@ -16,20 +16,67 @@
   function bindWidgetParams() {
     var modal = $("v6-add-modal");
     if (!modal) { return; }
+    // v3.7.0：任何渲染后补绘「待绘」元素（K 线 / 云图 / 指数迷你走势），幂等跳过已绘；
+    // 同时按「表签名」变化补跑表格工具（异步数据表到达后才绑定排序/分页 —— ⑥ 全表可排序）
+    if (window.V6_HELPERS && V6_HELPERS.drawPendingKlines) {
+      var lastTableSig = "";
+      var tableTimer = null;
+      new MutationObserver(function () {
+        try { V6_HELPERS.drawPendingKlines(document); } catch (e) { /* 绘制失败不阻断渲染 */ }
+        if (tableTimer) { return; }
+        tableTimer = setTimeout(function () {
+          tableTimer = null;
+          try {
+            var body = $("view-body");
+            if (!body) { return; }
+            var tables = body.querySelectorAll("table");
+            var sig = tables.length + ":";
+            Array.prototype.forEach.call(tables, function (t) { sig += t.querySelectorAll("tr").length + ","; });
+            if (sig === lastTableSig) { return; }
+            lastTableSig = sig;
+            injectTableTools();
+          } catch (e) { /* 表格工具失败不阻断渲染 */ }
+        }, 700);
+      }).observe(document.body, { childList: true, subtree: true });
+    }
     new MutationObserver(function () {
       if (modal.hidden) { return; }
       var body = modal.querySelector(".v6-modal-body");
       if (!body || body.querySelector(".v7-params")) { return; }
       var box = document.createElement("div");
       box.className = "v7-params";
+      // v3.7.0（REQ-20261115-01 ⑤）：板块改「三级选择器」（行业/概念 → 一级 → 板块，可搜索），
+      // 周期/起始改真实入参（不再硬编码「不限/半导体/新能源」与「近 5/20/60 日」）。
+      var H = window.V6_HELPERS || {};
       box.innerHTML =
         '<div class="v7-field"><span>标的（可选）</span>' +
           '<input id="v7p-symbol" placeholder="如 600519" style="width:120px"></div>' +
-        '<div class="v7-field"><span>周期</span><select id="v7p-period">' +
-          '<option>近 5 日</option><option>近 20 日</option><option>近 60 日</option></select></div>' +
-        '<div class="v7-field"><span>板块（可选）</span><select id="v7p-board">' +
-          '<option>不限</option><option>半导体</option><option>新能源</option></select></div>';
+        '<div class="v7-field"><span>周期（可选）</span><select id="v7p-period">' +
+          '<option value="">不限</option><option value="daily">日线</option><option value="weekly">周线</option>' +
+          '<option value="monthly">月线</option><option value="min60">60 分钟</option></select></div>' +
+        '<div class="v7-field"><span>起始（可选）</span><input id="v7p-start" type="date"></div>' +
+        '<div class="v7-field"><span>板块（可选）</span>' +
+          (H.boardPickerHtml ? H.boardPickerHtml("v7p-board-bp", { kind: "industry", value: "" }) : "") + "</div>";
       body.appendChild(box);
+      // 懒加载真实板块清单并绑定三级选择器（行业 90 / 概念 805；一级分组来自板块树）
+      if (window.V6_HELPERS && window.V6_HELPERS.bindBoardPicker) {
+        var bpEl = box.querySelector("#v7p-board-bp");
+        var st = window.W7 && W7.st ? W7.st : (W7.st = {});
+        if (!st.boardPool) {
+          st.boardPool = { industry: [], concept: [], tree: { industry: [], concept: [] } };
+          OB.http.getJSON("/api/sector/industry?market=a").then(function (r) {
+            st.boardPool.industry = ((r && r.data && r.data.items) || []);
+            st.boardPool.tree.industry = [{ label: "全部行业", children: st.boardPool.industry.map(function (x) { return x.name; }) }];
+            if (bpEl) { V6_HELPERS.bindBoardPicker(bpEl, st.boardPool, null); }
+          }).catch(function () { /* 板块清单不可用：选择器保持空，不阻断添加流程 */ });
+          OB.http.getJSON("/api/sector/concept?market=a").then(function (r) {
+            st.boardPool.concept = ((r && r.data && r.data.items) || []);
+            st.boardPool.tree.concept = [{ label: "全部概念", children: st.boardPool.concept.map(function (x) { return x.name; }) }];
+          }).catch(function () { /* 同上 */ });
+        } else if (bpEl) {
+          V6_HELPERS.bindBoardPicker(bpEl, st.boardPool, null);
+        }
+      }
       var note = modal.querySelector(".v6-modal-note");
       if (note) {
         note.textContent = "参数随组件一并保存到仪表板（PUT /api/dashboards）；原型演示不写后端。";
@@ -227,6 +274,47 @@
     row.appendChild(btn);
   }
 
+  /** 表头排序绑定（v3.7.0 ⑥：**#view-body 内所有数据表**都要可排序，不限主表）。
+   *
+   * 幂等：绑定状态挂 table._sortable；数值列按数值比较、文本列按字典序；
+   * 排序后保持表头行在位（兼容有 thead / 无 thead 两种结构），并重应用分页。
+   */
+  function bindSortable(tbl) {
+    if (!tbl || tbl._sortable) { return; }
+    tbl._sortable = true;
+    var headerThs = tbl.querySelectorAll("thead th");
+    if (!headerThs.length) {
+      var firstTr = tbl.querySelector("tr");
+      headerThs = firstTr ? firstTr.querySelectorAll("th") : [];
+    }
+    Array.prototype.forEach.call(headerThs, function (th, idx) {
+      th.classList.add("sortable");
+      th.style.cursor = "pointer";
+      if (!th.title) { th.title = "点击排序"; }
+      th.addEventListener("click", function () {
+        var tbody = tbl.querySelector("tbody");
+        var rows = dataRows(tbl);
+        var asc = th.getAttribute("data-asc") !== "1";
+        th.setAttribute("data-asc", asc ? "1" : "0");
+        rows.sort(function (a, b) {
+          var av = (a.children[idx] || {}).innerText || "";
+          var bv = (b.children[idx] || {}).innerText || "";
+          var an = parseFloat(String(av).replace(/[^0-9.\-]/g, ""));
+          var bn = parseFloat(String(bv).replace(/[^0-9.\-]/g, ""));
+          if (isFinite(an) && isFinite(bn)) { return asc ? an - bn : bn - an; }
+          return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+        });
+        var headerTr = tbl.querySelector("thead tr") || (tbody ? tbody.querySelector("tr") : null);
+        if (headerTr && headerTr.parentNode && headerTr.querySelector("th")) {
+          headerTr.after.apply(headerTr, rows);
+        } else if (tbody) {
+          rows.forEach(function (tr) { tbody.appendChild(tr); });
+        }
+        if (tbl._pg) { applyPage(tbl); }
+      });
+    });
+  }
+
   function injectTableTools() {
     var row = document.querySelector(".view-title-row");
     if (!row) { return; }
@@ -294,44 +382,12 @@
     expXls.textContent = "导出 Excel";
     expXls.addEventListener("click", function () { exportExcel(table, viewKey); });
     row.appendChild(expXls);
+    // v3.7.0（⑥）：先给 #view-body 内**所有**表绑排序（用户要求「所有数据表头都能排序」）
+    Array.prototype.forEach.call(tables, function (t) { bindSortable(t); });
     // 分页/排序/列配置：绑定状态挂在主表上（table._pgTools），按钮重插不重复绑
     if (!table._pgTools) {
       table._pgTools = true;
-      // 表头单元格：全站主流结构是 <table><tr><th>…</th></tr>…</table>（无 thead，
-      // objTable 同构）；仅 components.js v-table 有真 thead。两种结构都兼容。
-      var headerThs = table.querySelectorAll("thead th");
-      if (!headerThs.length) {
-        var firstTr = table.querySelector("tr");
-        headerThs = firstTr ? firstTr.querySelectorAll("th") : [];
-      }
-      // 排序：点击表头（排序后重应用分页）
-      Array.prototype.forEach.call(headerThs, function (th, idx) {
-        th.style.cursor = "pointer";
-        th.title = "点击排序";
-        th.addEventListener("click", function () {
-          var tbody = table.querySelector("tbody");
-          var rows = dataRows(table);
-          var asc = th.getAttribute("data-asc") !== "1";
-          th.setAttribute("data-asc", asc ? "1" : "0");
-          rows.sort(function (a, b) {
-            var av = (a.children[idx] || {}).innerText || "";
-            var bv = (b.children[idx] || {}).innerText || "";
-            var an = parseFloat(String(av).replace(/[^\d.\-]/g, ""));
-            var bn = parseFloat(String(bv).replace(/[^\d.\-]/g, ""));
-            if (isFinite(an) && isFinite(bn)) { return asc ? an - bn : bn - an; }
-            return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
-          });
-          // 排序后重挂到表头行之后（无 thead 结构时表头行是 tbody 首行）
-          var headerTr = table.querySelector("thead tr") ||
-            (tbody ? tbody.querySelector("tr") : null);
-          if (headerTr && headerTr.parentNode && headerTr.querySelector("th")) {
-            headerTr.after.apply(headerTr, rows);
-          } else if (tbody) {
-            rows.forEach(function (tr) { tbody.appendChild(tr); });
-          }
-          if (table._pg) { applyPage(table); }
-        });
-      });
+      bindSortable(table);  // 主表排序（与其它表同一实现，避免两套）
       bindPagination(table, viewKey);
       bindColConfig(row, table, viewKey);
     }

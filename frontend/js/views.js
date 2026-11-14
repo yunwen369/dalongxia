@@ -19,8 +19,9 @@
     title: "今日看点", group: "dashboard", sidebar: "overview", template: "dashboard", crumb: ["市场总览", "今日看点"],
     api: { idx: ["/api/market/index?market=a", "index"], sen: ["/api/sentiment/market", "sentiment"], news: ["/api/news/flash", "newsFlash"], brief: ["/api/sentiment/brief?limit=4", "brief"] },
     render: function (m) {
-      var indices = (d(m, "idx").items || []).map(function (x) {
-        return [esc(x.name), '<span class="mono">' + num(x.price) + '</span> <span class="' + cls(x.pct) + '">' + pct(x.pct) + "</span>"];
+      // v3.7.0（①③⑥）：指数块改「卡片 + 迷你走势」（走势由 components.drawPendingKlines 异步补绘）
+      var idxItems = (d(m, "idx").items || []).map(function (x) {
+        return { name: x.name, code: x.symbol || x.code || "", price: x.price, pct: x.pct };
       });
       var sen = d(m, "sen");
       var briefs = (d(m, "brief").items || []);
@@ -45,7 +46,7 @@
         briefCards = card("定时研判", '<div class="v-empty">暂无落库研判（盘前 08:30 / 盘后 15:30 自动生成）</div>',
           "/api/sentiment/brief", "研");
       }
-      return card("指数快照", kpis(indices), "/api/market/index", "指") +
+      return card("指数快照", H.idxCards(idxItems), "/api/market/index · index-kline", "指") +
         card("市场情绪", kpis([["温度", num(sen.temperature, 1)], ["判定", esc(sen.level)],
           ["正面", sen.positive], ["负面", sen.negative]]), "/api/sentiment/market", "情") +
         briefCards +
@@ -57,12 +58,13 @@
     title: "市场总览", group: "market", sidebar: "market", template: "dashboard", crumb: ["市场总览"],
     api: { idx: ["/api/market/index?market=a", "index"], sum: ["/api/sector/summary", "summary"], ind: ["/api/sector/industry", "industry"] },
     render: function (m) {
-      var indices = (d(m, "idx").items || []).map(function (x) {
-        return [esc(x.name), '<span class="mono">' + num(x.price) + '</span> <span class="' + cls(x.pct) + '">' + pct(x.pct) + "</span>"];
+      // v3.7.0（①⑥）：核心指数改「卡片 + 迷你走势」
+      var idxItems = (d(m, "idx").items || []).map(function (x) {
+        return { name: x.name, code: x.symbol || x.code || "", price: x.price, pct: x.pct };
       });
       var sum = d(m, "sum");
       var top = (d(m, "ind").items || []).slice().sort(function (a, b) { return b.pct - a.pct; }).slice(0, 8);
-      return card("核心指数", kpis(indices), "/api/market/index", "指") +
+      return card("核心指数", H.idxCards(idxItems), "/api/market/index", "指") +
         card("板块概览", kpis([["板块数", sum.board_count], ["总成交额(亿)", num(sum.total_amount)],
           ["集中度", num(sum.concentration) + "%"], ["领涨", esc((sum.gainers || [])[0] && sum.gainers[0].name)]]),
           "/api/sector/summary", "板") +

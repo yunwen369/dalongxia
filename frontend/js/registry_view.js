@@ -139,10 +139,30 @@
 
   function autoCols(rows) {
     var first = rows[0] || {};
-    var keys = Object.keys(first).filter(function (k) { return typeof first[k] !== "object"; }).slice(0, 5);
+    var keys = Object.keys(first)
+      .filter(function (k) { return typeof first[k] !== "object"; })
+      .filter(function (k) { return k !== "amount" || first.__amount_included !== true; })
+      .slice(0, 6);
+    var H = window.V6_HELPERS || {};
     return keys.map(function (k, i) {
-      return [k, k, i === 0 ? "26%" : null, typeof first[k] === "number" ? "num" : null];
+      // v3.7.0（REQ-20261115-01 ⑧）：表头统一走中文列名映射（唯一来源 components.js）
+      var label = H.colName ? H.colName(k) : k;
+      return [k, label, i === 0 ? "22%" : null, typeof first[k] === "number" ? "num" : null];
     });
+  }
+
+  /** 行集是否含 OHLC（可画完整 K 线）。 */
+  function hasOhlc(rows) {
+    var f = rows[0] || {};
+    return ["open", "close", "high", "low"].every(function (k) { return typeof f[k] === "number"; });
+  }
+
+  /** K 线占位：数据入缓存，由 components.drawPendingKlines 用 echarts 绘制（v3.7.0 ⑨）。 */
+  function klinePlaceholder(rows, widget) {
+    var key = "k" + (++chartSeq);
+    window.__V6_KLINE = window.__V6_KLINE || {};
+    window.__V6_KLINE[key] = { rows: rows.slice(-160), title: widget.title || "K 线" };
+    return '<div class="v-kline" data-key="' + key + '"><div class="loading">K 线加载中…</div></div>';
   }
 
   var chartSeq = 0;
@@ -188,11 +208,20 @@
     }
     var data = result && result.data;
     var rows = pickRows(data, widget._rowKey);
+    // v3.7.0（REQ-20261115-01 ①⑨）：OHLC 行 → 完整 K 线（蜡烛+量+MA），不再画「一条线」
+    if (rows.length && hasOhlc(rows)) { return klinePlaceholder(rows, widget); }
+    // 云图类组件（treemap）→ 面积∝成交额的云图
+    if (data && Array.isArray(data.nodes) && data.nodes.length) {
+      var key2 = "t" + (++chartSeq);
+      window.__V6_TM = window.__V6_TM || {};
+      window.__V6_TM[key2] = { nodes: data.nodes };
+      return '<div class="v-tm v-tm-inline" data-key="' + key2 + '"></div>';
+    }
     if (rows.length && widget.category === "chart") { return chartSVG(rows); }
     if (rows.length && widget.category === "news" && (rows[0].title || rows[0].text)) {
       return feed(rows, 8);
     }
-    if (rows.length) { return table(autoCols(rows), rows.slice(0, 10)); }
+    if (rows.length) { return table(autoCols(rows), rows.slice(0, 30)); }
     var sc = scalars(data);
     if (sc.length) {
       return kpis(sc.map(function (x) {
@@ -315,9 +344,10 @@
     if (counter) { counter.textContent = window.V6_ADDS.length; }
     var hint = document.getElementById("v6-add-hint");
     if (hint) {
-      hint.textContent = "已选择：将 " + widgetId + " 添加到 " +
-        (target === "__dashboard__" ? "我的仪表板" : V[target].title) +
-        "（演示状态，不写入 data/dashboards.json）";
+      // v3.7.0（REQ-20261115-01 ⑤）：真实落库由 w7_portfolio.bindDashboardPersist 执行
+      // （PUT /api/dashboards）；此处只回显目标，不再宣称「演示状态、不写入」。
+      hint.textContent = "已提交：将 " + widgetId + " 添加到 " +
+        (target === "__dashboard__" ? "我的仪表板" : V[target].title) + "（含参数，落库 /api/dashboards）";
     }
     closeAddModal();
   }

@@ -45,9 +45,20 @@
       if (event.target && event.target.id === "v6-add-ok" && pendingWidgetId) {
         var wid = pendingWidgetId;
         pendingWidgetId = "";
-        var psym = $("v7p-symbol"), pper = $("v7p-period"), pbrd = $("v7p-board");
-        var params = { symbol: psym ? (psym.value || "").trim() : "",
-          period: pper ? pper.value : "", board: pbrd ? pbrd.value : "" };
+        // v3.7.0（⑤）：参数取真实控件（三级板块选择器 + 周期 + 起始）
+        var psym = $("v7p-symbol"), pper = $("v7p-period"), pstart = $("v7p-start");
+        var bp = document.getElementById("v7p-board-bp");
+        var bpBoard = bp ? bp.querySelector('input[data-r="search"]') : null;
+        var bpKind = bp ? bp.querySelector('select[data-r="kind"]') : null;
+        var params = {
+          symbol: psym ? (psym.value || "").trim() : "",
+          period: pper ? pper.value : "",
+          start: pstart ? (pstart.value || "") : "",
+          board: bpBoard ? (bpBoard.value || "").trim() : "",
+          kind: bpKind ? bpKind.value : ""
+        };
+        // 空值不入库，避免 params 里塞空串
+        Object.keys(params).forEach(function (k) { if (!params[k]) { delete params[k]; } });
         OB.http.getJSON("/api/dashboards").catch(function () { return null; })
           .then(function (j) {
             var data = (j && j.data) || {};
@@ -62,7 +73,8 @@
               dashboards: list, activeId: data.activeId, groups: data.groups || [] }) })
               .then(function (res) {
                 var ok = res.ok && res.body && !res.body.error;
-                toast(ok ? "组件已保存到仪表板（刷新不丢）" : ((res.body && res.body.error) || "仪表板保存失败"));
+                toast(ok ? "已添加到「" + (target.name || "仪表板") + "」并保存（刷新不丢）"
+                    : ((res.body && res.body.error) || "仪表板保存失败"));
               });
           });
       }
