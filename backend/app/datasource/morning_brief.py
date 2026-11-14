@@ -232,6 +232,127 @@ def build_brief(kind: str) -> Dict[str, Any]:
     }
 
 
+def _board_lookup(board: str) -> Dict[str, Any]:
+    """按板块名在「行业 → 概念」两池中查找该板块当前行情。
+
+    Args:
+        board: 板块名（行业或概念）。
+
+    Returns:
+        dict: `{name, kind, pct, amount, net_inflow, lead_stock}`；未命中返回 kind="未收录"。
+    """
+    from backend.app.datasource import sector as sector_provider
+
+    for kind, loader in (("industry", sector_provider.get_industry), ("concept", sector_provider.get_concept)):
+        try:
+            items = loader("cn") or []
+        except Exception:  # noqa: BLE001 - 单个池失败不中断
+            continue
+        for item in items:
+            if str(item.get("name") or "") == board:
+                return {
+                    "name": board, "kind": kind,
+                    "pct": item.get("pct"), "amount": item.get("amount"),
+                    "net_inflow": item.get("net_inflow"), "lead_stock": item.get("lead_stock"),
+                }
+    return {"name": board, "kind": "未收录"}
+
+
+def build_board_brief(board: str, kind: str = "pre") -> Dict[str, Any]:
+    """生成「指定板块」的确定性规则研判（不落库，按需计算）。
+
+    维度（板块视角，规则同全市场口径但样本限定为该板块）：
+      ① 板块动量：板块当日涨跌幅（>+1% 多 / <-1% 空）
+      ② 板块资金：主力净流入（>0 多 / <0 空；无该字段的概念池按「不可用」不计分）
+      ③ 板块快讯：命中该板块名的快讯情绪温度（>60 多 / <40 空）
+
+    Args:
+        board: 板块名（行业或概念）。
+        kind: ``pre`` / ``post``（沿用调用时机语义，不影响板块维度口径）。
+
+    Returns:
+        dict: 与 `build_brief` 同构的研判记录（附 board / board_kind 字段）。
+    """
+    info = _board_lookup(board)
+    dimensions: List[Dict[str, Any]] = []
+
+    pct = info.get("pct")
+    if isinstance(pct, (int, float)):
+        dimensions.append({
+            "key": "board_momentum", "label": "板块动量（当日涨跌幅）", "known": True,
+            "score": 1 if pct > 1 else (-1 if pct < -1 else 0),
+            "value_text": f"{pct:+.2f}%",
+            "detail": ">+1% 偏多 / <-1% 偏空（板块视角）",
+        })
+    else:
+        dimensions.append({"key": "board_momentum", "label": "板块动量", "known": False,
+                          "detail": "该板块当日行情不可用"})
+
+    flow = info.get("net_inflow")
+    if isinstance(flow, (int, float)):
+        dimensions.append({
+            "key": "board_flow", "label": "板块主力净流入", "known": True,
+            "score": 1 if flow > 0 else (-1 if flow < 0 else 0),
+            "value_text": f"{flow:+.2f} 亿",
+            "detail": "净流入为正偏多 / 为负偏空",
+        })
+    else:
+        dimensions.append({"key": "board_flow", "label": "板块主力净流入", "known": False,
+                          "detail": "该板块口径无净流入字段（如概念池/境外池）→ 不计分"})
+
+    try:
+        from backend.app.datasource import news as news_provider
+        from backend.app.datasource import sentiment as sentiment_engine
+
+        items = [x for x in (news_provider.get_flash_multi(120) or [])
+                 if board in str(x.get("title") or "") or board in str(x.get("text") or "")]
+        if items:
+            scored = sentiment_engine.analyze_items(items, sectors=news_provider.sector_keywords())
+            agg = sentiment_engine.aggregate(scored, scope="brief")
+            temperature = agg.get("temperature")
+        else:
+            agg, temperature = {}, None
+        if temperature is None:
+            dimensions.append({"key": "board_news", "label": "板块快讯情绪", "known": False,
+                              "detail": f"近 120 条快讯中命中「{board}」的样本不足"})
+        else:
+            temperature = float(temperature)
+            dimensions.append({
+                "key": "board_news", "label": "板块快讯情绪温度", "known": True,
+                "score": 1 if temperature > 60 else (-1 if temperature < 40 else 0),
+                "value_text": f"{temperature:.0f} 分（命中 {agg.get('total')} 条，利好 {agg.get('positive')} / 利空 {agg.get('negative')}）",
+                "detail": "仅统计标题/正文命中该板块名的快讯",
+            })
+    except Exception as exc:  # noqa: BLE001 - 维度失败不中断
+        dimensions.append({"key": "board_news", "label": "板块快讯情绪", "known": False,
+                          "detail": f"构建失败（{type(exc).__name__}）"})
+
+    known = [d.get("score") for d in dimensions
+             if d.get("known") and isinstance(d.get("score"), (int, float))]
+    total = int(sum(known)) if known else None
+    if total is None:
+        signal = "数据不足"
+    else:
+        signal = "偏空"
+        for threshold, name in _SIGNALS:
+            if total >= threshold:
+                signal = name
+                break
+    return {
+        "kind": kind,
+        "board": board,
+        "board_kind": info.get("kind"),
+        "date": today_bj().isoformat(),
+        "signal": signal,
+        "score": total,
+        "dimensions": dimensions,
+        "source": SOURCE,
+        "caliber": f"板块确定性规则（板块视角：{board}）——维度样本限定该板块，非全市场口径",
+        "note": "确定性规则聚合（非 AI 输出、非预测），仅供决策参考；维度失败不参与打分",
+        "generated_at": now_text(),
+    }
+
+
 def ensure_today(kind: str, *, now: Optional[Any] = None) -> Dict[str, Any]:
     """按调度条件补当日研判：工作日 + 时段 + 当日该 kind 缺档。
 

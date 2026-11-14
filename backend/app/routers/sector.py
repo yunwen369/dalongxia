@@ -137,10 +137,20 @@ def _industry_cached(market: str) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
-    if market in ("hk", "us"):
+    if market == "us":
+        # 美股行业口径（v3.7.0 REQ-20261115-01）：SPDR 11 大行业 ETF —— 真实行业，非东财行业板块
         candidates: List[Any] = [
-            ("腾讯", "境外简化建模：主要指数+代表个股（无板块专项通道）",
-             lambda: sector_provider.get_overseas_items(market)),
+            ("腾讯", "腾讯/美股行业 ETF（SPDR 11 大行业；真实行业口径，非东财行业板块）",
+             sector_provider.get_us_sector_items),
+            ("腾讯", "美股简化建模：主要指数+代表个股（ETF 池不可用时的兜底）",
+             lambda: sector_provider.get_overseas_items("us")),
+        ]
+    elif market == "hk":
+        candidates = [
+            ("腾讯", "腾讯/恒生指数系列（含 3 个中国内地行业指数）+ 核心龙头个股；港股无免费行业板块通道，行业板块待接入新数据源",
+             sector_provider.get_hk_pool_items),
+            ("腾讯", "港股简化建模：主要指数+代表个股（池不可用时的兜底）",
+             lambda: sector_provider.get_overseas_items("hk")),
         ]
     else:
         candidates = [
@@ -163,8 +173,11 @@ def _concept_cached(market: str) -> Dict[str, Any]:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime。
     """
     if market in ("hk", "us"):
+        # 港美股无免费概念板块通道：如实返回空态（前端渲染可读空态 + 口径说明），
+        # 不以「指数+代表股」冒充概念板块（红线三：不降级、不冒充）。
         candidates: List[Any] = [
-            ("腾讯", "境外简化建模：港美股无免费概念板块通道", lambda: sector_provider.get_overseas_items(market)),
+            ("腾讯", "港美股无免费概念板块通道（行业口径请切到 industry；概念板块待接入新数据源）",
+             lambda: []),
         ]
     else:
         candidates = [
@@ -263,6 +276,17 @@ def sector_heatmap(
     kind_value = (kind or "industry").lower()
     if kind_value not in ("industry", "concept"):
         return bad_request("kind 仅支持 industry/concept")
+
+    # 港美股无免费概念板块通道 → 如实返回「成功 + 空 + 说明」（空/错分离，不冒充板块）
+    if kind_value == "concept" and normalized in ("hk", "us"):
+        as_of, status, is_realtime = _status_now()
+        return _pack_sectors(
+            {"nodes": [], "count": 0, "market": public_market, "kind": kind_value},
+            ["nodes"],
+            "—",
+            "港美股无免费概念板块通道（行业口径请切到 industry；概念板块待接入新数据源）",
+            as_of, status, is_realtime,
+        )
 
     result = _concept_cached(selected) if kind_value == "concept" else _industry_cached(selected)
     if result.get("error"):

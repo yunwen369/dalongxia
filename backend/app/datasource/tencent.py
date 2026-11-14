@@ -22,6 +22,43 @@ from backend.app.datasource import utils
 
 logger = logging.getLogger(__name__)
 
+# 美股行业口径：SPDR 11 大行业 ETF（真实行业指数化标的；akshare 无美股行业板块通道）
+US_SECTOR_ETFS: List[Dict[str, str]] = [
+    {"code": "XLK", "name": "信息科技"},
+    {"code": "XLF", "name": "金融"},
+    {"code": "XLV", "name": "医疗保健"},
+    {"code": "XLE", "name": "能源"},
+    {"code": "XLY", "name": "可选消费"},
+    {"code": "XLP", "name": "必需消费"},
+    {"code": "XLI", "name": "工业"},
+    {"code": "XLB", "name": "原材料"},
+    {"code": "XLU", "name": "公用事业"},
+    {"code": "XLRE", "name": "房地产"},
+    {"code": "XLC", "name": "通信服务"},
+]
+
+# 港股池：恒生指数系列（含 3 个「中国内地行业」指数）+ 核心龙头个股。
+# 说明：akshare 1.19.1 无港股行业板块免费通道（东财板块接口本机不可达），
+# 故港股按「指数系列 + 龙头」建模并如实标注口径；真行业板块需接入新数据源。
+HK_POOL: List[Dict[str, str]] = [
+    {"code": "hkHSI", "name": "恒生指数", "kind": "指数"},
+    {"code": "hkHSTECH", "name": "恒生科技指数", "kind": "指数"},
+    {"code": "hkHSCEI", "name": "恒生中国企业指数", "kind": "指数"},
+    {"code": "hkHSMBI", "name": "恒生中国内地银行指数", "kind": "行业指数"},
+    {"code": "hkHSMOGI", "name": "恒生中国内地石油天然气指数", "kind": "行业指数"},
+    {"code": "hkHSMPI", "name": "恒生中国内地地产指数", "kind": "行业指数"},
+    {"code": "hk00700", "name": "腾讯控股", "kind": "龙头"},
+    {"code": "hk09988", "name": "阿里巴巴-W", "kind": "龙头"},
+    {"code": "hk03690", "name": "美团-W", "kind": "龙头"},
+    {"code": "hk01810", "name": "小米集团-W", "kind": "龙头"},
+    {"code": "hk00939", "name": "建设银行", "kind": "龙头"},
+    {"code": "hk01299", "name": "友邦保险", "kind": "龙头"},
+    {"code": "hk00005", "name": "汇丰控股", "kind": "龙头"},
+    {"code": "hk00941", "name": "中国移动", "kind": "龙头"},
+    {"code": "hk02318", "name": "中国平安", "kind": "龙头"},
+    {"code": "hk09618", "name": "京东集团-SW", "kind": "龙头"},
+]
+
 
 def _ensure_enabled() -> None:
     """检查腾讯源开关；被环境变量禁用时立即失败，供降级链切换。
@@ -287,6 +324,108 @@ def get_index_quotes(market: str = "all") -> List[Dict[str, Any]]:
     if not items:
         raise ValueError("腾讯指数报价返回空列表")
     logger.info("腾讯指数报价命中：%d 个", len(items))
+    return items
+
+
+def get_quotes_by_codes(codes: List[str], referer: Optional[str] = None) -> List[Dict[str, Any]]:
+    """批量取腾讯报价（任意市场代码，如 ``usXLK`` / ``hkHSI``）。
+
+    Args:
+        codes: 腾讯代码列表（含市场前缀）。
+        referer: 可选 Referer 覆盖。
+
+    Returns:
+        List[Dict[str, Any]]: 解析后的报价；无法识别的行跳过（不抛错，便于部分成功）。
+
+    Raises:
+        ValueError: 上游返回为空。
+    """
+    _ensure_enabled()
+    if not codes:
+        raise ValueError("代码列表为空")
+    items: List[Dict[str, Any]] = []
+    for start in range(0, len(codes), 60):
+        chunk = codes[start:start + 60]
+        url = f"{config.TENCENT_QUOTE_BASE}/q={','.join(chunk)}"
+        text = utils.http_get_text(url, referer=referer or config.TENCENT_REFERER, encoding="gbk")
+        for line in text.strip().splitlines():
+            if '="' not in line or "pv_none_match" in line:
+                continue
+            variable = line.split("=", 1)[0].replace("v_", "")
+            try:
+                quote = _parse_quote_line(line, "us" if variable.startswith("us") else "hk")
+            except (ValueError, IndexError):
+                continue
+            quote["tencent_code"] = variable
+            items.append(quote)
+    if not items:
+        raise ValueError("腾讯批量报价返回空列表")
+    return items
+
+
+def get_us_etf_quotes() -> List[Dict[str, Any]]:
+    """美股行业 ETF 报价（SPDR 11 大行业，真实行业口径）。
+
+    Returns:
+        List[Dict[str, Any]]: 每项含 name(中文行业)/code(ETF)/price/pct/amount(元)。
+
+    Raises:
+        ValueError: 上游返回空。
+    """
+    codes = ["us" + item["code"] for item in US_SECTOR_ETFS]
+    quotes = get_quotes_by_codes(codes)
+    by_code = {item["code"]: item for item in US_SECTOR_ETFS}
+    items: List[Dict[str, Any]] = []
+    for quote in quotes:
+        raw = str(quote.get("symbol") or quote.get("tencent_code") or "")
+        etf = by_code.get(raw.split(".")[0].replace("us", "").upper())
+        if not etf:
+            continue
+        items.append({
+            "code": etf["code"],
+            "name": f"{etf['name']}（{etf['code']}）",
+            "price": quote.get("price"),
+            "pct": quote.get("pct"),
+            "amount": quote.get("amount"),
+            "up": None,
+            "down": None,
+            "kind": "行业ETF",
+        })
+    if not items:
+        raise ValueError("美股行业 ETF 报价返回空列表")
+    logger.info("腾讯美股行业 ETF 命中：%d 个", len(items))
+    return items
+
+
+def get_hk_pool_quotes() -> List[Dict[str, Any]]:
+    """港股池报价（恒生指数系列 + 核心龙头）。
+
+    Returns:
+        List[Dict[str, Any]]: 每项含 name/code(腾讯代码)/price/pct/amount(元)/kind。
+
+    Raises:
+        ValueError: 上游返回空。
+    """
+    quotes = get_quotes_by_codes([item["code"] for item in HK_POOL])
+    by_code = {item["code"]: item for item in HK_POOL}
+    items: List[Dict[str, Any]] = []
+    for quote in quotes:
+        meta = by_code.get(str(quote.get("tencent_code") or ""))
+        if not meta:
+            continue
+        is_index_like = meta["kind"] in ("指数", "行业指数")
+        items.append({
+            "code": meta["code"],
+            "name": meta["name"],
+            "price": quote.get("price"),
+            "pct": quote.get("pct"),
+            # 港股指数：源站 parts[37] 为成交量副本，非成交额 → 如实置 None（前端显示「—」）
+            "amount": None if is_index_like else quote.get("amount"),
+            "kind": meta["kind"],
+        })
+    if not items:
+        raise ValueError("港股池报价返回空列表")
+    logger.info("腾讯港股池命中：%d 个", len(items))
     return items
 
 

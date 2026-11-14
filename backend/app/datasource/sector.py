@@ -258,6 +258,72 @@ def _concept_ths_names() -> List[Dict[str, Any]]:
     return items
 
 
+def get_us_sector_items() -> List[Dict[str, Any]]:
+    """美股行业池：SPDR 11 大行业 ETF（真实行业口径，非东财行业板块）。
+
+    Returns:
+        list[dict]: 与行业列表同构的条目；amount 单位=亿美元（上游为 USD 元值）。
+
+    Raises:
+        ValueError: 上游返回空。
+    """
+    items: List[Dict[str, Any]] = []
+    for quote in tencent.get_us_etf_quotes():
+        amount = _num(quote.get("amount"))
+        items.append(
+            {
+                "name": quote.get("name"),
+                "code": quote.get("code"),
+                "pct": _round(_num(quote.get("pct"))),
+                "amount": _round(amount / 1e8, 2) if amount else None,
+                "net_inflow": None,
+                "lead_stock": None,
+                "lead_pct": None,
+                "up": None,
+                "down": None,
+                "kind": "行业ETF",
+            }
+        )
+    if not items:
+        raise ValueError("美股行业 ETF 返回空列表")
+    return items
+
+
+def get_hk_pool_items() -> List[Dict[str, Any]]:
+    """港股池：恒生指数系列（含 3 个中国内地行业指数）+ 核心龙头个股。
+
+    Notes:
+        akshare 1.19.1 无港股行业板块免费通道（东财板块接口本机不可达），本函数按
+        「指数系列 + 龙头」如实建模；指数类成交额源站不可信 → 置 None 不补 0。
+
+    Returns:
+        list[dict]: 与行业列表同构的条目；龙头 amount 单位=亿港元。
+
+    Raises:
+        ValueError: 上游返回空。
+    """
+    items: List[Dict[str, Any]] = []
+    for quote in tencent.get_hk_pool_quotes():
+        amount = _num(quote.get("amount"))
+        items.append(
+            {
+                "name": quote.get("name"),
+                "code": quote.get("code"),
+                "pct": _round(_num(quote.get("pct"))),
+                "amount": _round(amount / 1e8, 2) if amount else None,
+                "net_inflow": None,
+                "lead_stock": None,
+                "lead_pct": None,
+                "up": None,
+                "down": None,
+                "kind": quote.get("kind") or "龙头",
+            }
+        )
+    if not items:
+        raise ValueError("港股池返回空列表")
+    return items
+
+
 def _overseas_items(market: str) -> List[Dict[str, Any]]:
     """港美股「境外简化建模」：主要指数 + 代表个股（真实行情，非板块）。
 
@@ -323,8 +389,10 @@ def get_industry(market: str = "cn") -> List[Dict[str, Any]]:
     Returns:
         list[dict]: 记录列表；字段口径见函数内注释与《接口说明书》。
     """
-    if market in ("hk", "us"):
-        return _overseas_items(market)
+    if market == "hk":
+        return get_hk_pool_items()
+    if market == "us":
+        return get_us_sector_items()
     return _industry_ths()
 
 

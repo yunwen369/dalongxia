@@ -209,12 +209,18 @@ def sentiment_market(
 def sentiment_brief(
     kind: str = Query("all", description="pre=盘前 / post=盘后 / all=全部"),
     limit: int = Query(10, ge=1, le=60),
+    board: str = Query("", description="可选：板块名 —— 传入则返回「板块视角」研判（按需计算不落库）"),
 ) -> Dict[str, Any]:
     """定时研判（设计基准 P3）：盘前/盘后确定性规则研判落库读取。
+
+    v3.7.0（REQ-20261115-01 ③）：新增可选 `board` —— 传入板块名时按**板块视角**即时计算
+    （板块动量 / 板块主力净流入 / 板块快讯情绪），**不写入落库序列**（避免污染每日研判档案）；
+    未传时保持原「全市场落库研判」行为不变。
 
     Args:
         kind: pre / post / all。
         limit: 返回条数上限。
+        board: 板块名（行业或概念），可选。
 
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`。
@@ -223,6 +229,16 @@ def sentiment_brief(
     if mode not in ("all", "pre", "post"):
         return bad_request("kind 仅支持 all/pre/post")
     from backend.app.datasource import morning_brief
+
+    board_name = (board or "").strip()
+    if board_name:
+        record = morning_brief.build_board_brief(board_name, kind="post" if mode == "post" else "pre")
+        return pack_success(
+            {"items": [record], "count": 1, "kind": mode, "board": board_name},
+            record.get("source") or "本地规则聚合",
+            record.get("caliber") or "",
+            record.get("generated_at"), "板块研判（即时计算）", False,
+        )
 
     items = morning_brief.list_briefs(limit=limit, kind=None if mode == "all" else mode)
     return pack_success(
