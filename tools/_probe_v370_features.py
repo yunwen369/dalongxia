@@ -106,7 +106,14 @@ def main() -> int:
     })()""")
     tm = json.loads(tm) if isinstance(tm, str) else (tm or {})
     mark("F2 云图渲染", (tm.get("cells") or 0) >= 20, tm)
-    ff = uc.eval_js(cdp, "document.querySelectorAll('.v7-ff-row').length") or 0
+    # 资金流块另发 /api/sector/fundflow（冷启动实测 24.3s，见端点探针），
+    # 与云图不同请求 → 必须轮询，单次读数会在冷实例上假阴（2026-11-15 打包产物实测 rows=0）。
+    ff = 0
+    for _ in range(14):
+        ff = uc.eval_js(cdp, "document.querySelectorAll('.v7-ff-row').length") or 0
+        if ff >= 8:
+            break
+        time.sleep(3)
     mark("F3 行业资金流入流出", ff >= 8, {"rows": ff})
 
     # ---------- F4 完整 K 线（注册表页：板块估值含板块K线卡） ----------
@@ -157,7 +164,13 @@ def main() -> int:
 
     # ---------- F7 快讯原文 ----------
     goto("today", 9.0)
-    links = uc.eval_js(cdp, "document.querySelectorAll('#view-body a[target=_blank]').length") or 0
+    # 快讯条目由 /api/news 异步回填（冷实例首屏可达十余秒）→ 轮询等；阈值不变（≥1 条原文链接）
+    links = 0
+    for _ in range(14):
+        links = uc.eval_js(cdp, "document.querySelectorAll('#view-body a[target=_blank]').length") or 0
+        if links >= 1:
+            break
+        time.sleep(3)
     mark("F7 快讯原文入口", links >= 1, {"links": links})
 
     # ---------- F10 拥挤度/风控「计数 + 名单」（②，首页） ----------

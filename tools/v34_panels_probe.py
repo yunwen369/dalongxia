@@ -137,12 +137,29 @@ def main() -> int:
         add("P03", "概念口径表头", "概念" in head and "涨跌幅" in head, head.replace("\n", "|")[:80])
 
         ui.eval_js(cdp, "document.querySelector('[data-sec-tab=\"板块热力\"]').click()")
-        ok = wait_for(cdp, "document.querySelectorAll('.v7-heat-cell').length > 20")
-        cells = ui.eval_js(cdp, "document.querySelectorAll('.v7-heat-cell').length")
-        up = ui.eval_js(cdp, "document.querySelectorAll('.v7-heat-cell.up').length")
-        down = ui.eval_js(cdp, "document.querySelectorAll('.v7-heat-cell.down').length")
-        add("P04", "板块热力色块（sector/heatmap）", ok and (up or 0) + (down or 0) > 10,
-            "cells=%s up=%s down=%s" % (cells, up, down))
+        # v3.7.0：板块热力由等尺寸色块网格改为「云图（treemap）」，单元类名
+        # .v7-heat-cell → .v-tm-cell，涨跌改用内联背景色（涨红 #ff3b4e / 跌绿 #00c087）。
+        # 此处双兼容：优先按云图统计，无云图时回落旧热力网格选择器（防回退漏检）。
+        ok = wait_for(cdp, "document.querySelectorAll('.v-tm-cell, .v7-heat-cell').length > 20")
+        stat = ui.eval_js(
+            cdp,
+            "(function(){var tm=document.querySelectorAll('.v-tm-cell');"
+            "if(tm.length){var up=0,down=0;"
+            "Array.prototype.forEach.call(tm,function(el){"
+            "var bg=(el.getAttribute('style')||'').toLowerCase();"
+            "if(bg.indexOf('255, 59, 78')>=0||bg.indexOf('#ff3b4e')>=0){up++;}"
+            "if(bg.indexOf('0, 192, 135')>=0||bg.indexOf('#00c087')>=0){down++;}});"
+            "return {kind:'treemap',cells:tm.length,up:up,down:down};}"
+            "var hs=document.querySelectorAll('.v7-heat-cell');"
+            "return {kind:'heat',cells:hs.length,"
+            "up:document.querySelectorAll('.v7-heat-cell.up').length,"
+            "down:document.querySelectorAll('.v7-heat-cell.down').length};})()"
+        ) or {}
+        cells = stat.get("cells") or 0
+        up = stat.get("up") or 0
+        down = stat.get("down") or 0
+        add("P04", "板块云图色块（sector/heatmap）", bool(ok and cells > 20 and (up + down) > 10),
+            "%s cells=%s up=%s down=%s" % (stat.get("kind") or "?", cells, up, down))
 
         ui.eval_js(cdp, "document.querySelector('[data-sec-tab=\"拥挤度单查\"]').click()")
         ok = wait_for(cdp, "document.querySelector('#v7-sec-crowd-body .v-kpi')", 120)
