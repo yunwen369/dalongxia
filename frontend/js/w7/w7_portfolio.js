@@ -149,6 +149,72 @@
     });
   }
 
+  /* ---------- 21a. 卡片自由拉伸（v3.7.0 ⑩：宽 span 吸附档位 + 高 h 120–900px，松手落库） ---------- */
+  var V7_SPAN_STEPS = [12, 16, 20, 24, 28, 32, 48];
+
+  function v7SnapSpan(value) {
+    var best = V7_SPAN_STEPS[0];
+    V7_SPAN_STEPS.forEach(function (s) {
+      if (Math.abs(s - value) < Math.abs(best - value)) { best = s; }
+    });
+    return best;
+  }
+
+  /** 右下角把手：横向拖 → 宽度吸附到合法档位；纵向拖 → 高度 120–900px；松手 PUT 落库。 */
+  function bindGridResize(grid, target, list, data) {
+    grid.addEventListener("mousedown", function (e) {
+      var handle = e.target.closest ? e.target.closest(".dw-resize") : null;
+      if (!handle) { return; }
+      e.preventDefault();
+      e.stopPropagation();
+      var item = handle.closest(".demo-widget");
+      if (!item) { return; }
+      var id = item.getAttribute("data-id");
+      var widget = (target.widgets || []).filter(function (w) { return w.id === id; })[0];
+      if (!widget) { return; }
+      var startY = e.clientY, startX = e.clientX;
+      var startH = Math.round(item.getBoundingClientRect().height);
+      var startSpan = Number(widget.span) || 48;
+      var colW = grid.getBoundingClientRect().width / 48;
+      var curH = startH, curSpan = startSpan;
+      var meta = item.querySelector(".dw-meta");
+      item.classList.add("resizing");
+      function paint() {
+        item.style.height = curH + "px";
+        item.style.gridColumn = "span " + curSpan;
+        if (meta) {
+          meta.textContent = "span " + curSpan + " · " + (V7_SPAN_LABEL[curSpan] || "—") +
+            " / 48 列 · 高 " + curH + "px（松手保存）";
+        }
+      }
+      function move(ev) {
+        curH = Math.max(120, Math.min(900, Math.round(startH + (ev.clientY - startY))));
+        if (colW > 0) {
+          curSpan = v7SnapSpan(Math.max(12, Math.min(48, Math.round(startSpan + (ev.clientX - startX) / colW))));
+        }
+        paint();
+      }
+      function up() {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+        item.classList.remove("resizing");
+        widget.h = curH;
+        widget.span = curSpan;
+        item.setAttribute("data-h", String(curH));
+        item.setAttribute("data-span", String(curSpan));
+        apiJson("/api/dashboards", { method: "PUT", body: JSON.stringify({
+          dashboards: list, activeId: data.activeId, groups: data.groups || [] }) })
+          .then(function (r) {
+            var ok = r.ok && r.body && !r.body.error;
+            toast(ok ? "卡片尺寸已保存（span " + curSpan + " · 高 " + curH + "px）"
+              : ((r.body && r.body.error) || "尺寸保存失败"));
+          });
+      }
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+    });
+  }
+
   /** 把 /api/dashboards 的真实布局注入「48 栅格」预览卡。
    *
    * BUG-20261112-04：视图是异步渲染的，afterRoute 首次调用时栅格容器往往还没挂载，
@@ -186,18 +252,213 @@
       grid.innerHTML = ws.length ? ws.map(function (x) {
         var m = meta[x.id] || {};
         var span = Number(x.span) || 48;
+        // v3.7.0（⑩）：卡片高度 h（120–900px，后端 _clean_widget 已收）随渲染还原
+        var h = Number(x.h) || 0;
         return '<div class="demo-widget cat-' + esc(m.category || "table") + '" draggable="true" data-id="' + esc(x.id) +
-          '" data-span="' + span + '" style="grid-column: span ' + span + '">' +
+          '" data-span="' + span + '" data-h="' + h + '" style="grid-column: span ' + span +
+          (h ? ";height:" + h + "px" : "") + '">' +
           '<div class="dw-head"><b>' + esc(x.id) + "</b><span>" + esc(m.title || x.id) + "</span></div>" +
-          '<div class="dw-meta">span ' + span + " · " + (V7_SPAN_LABEL[span] || "—") + " / 48 列</div>" +
+          '<div class="dw-meta">span ' + span + " · " + (V7_SPAN_LABEL[span] || "—") + " / 48 列" +
+          " · 高 " + (h ? h + "px" : "自动") + "</div>" +
           '<button class="dw-remove" type="button" draggable="false" data-remove="' + esc(x.id) + '">移除</button>' +
+          '<span class="dw-resize" draggable="false" title="拖拽右下角自由拉伸：左右改宽度（档位）/ 上下改高度（120–900px）"></span>' +
           "</div>";
       }).join("") : '<div class="v-empty">仪表板为空，从组件库添加</div>';
       grid.setAttribute("data-v7-bound", "1");
       bindGridDrag(grid, target, list, data);
+      bindGridResize(grid, target, list, data);
       var note = grid.closest(".card") && grid.closest(".card").querySelector(".card-note");
-      if (note) { note.textContent = "拖拽卡片可调整顺序，松手即保存到 /api/dashboards"; }
+      if (note) { note.textContent = "拖拽卡片调顺序 · 拖右下角把手自由拉伸宽高，松手即保存到 /api/dashboards"; }
     }).catch(function () { /* 静默：预览卡属辅助视图，失败不影响主画布 */ });
+  }
+
+  /* ---------- 21b. 仪表板管理 CRUD + 右键菜单（v3.7.0 ④） ---------- */
+  var _dashSel = "";       // 当前选中仪表板 id
+  var _dashDelArm = "";    // 删除二次确认的 id（首次点击只「预备」，再点才执行）
+
+  /** 读取仪表板配置（dashboards / activeId / groups 三件套）。 */
+  function dashState() {
+    return OB.http.getJSON("/api/dashboards").then(function (j) {
+      var data = (j && j.data) || {};
+      return { list: data.dashboards || [], activeId: data.activeId || "", groups: data.groups || [] };
+    });
+  }
+
+  /** 保存仪表板配置（PUT /api/dashboards）；返回是否成功。 */
+  function dashSave(st) {
+    return apiJson("/api/dashboards", { method: "PUT", body: JSON.stringify({
+      dashboards: st.list, activeId: st.activeId, groups: st.groups }) })
+      .then(function (r) { return !!(r.ok && r.body && !r.body.error); })
+      .catch(function () { return false; });
+  }
+
+  function dashNewId(list) {
+    var used = {};
+    list.forEach(function (x) { used[x.id] = 1; });
+    var n = 1;
+    while (used["dash" + n]) { n += 1; }
+    return "dash" + n;
+  }
+
+  /** 仪表板管理页：工具栏（新建/重命名/设为当前/删除）+ 行选中 + 右键上下文菜单。 */
+  function injectDashboardManager() {
+    if (currentId() !== "dashboard-manage") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-dash-mgr")) { return; }
+    var bar = document.createElement("div");
+    bar.className = "v7-toolbar v7-dash-mgr";
+    bar.innerHTML =
+      '<input id="v7-dash-name" placeholder="仪表板名称（新建/重命名用）">' +
+      '<button class="v7-btn primary" data-dash-act="new" type="button">＋ 新建仪表板</button>' +
+      '<button class="v7-btn" data-dash-act="rename" type="button">重命名</button>' +
+      '<button class="v7-btn" data-dash-act="activate" type="button">设为当前</button>' +
+      '<button class="v7-btn danger" data-dash-act="delete" type="button">删除</button>' +
+      '<span class="v7-hint">点选行选中；右键行弹出同一组操作 · 改动即时落库 /api/dashboards</span>';
+    body.insertBefore(bar, body.firstChild);
+
+    var menu = document.createElement("div");
+    menu.className = "v7-ctx";
+    menu.hidden = true;
+    menu.innerHTML = [["new", "新建仪表板"], ["rename", "重命名"], ["activate", "设为当前"], ["delete", "删除"]]
+      .map(function (x) { return '<button type="button" data-dash-act="' + x[0] + '">' + x[1] + "</button>"; })
+      .join("");
+    document.body.appendChild(menu);
+
+    var delBtn = bar.querySelector('[data-dash-act="delete"]');
+    function resetDelArm() {
+      _dashDelArm = "";
+      if (delBtn) { delBtn.textContent = "删除"; delBtn.classList.remove("armed"); }
+    }
+    function syncSel() {
+      Array.prototype.forEach.call(body.querySelectorAll("tr[data-dash-id]"), function (tr) {
+        var on = tr.getAttribute("data-dash-id") === _dashSel;
+        tr.classList.toggle("sel", on);
+        if (on) { tr.setAttribute("aria-selected", "true"); } else { tr.removeAttribute("aria-selected"); }
+      });
+      var cur = body.querySelector("tr[data-dash-id].sel");
+      var input = document.getElementById("v7-dash-name");
+      if (cur && input && !input.value) { input.value = cur.getAttribute("data-dash-name") || ""; }
+    }
+    /** 给表格行补 data 属性（顺序与 /api/dashboards 一致，views.js 同一数据源）。 */
+    function bindRows(st) {
+      var trs = Array.prototype.filter.call(body.querySelectorAll("table tr"), function (tr) {
+        return tr.querySelectorAll("td").length > 0;
+      });
+      trs.forEach(function (tr, i) {
+        var item = st.list[i];
+        if (!item) { return; }
+        tr.setAttribute("data-dash-id", item.id);
+        tr.setAttribute("data-dash-name", item.name || item.id);
+        tr.classList.add("v7-dash-row");
+        tr.classList.toggle("is-active", item.id === st.activeId);
+        var tag = tr.querySelector(".dash-active-tag");
+        if (item.id === st.activeId && !tag) {
+          var td = tr.querySelector("td");
+          if (td) { td.insertAdjacentHTML("beforeend", ' <span class="dash-active-tag">当前</span>'); }
+        }
+      });
+      if (!_dashSel || !st.list.some(function (x) { return x.id === _dashSel; })) {
+        _dashSel = st.activeId || (st.list[0] && st.list[0].id) || "";
+      }
+      syncSel();
+    }
+    function reload(st) {
+      if (st) { bindRows(st); return; }
+      dashState().then(bindRows).catch(function () { /* 配置不可读：保持静态表 */ });
+    }
+    function act(kind) {
+      menu.hidden = true;
+      dashState().then(function (st) {
+        var input = document.getElementById("v7-dash-name");
+        var name = ((input && input.value) || "").trim();
+        var cur = st.list.filter(function (x) { return x.id === _dashSel; })[0] || null;
+        if (kind === "new") {
+          if (!name) { toast("请先在输入框填写新仪表板名称"); return; }
+          if (st.list.some(function (x) { return x.name === name; })) { toast("已存在同名仪表板"); return; }
+          var id = dashNewId(st.list);
+          st.list.push({ id: id, name: name, group: "自定义", widgets: [] });
+          if (!st.activeId) { st.activeId = id; }
+          dashSave(st).then(function (ok) {
+            toast(ok ? "已新建「" + name + "」（可到组件库添加组件）" : "新建失败（PUT /api/dashboards）");
+            if (!ok) { return; }
+            _dashSel = id;
+            if (input) { input.value = ""; }
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+          });
+          return;
+        }
+        if (!cur) { toast("请先点选一行仪表板（或右键行）"); return; }
+        if (kind === "rename") {
+          if (!name) { toast("请在输入框填写新名称"); return; }
+          cur.name = name;
+          dashSave(st).then(function (ok) {
+            toast(ok ? "已重命名为「" + name + "」" : "重命名失败");
+            if (ok) { window.dispatchEvent(new HashChangeEvent("hashchange")); }
+          });
+          return;
+        }
+        if (kind === "activate") {
+          st.activeId = cur.id;
+          dashSave(st).then(function (ok) {
+            toast(ok ? "「" + (cur.name || cur.id) + "」已设为当前仪表板" : "设置失败");
+            if (ok) { reload(); }
+          });
+          return;
+        }
+        if (kind === "delete") {
+          if (_dashDelArm !== cur.id) {
+            _dashDelArm = cur.id;
+            if (delBtn) { delBtn.textContent = "确认删除"; delBtn.classList.add("armed"); }
+            setTimeout(resetDelArm, 4000);
+            toast("再点一次「确认删除」删除「" + (cur.name || cur.id) + "」（含其组件配置）");
+            return;
+          }
+          resetDelArm();
+          if (st.list.length <= 1) { toast("至少保留一个仪表板（当前仅 1 个）"); return; }
+          st.list = st.list.filter(function (x) { return x.id !== cur.id; });
+          if (st.activeId === cur.id) { st.activeId = st.list[0].id; }
+          dashSave(st).then(function (ok) {
+            toast(ok ? "已删除「" + (cur.name || cur.id) + "」" : "删除失败");
+            if (!ok) { return; }
+            _dashSel = st.activeId;
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+          });
+        }
+      }).catch(function () { toast("仪表板配置读取失败"); });
+    }
+
+    bar.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("[data-dash-act]") : null;
+      if (btn) { act(btn.getAttribute("data-dash-act")); }
+    });
+    menu.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("[data-dash-act]") : null;
+      if (btn) { act(btn.getAttribute("data-dash-act")); }
+    });
+    body.addEventListener("click", function (e) {
+      var tr = e.target.closest ? e.target.closest("tr[data-dash-id]") : null;
+      if (!tr) { return; }
+      _dashSel = tr.getAttribute("data-dash-id");
+      resetDelArm();
+      var input = document.getElementById("v7-dash-name");
+      if (input) { input.value = tr.getAttribute("data-dash-name") || ""; }
+      syncSel();
+    });
+    body.addEventListener("contextmenu", function (e) {
+      var tr = e.target.closest ? e.target.closest("tr[data-dash-id]") : null;
+      if (!tr) { return; }
+      e.preventDefault();
+      _dashSel = tr.getAttribute("data-dash-id");
+      resetDelArm();
+      syncSel();
+      menu.hidden = false;
+      menu.style.left = Math.min(e.clientX, Math.max(8, window.innerWidth - 168)) + "px";
+      menu.style.top = Math.min(e.clientY, Math.max(8, window.innerHeight - 176)) + "px";
+    });
+    document.addEventListener("click", function (e) {
+      if (!menu.hidden && !menu.contains(e.target)) { menu.hidden = true; }
+    });
+    reload();
   }
 
   /* ---------- 22. 组合回测 / 定投计算器（v3.4.0 恢复） ---------- */
@@ -663,6 +924,7 @@
   W7.portfolio.bindDashboardPersist = bindDashboardPersist;
   W7.portfolio.fetchNav = fetchNav;
   W7.portfolio.injectDashboardDrag = injectDashboardDrag;
+  W7.portfolio.injectDashboardManager = injectDashboardManager;   // v3.7.0 ④：CRUD + 右键
   W7.portfolio.injectPortfolioAttrPanel = injectPortfolioAttrPanel;
   W7.portfolio.injectPortfolioTrendChart = injectPortfolioTrendChart;
   W7.portfolio.loadPortfolioAttr = loadPortfolioAttr;

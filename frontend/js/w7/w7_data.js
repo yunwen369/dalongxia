@@ -519,6 +519,131 @@
       });
   }
 
+  /* ---------- 31b. 板块研判卡（v3.7.0 ③：情绪/研判按具体板块） ---------- */
+  var _boardPoolState = 0;        // 0=未加载 1=加载中 2=就绪
+  var _boardPoolWaiters = [];
+
+  /** 板块池（行业 90 / 概念 800+）懒加载，供所有三级选择器共用；就绪后回调（幂等）。 */
+  function ensureBoardPool(cb) {
+    var st = W7.st;
+    if (_boardPoolState === 2) { if (cb) { cb(st.boardPool); } return; }
+    if (cb) { _boardPoolWaiters.push(cb); }
+    if (_boardPoolState === 1) { return; }
+    _boardPoolState = 1;
+    st.boardPool = { industry: [], concept: [], tree: { industry: [], concept: [] } };
+    var pending = 2;
+    function finish() {
+      pending -= 1;
+      if (pending > 0) { return; }
+      _boardPoolState = 2;
+      var pool = st.boardPool;
+      _boardPoolWaiters.splice(0).forEach(function (fn) {
+        try { fn(pool); } catch (e) { /* 单个选择器绑定失败不影响其它 */ }
+      });
+    }
+    OB.http.getJSON("/api/sector/industry?market=a").then(function (r) {
+      st.boardPool.industry = (r && r.data && r.data.items) || [];
+      st.boardPool.tree.industry = [{ label: "全部行业", children: st.boardPool.industry.map(function (x) { return x.name; }) }];
+      finish();
+    }).catch(finish);
+    OB.http.getJSON("/api/sector/concept?market=a").then(function (r) {
+      st.boardPool.concept = (r && r.data && r.data.items) || [];
+      st.boardPool.tree.concept = [{ label: "全部概念", children: st.boardPool.concept.map(function (x) { return x.name; }) }];
+      finish();
+    }).catch(finish);
+  }
+
+  /** 板块级研判：并行取板块口径情绪（sentiment/market?board）与规则研判（sentiment/brief?board）。 */
+  function runBoardBrief(board, kind) {
+    var out = $("v7-brief-out");
+    if (!out) { return; }
+    board = (board || "").trim();
+    if (!board) { out.innerHTML = '<div class="v-empty">请先选择或输入板块名</div>'; return; }
+    W7.st.briefBoard = board;
+    W7.st.briefKind = kind || "industry";
+    // 注意：/api/sentiment/brief 的 kind 是「pre/post/all（盘前/盘后）」，不是板块类型；
+    // 传 board 即走板块视角分支（后端不落库）。板块类型仅供界面显示。
+    var qs = "board=" + encodeURIComponent(board);
+    out.innerHTML = '<div class="loading">计算中…（板块级首次约 5–20 秒）</div>';
+    Promise.all([
+      apiJson("/api/sentiment/market?" + qs).catch(function () { return null; }),
+      apiJson("/api/sentiment/brief?" + qs).catch(function () { return null; })
+    ]).then(function (arr) {
+      var target = $("v7-brief-out");
+      if (!target) { return; }
+      var senErr = arr[0] && arr[0].body && arr[0].body.error;
+      var briefBody = (arr[1] && arr[1].body) || {};
+      var sen = (arr[0] && arr[0].body && arr[0].body.data) || {};
+      var brief = ((briefBody.data && briefBody.data.items) || [])[0] || null;
+      var scoreText = brief && brief.score != null
+        ? (brief.score > 0 ? "+" + brief.score : String(brief.score)) : "—";
+      var html = statKpis([
+        ["板块", board + "（" + (W7.st.briefKind === "concept" ? "概念" : "行业") + "）"],
+        ["研判信号", brief && brief.signal ? brief.signal : "—"],
+        ["维度得分", scoreText],
+        ["情绪温度", sen.temperature != null ? secFixed(sen.temperature, 1) : "—"]
+      ]);
+      if (brief && (brief.dimensions || []).length) {
+        html += '<div class="v7-preview-table"><table><tr><th>研判维度</th><th>结论</th><th>口径</th></tr>' +
+          brief.dimensions.map(function (x) {
+            return "<tr><td>" + esc(x.label || x.key) + "</td><td>" +
+              (x.known === false ? '<span style="opacity:.6">样本不足</span>' : esc(x.value_text || "—")) +
+              "</td><td>" + (x.detail ? '<span style="opacity:.72">' + esc(x.detail) + "</span>" : "—") + "</td></tr>";
+          }).join("") + "</table></div>";
+      } else if (!brief) {
+        html += '<div class="v-empty">' +
+          esc(briefBody.error || "该板块暂无研判数据（样本不足或接口未返回）") + "</div>";
+      }
+      html += '<div class="v7-hint" style="margin-top:6px">情绪样本 ' +
+        esc(String(sen.total == null ? "—" : sen.total)) + " 条 · 判级 " + esc(sen.level || "—") +
+        "（正面 " + esc(String(sen.positive == null ? "—" : sen.positive)) +
+        " / 负面 " + esc(String(sen.negative == null ? "—" : sen.negative)) + "）" +
+        (senErr ? " · 情绪接口：" + esc(senErr) : "") + "</div>";
+      if (brief && brief.caliber) { html += '<div class="v7-sec-note">口径：' + esc(brief.caliber) + "</div>"; }
+      if (brief && brief.note) { html += '<div class="v7-sec-note">' + esc(brief.note) + "</div>"; }
+      target.innerHTML = html;
+    });
+  }
+
+  /** 注入「板块研判」卡（今日看点 / 市场总览）：三级选择器 + 板块口径情绪与研判。 */
+  function injectBoardBriefPanel() {
+    var id = currentId();
+    if (id !== "today" && id !== "market") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-brief-board")) { return; }
+    var H = window.V6_HELPERS || {};
+    if (!H.boardPickerHtml || !H.bindBoardPicker) { return; }
+    var card = document.createElement("div");
+    card.className = "card v7-brief-board";
+    card.innerHTML =
+      '<div class="card-head"><span class="card-title"><span class="badge-ico">研</span>板块研判</span>' +
+        '<span class="card-note">选定具体板块，按板块口径重算情绪与规则研判</span></div>' +
+      '<div class="v-bp-bar">' +
+        H.boardPickerHtml("v7-brief-bp", { kind: W7.st.briefKind || "industry", value: W7.st.briefBoard || "" }) +
+        '<button class="v7-btn primary" id="v7-brief-go" type="button">研判</button>' +
+      "</div>" +
+      '<div id="v7-brief-out"><div class="v-empty">选择板块后自动研判；也可输入板块名后点「研判」或回车</div></div>' +
+      '<div class="v7-sec-note">数据源：/api/sentiment/market?board= 与 /api/sentiment/brief?board=（即时计算，不落库）</div>';
+    var first = body.firstChild;
+    body.insertBefore(card, first ? first.nextSibling : null);
+    var el = card.querySelector("#v7-brief-bp");
+    ensureBoardPool(function (pool) {
+      H.bindBoardPicker(el, pool, function (kind, value) {
+        if (value) { runBoardBrief(value, kind); }
+      });
+    });
+    var goBtn = card.querySelector("#v7-brief-go");
+    var search = card.querySelector('#v7-brief-bp [data-r="search"]');
+    var kindSel = card.querySelector('#v7-brief-bp [data-r="kind"]');
+    function go() { runBoardBrief((search && search.value) || "", (kindSel && kindSel.value) || "industry"); }
+    if (goBtn) { goBtn.addEventListener("click", go); }
+    if (search) {
+      search.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") { ev.preventDefault(); go(); }
+      });
+    }
+  }
+
   /* ---------- 32. 选股器（v3.4.0：恢复 screener/refresh · screener/run） ---------- */
   var SCREENER_FACTORS = [
     ["pe", "PE-TTM", "倍"], ["pb", "PB-MRQ", "倍"], ["ps", "PS-TTM", "倍"],
@@ -657,6 +782,9 @@
   W7.data.objTable = objTable;
   W7.data.runCrowd = runCrowd;
   W7.data.runScreener = runScreener;
+  W7.data.ensureBoardPool = ensureBoardPool;          // v3.7.0 ③：板块池共用
+  W7.data.injectBoardBriefPanel = injectBoardBriefPanel;
+  W7.data.runBoardBrief = runBoardBrief;
   W7.data.secFixed = secFixed;
   W7.data.secSigned = secSigned;
   W7.data.secSignedText = secSignedText;

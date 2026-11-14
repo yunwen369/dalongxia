@@ -58,24 +58,13 @@
         '<div class="v7-field"><span>板块（可选）</span>' +
           (H.boardPickerHtml ? H.boardPickerHtml("v7p-board-bp", { kind: "industry", value: "" }) : "") + "</div>";
       body.appendChild(box);
-      // 懒加载真实板块清单并绑定三级选择器（行业 90 / 概念 805；一级分组来自板块树）
-      if (window.V6_HELPERS && window.V6_HELPERS.bindBoardPicker) {
+      // 懒加载真实板块清单并绑定三级选择器（行业 90 / 概念 800+；一级分组来自板块树）
+      // v3.7.0 ③：板块池统一由 W7.data.ensureBoardPool 提供（与「板块研判」卡共用一次请求）
+      if (window.V6_HELPERS && window.V6_HELPERS.bindBoardPicker && W7.data && W7.data.ensureBoardPool) {
         var bpEl = box.querySelector("#v7p-board-bp");
-        var st = window.W7 && W7.st ? W7.st : (W7.st = {});
-        if (!st.boardPool) {
-          st.boardPool = { industry: [], concept: [], tree: { industry: [], concept: [] } };
-          OB.http.getJSON("/api/sector/industry?market=a").then(function (r) {
-            st.boardPool.industry = ((r && r.data && r.data.items) || []);
-            st.boardPool.tree.industry = [{ label: "全部行业", children: st.boardPool.industry.map(function (x) { return x.name; }) }];
-            if (bpEl) { V6_HELPERS.bindBoardPicker(bpEl, st.boardPool, null); }
-          }).catch(function () { /* 板块清单不可用：选择器保持空，不阻断添加流程 */ });
-          OB.http.getJSON("/api/sector/concept?market=a").then(function (r) {
-            st.boardPool.concept = ((r && r.data && r.data.items) || []);
-            st.boardPool.tree.concept = [{ label: "全部概念", children: st.boardPool.concept.map(function (x) { return x.name; }) }];
-          }).catch(function () { /* 同上 */ });
-        } else if (bpEl) {
-          V6_HELPERS.bindBoardPicker(bpEl, st.boardPool, null);
-        }
+        W7.data.ensureBoardPool(function (pool) {
+          if (bpEl) { V6_HELPERS.bindBoardPicker(bpEl, pool, null); }
+        });
       }
       var note = modal.querySelector(".v6-modal-note");
       if (note) {

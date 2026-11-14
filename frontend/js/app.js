@@ -16,7 +16,9 @@
     sentiment: "/api/sentiment/market",
     industry: "/api/sector/industry",
     summary: "/api/sector/summary",
-    crowding: "/api/sector/crowding/rankings",
+    // v3.7.0（②）：limit=120 取全量扫描结果 —— 后端 level_counts 按全部扫描计，
+    // 若仍用默认 limit=50 会「计数 20 个、名单只有 8 个」，明细与计数对不上。
+    crowding: "/api/sector/crowding/rankings?limit=120",
     alerts: "/api/alerts/events",
     macro: "/api/macro/overview"
   };
@@ -217,7 +219,31 @@
     return { items: items, demo: result.demo };
   }
 
-  /** 拥挤度分档进度条。 */
+  /* v3.7.0（②）：拥挤度/风控「计数 + 具体名单」公共件。
+     用户诉求：原来只有「高位 3 个 / 偏高 17 个」这种计数，看不到是谁。
+     名单条数以 data-total 标注真实总数（展示上限内截断时仍可核对，B9 判据用）。 */
+  var CROWD_LEVEL_CLS = { "高位": "hot", "偏高": "warn", "正常": "ok" };
+  var CROWD_LEVEL_MAX = 12;
+
+  function crowdChips(level, items) {
+    var list = items || [];
+    if (!list.length) { return ""; }
+    var shown = list.slice(0, CROWD_LEVEL_MAX);
+    return '<div class="bd-line" data-bd-level="' + esc(level) + '" data-total="' + list.length + '">' +
+      '<span class="bd-tag ' + (CROWD_LEVEL_CLS[level] || "") + '">' + esc(level) + "</span>" +
+      shown.map(function (x) {
+        return '<button class="bd-chip" type="button" data-crowd-board="' + esc(x.board) +
+          '" title="' + esc(x.board) + " 拥挤度 " + num(x.score, 1) +
+          "（点击查看该板块六维明细）" + '">' + esc(x.board) +
+          '<i>' + num(x.score, 1) + "</i></button>";
+      }).join("") +
+      (list.length > shown.length
+        ? '<span class="bd-more" title="其余 ' + (list.length - shown.length) + ' 个见板块行情页">+' +
+          (list.length - shown.length) + " 个</span>" : "") +
+      "</div>";
+  }
+
+  /** 拥挤度分档进度条 + 高位/偏高板块名单。 */
   async function renderBars() {
     var result = await getJSON(API.crowding, "crowding");
     var counts = (result.data && result.data.level_counts) || {};
@@ -228,7 +254,7 @@
       { label: "已扫描", value: (result.data && result.data.scanned) || 0, color: "linear-gradient(90deg,#3a72a8,#1c4f86)" }
     ];
     var max = Math.max.apply(null, rows.map(function (r) { return r.value; })) || 1;
-    $("bar-list").innerHTML = rows.map(function (row) {
+    var html = rows.map(function (row) {
       // 平方根缩放：保留档位相对关系，避免小值条形不可见；数值本身仍为真实值。
       var width = Math.max(6, Math.sqrt(row.value / max) * 100);
       return '<div class="bar-row"><span class="bar-label">' + row.label + "</span>" +
@@ -236,27 +262,60 @@
         "%;background:" + row.color + '"></span></span>' +
         '<span class="bar-num">' + row.value + "</span></div>";
     }).join("");
-    tagSource("src-bar", result, API.crowding);
+    // 名单：按 level 分组（items 已按分数降序，同名次即分数序）
+    var byLevel = { "高位": [], "偏高": [] };
+    ((result.data && result.data.items) || []).forEach(function (x) {
+      if (byLevel[x.level]) { byLevel[x.level].push(x); }
+    });
+    var detail = crowdChips("高位", byLevel["高位"]) + crowdChips("偏高", byLevel["偏高"]);
+    html += detail ? '<div class="bar-detail">' + detail + "</div>" : "";
+    $("bar-list").innerHTML = html;
+    tagSource("src-bar", result, API.crowding + " · 明细名单与计数同源");
     return { data: result.data, demo: result.demo };
   }
 
-  /** 风控概览（只展示真实可得字段，不编造指标）。 */
+  /** 风控概览（只展示真实可得字段，不编造指标）+ 风险名单 / 未读提醒明细。 */
   async function renderRisk(crowding) {
     var result = await getJSON(API.alerts, "alerts");
     var counts = (crowding.data && crowding.data.level_counts) || {};
+    var high = ((crowding.data && crowding.data.items) || []).filter(function (x) { return x.level === "高位"; });
+    var events = (result.data && result.data.events) || [];
+    var unreadEvents = events.filter(function (e) { return !e.read; });
+    var unread = (result.data && result.data.unread);
+    if (typeof unread !== "number") { unread = unreadEvents.length; }
     // 风险状态着色：高位红 / 偏高橙 / 无未读绿，让问题一眼可见。
     var rows = [
       ["高位板块", (counts["高位"] || 0) + " 个", "up"],
       ["偏高板块", (counts["偏高"] || 0) + " 个", "warn"],
-      ["未读提醒", ((result.data && result.data.unread) || 0) + " 条", "down"],
+      ["未读提醒", unread + " 条", unread ? "down" : ""],
       ["扫描 / 失败", (crowding.data && crowding.data.scanned || 0) + " / " +
         (((crowding.data && crowding.data.failed) || []).length), ""]
     ];
-    $("risk-list").innerHTML = rows.map(function (row) {
+    var html = rows.map(function (row) {
       return '<div class="stat-row"><span>' + row[0] + '</span><b class="' +
         row[2] + '">' + esc(row[1]) + "</b></div>";
     }).join("");
-    tagSource("src-risk", result, "/api/sector/crowding/rankings + /api/alerts/events");
+    // 明细一：高位板块名单（风险名单，点击→板块页六维明细）
+    if (high.length) {
+      html += '<div class="risk-detail" data-risk-list="high">' +
+        crowdChips("高位", high) + "</div>";
+    }
+    // 明细二：未读提醒逐条（规则名 + 标的 + 时间，非仅数字）
+    if (unread) {
+      var shown = unreadEvents.slice(0, 4);
+      html += '<div class="risk-events" data-risk-list="alerts" data-total="' + unread + '">' +
+        '<span class="bd-tag warn">未读提醒</span>' +
+        shown.map(function (e) {
+          return '<div class="re-item" title="' + esc(e.message || "") + '">' +
+            '<b>' + esc(e.type_label || e.type || "规则") + "</b>" +
+            '<span class="re-target">' + esc(e.target || "—") + "</span>" +
+            '<span class="re-time">' + esc(String(e.time || "").slice(5, 16)) + "</span></div>";
+        }).join("") +
+        (unread > shown.length ? '<div class="bd-more">+' + (unread - shown.length) + " 条（见提醒页）</div>" : "") +
+        "</div>";
+    }
+    $("risk-list").innerHTML = html;
+    tagSource("src-risk", result, API.crowding + " + /api/alerts/events · 名单与计数同源");
   }
 
   /** 今日领涨 / 领跌。 */
@@ -506,6 +565,34 @@
     });
   }
 
+  /** v3.7.0（②）：首页拥挤度/风控名单里的板块 chip → 板块行情页「拥挤度单查」并自动算一次。
+      app.js 先于 w7/*.js 加载，故走惰性桥（运行时才读 window.W7）。 */
+  function bindBoardChipJump() {
+    document.addEventListener("click", function (event) {
+      var chip = event.target.closest ? event.target.closest("[data-crowd-board]") : null;
+      if (!chip) { return; }
+      var board = chip.getAttribute("data-crowd-board");
+      if (!board) { return; }
+      event.preventDefault();
+      if (String(location.hash || "").indexOf("#/sectors") !== 0) { location.hash = "#/sectors"; }
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        if (tries > 40) { clearInterval(timer); return; }   // 6s 内等不到工具卡就放弃（不报错）
+        var tab = document.querySelector('[data-sec-tab="拥挤度单查"]');
+        var input = document.getElementById("v7-sec-board");
+        if (!tab || !input) { return; }
+        clearInterval(timer);
+        if (!tab.classList.contains("on")) { tab.click(); }   // 切页签会重渲染，故延后再填值
+        setTimeout(function () {
+          var box = document.getElementById("v7-sec-board");
+          if (box) { box.value = board; }
+          if (window.W7 && W7.data && W7.data.runCrowd) { W7.data.runCrowd(); }
+        }, 80);
+      }, 150);
+    });
+  }
+
   /** 动态数据：定时重拉真实接口，走势图重绘 + 数字闪动，不是静态快照。 */
   function startLiveRefresh() {
     var live = { enabled: true, intervalMs: 12000, ticks: 0, busy: false };
@@ -739,6 +826,11 @@
     src.textContent = demoKeys.length
       ? "演示数据·非真实行情（降级端点：" + demoKeys.join(", ") + "）"
       : "真实接口：" + keys.map(function (key) { return decodeURIComponent(api[key][0]); }).join("  |  ");
+    // v3.7.0：视图渲染完成信号 —— 注入类卡片（板块研判 / 仪表板管理工具栏）必须在此之后挂载，
+    // 否则会被这次 host.innerHTML = html 覆盖掉（且静默无异常，表现为「切路由偶发不出现」）。
+    try {
+      window.dispatchEvent(new CustomEvent("view:rendered", { detail: { id: id, quiet: !!quiet } }));
+    } catch (ignored) { /* 老浏览器无 CustomEvent 构造器时忽略 */ }
   }
 
   /** 路由：home 显示原首页，其余视图显示通用视图外壳。 */
@@ -771,6 +863,7 @@
     bindSkinSwitch();
     bindNav();
     bindDemoActions();
+    bindBoardChipJump();
     startLiveRefresh();
     // 2026-11-12 修复：原先 route() 与 hashchange 监听放在全部首页数据 await 之后，
     // 导致首屏最长 30s 无侧栏/顶栏，且期间的 hash 跳转被丢弃。改为启动即渲染导航。

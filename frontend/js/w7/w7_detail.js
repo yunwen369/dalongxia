@@ -10,10 +10,12 @@
   var injectAiTestPanel = function () { return W7.ai.injectAiTestPanel.apply(null, arguments); };
   var injectFinSummaryCard = function () { return W7.ai.injectFinSummaryCard.apply(null, arguments); };
   var injectAlertsToolbar = function () { return W7.misc.injectAlertsToolbar.apply(null, arguments); };
+  var injectBoardBriefPanel = function () { return W7.data.injectBoardBriefPanel.apply(null, arguments); };
   var injectComboPanel = function () { return W7.fund.injectComboPanel.apply(null, arguments); };
   var injectConnectorsTest = function () { return W7.misc.injectConnectorsTest.apply(null, arguments); };
   var injectConnectorsToolbar = function () { return W7.forms.injectConnectorsToolbar.apply(null, arguments); };
   var injectDashboardDrag = function () { return W7.portfolio.injectDashboardDrag.apply(null, arguments); };
+  var injectDashboardManager = function () { return W7.portfolio.injectDashboardManager.apply(null, arguments); };
   var injectFundPanel = function () { return W7.fund.injectFundPanel.apply(null, arguments); };
   var injectMoneyPanel = function () { return W7.data.injectMoneyPanel.apply(null, arguments); };
   var injectNewsPanel = function () { return W7.data.injectNewsPanel.apply(null, arguments); };
@@ -90,32 +92,49 @@
 
   function watchRoute() {
     function afterRoute() {
-      injectSymbolBar();
-      injectWatchToolbar();
-      bindImport();
-      injectTableTools();
-      injectPortfolioToolbar();
-      injectConnectorsToolbar();
-      injectSettingsPrefs();
-      injectKlineTools();
-      injectAboutCard();
-      injectDashboardDrag();
-      injectYjbPanel();
-      injectStockPanel();
-      injectQuoteChart();
-      injectMoneyPanel();
-      injectFundPanel();
-      injectComboPanel();
-      injectNewsPanel();
-      injectSectorPanel();
-      injectPortfolioAttrPanel();
-      injectSystemPanel();
-      injectAlertsToolbar();
-      injectConnectorsTest();
-      injectScreenerPanel();
-      injectAiTestPanel();
-      injectFinSummaryCard();
-      restoreCalcResults();
+      // v3.7.0：注入器逐个隔离执行 —— 原先顺序裸调用，任一注入器抛异常会中断其后全部注入
+      // （实测「板块研判卡 / 仪表板管理工具栏」在切路由后不出现，即由此引起）。
+      // 失败项记入 window.__inject_errors 供探针断言，不静默吞掉。
+      var tasks = [
+        injectSymbolBar, injectWatchToolbar, bindImport, injectTableTools,
+        injectPortfolioToolbar, injectConnectorsToolbar, injectSettingsPrefs, injectKlineTools,
+        injectAboutCard, injectDashboardDrag, injectDashboardManager, injectYjbPanel,
+        injectStockPanel, injectQuoteChart, injectMoneyPanel, injectFundPanel, injectComboPanel,
+        injectNewsPanel, injectSectorPanel, injectBoardBriefPanel, injectPortfolioAttrPanel,
+        injectSystemPanel, injectAlertsToolbar, injectConnectorsTest, injectScreenerPanel,
+        injectAiTestPanel, injectFinSummaryCard, restoreCalcResults
+      ];
+      window.__inject_errors = [];
+      tasks.forEach(function (fn) {
+        try {
+          fn();
+        } catch (err) {
+          window.__inject_errors.push(String((fn && fn.name) || "anonymous") + ": " +
+            String((err && err.message) || err));
+        }
+      });
+      // v3.7.0：注入类卡片（板块研判 / 仪表板管理工具栏）不能只靠 afterRoute 的固定延时 ——
+      // 视图走 renderGeneric 时会在 await 接口后 `host.innerHTML = html`，把此前注入的卡片
+      // 直接抹掉（无异常、无告警，表现为「切路由偶发不出现」）。改由 app.js 渲染完成后
+      // dispatch 的 view:rendered 事件驱动重注入；12s 动态刷新（quiet=true）同样会触发，
+      // 因此卡片不会被定时刷新冲掉。
+      rerunInjectCards();
+      window.addEventListener("view:rendered", function () {
+        setTimeout(rerunInjectCards, 0);   // 让渲染栈先退出，避免同帧内再被覆盖
+      });
+    }
+
+    /** 重跑「渲染后注入」类卡片（各自幂等，已存在直接返回）。 */
+    function rerunInjectCards() {
+      [injectBoardBriefPanel, injectDashboardManager].forEach(function (fn) {
+        try {
+          fn();
+        } catch (err) {
+          window.__inject_errors = window.__inject_errors || [];
+          window.__inject_errors.push(String((fn && fn.name) || "anonymous") + ": " +
+            String((err && err.message) || err));
+        }
+      });
     }
     window.addEventListener("hashchange", function () { setTimeout(afterRoute, 460); });
     setTimeout(afterRoute, 1300);

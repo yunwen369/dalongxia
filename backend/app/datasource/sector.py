@@ -492,6 +492,8 @@ def heatmap_from_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "value": abs(pct) if pct is not None else None,
                 "pct": pct,
                 "amount": item.get("amount"),
+                # v3.7.0（⑦）：净流入随节点下发 —— 云图明细「净流入」列与资金流入/流出块同源
+                "net_inflow": item.get("net_inflow"),
                 "lead_stock": item.get("lead_stock"),
                 "up": item.get("up"),
                 "down": item.get("down"),
