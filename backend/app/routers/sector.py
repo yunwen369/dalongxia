@@ -142,14 +142,15 @@ def _industry_cached(market: str) -> Dict[str, Any]:
         candidates: List[Any] = [
             ("腾讯", "腾讯/美股行业 ETF（SPDR 11 大行业；真实行业口径，非东财行业板块）",
              sector_provider.get_us_sector_items),
-            ("腾讯", "美股简化建模：主要指数+代表个股（ETF 池不可用时的兜底）",
+            ("腾讯", "境外简化建模：主要指数+代表个股（美股行业 ETF 池不可用时的兜底）",
              lambda: sector_provider.get_overseas_items("us")),
         ]
     elif market == "hk":
         candidates = [
-            ("腾讯", "腾讯/恒生指数系列（含 3 个中国内地行业指数）+ 核心龙头个股；港股无免费行业板块通道，行业板块待接入新数据源",
+            ("腾讯", "腾讯/恒生指数系列（境外简化建模：含 3 个中国内地行业指数 + 核心龙头个股）；"
+                     "港股无免费行业板块通道，行业板块待接入新数据源",
              sector_provider.get_hk_pool_items),
-            ("腾讯", "港股简化建模：主要指数+代表个股（池不可用时的兜底）",
+            ("腾讯", "境外简化建模：主要指数+代表个股（港股行业池不可用时的兜底）",
              lambda: sector_provider.get_overseas_items("hk")),
         ]
     else:

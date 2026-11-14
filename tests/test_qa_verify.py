@@ -491,7 +491,13 @@ def test_sector_overseas_simplified_model() -> None:
     assert "境外简化建模" in data["caliber"]
     names = [item["name"] for item in items]
     assert any("恒生" in name for name in names)
-    assert all(item["kind"] in {"指数", "代表个股"} for item in items)
+    # 港股池 kind 为三值细分：指数 / 行业指数 / 龙头（后者即「代表个股」）。
+    # 关键是不得出现真实板块标签（行业 / 概念），否则等于冒充板块。
+    allowed_kinds = {"指数", "行业指数", "龙头"}
+    assert all(item["kind"] in allowed_kinds for item in items), \
+        "港股池 kind 必须为 %s，实际 %s" % (sorted(allowed_kinds),
+                                          sorted({item["kind"] for item in items}))
+    assert not any(item["kind"] in {"行业", "概念"} for item in items), "不得冒充真实板块"
 
 
 def test_stock_profile_real() -> None:

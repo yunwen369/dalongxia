@@ -49,6 +49,12 @@ EM_FHSP_URL = config.EASTMONEY_FUND_FHSP_URL
 EM_FHSP_REFERER = config.EASTMONEY_FUND_FHSP_REFERER
 # 东财批量估值表进程内缓存（全市场约 798 行，逐只基金复用同一份快照）
 _EM_ESTIMATION: Dict[str, Any] = {"at": 0.0, "rows": {}}
+# 风格稳定性「重仓股→行业」解析的墙钟预算（秒）。
+# 该链为「季度期数 × 前 10 大重仓股」串行查东财个股行业（单只 1–3s，
+# 且每只带 3 次重试×15s 超时）；链路抖动时 8 期×10 只可膨胀到 10 分钟以上
+# （2026-11-15 v3.7.0 门禁实测一次挂起逾 20 分钟、CPU 归零）。
+# 超预算即停止解析并如实标注 unknown，不猜行业、不拿残缺样本打漂移分。
+STYLE_INDUSTRY_BUDGET = 45.0
 
 
 def _num(value: Any) -> Optional[float]:
@@ -1260,6 +1266,32 @@ def get_style_history(code: str) -> Dict[str, Any]:
 
         df = pd.concat(frames, ignore_index=True)
         periods = sorted(df["季度"].dropna().unique().tolist())
+        # 先对全部期次的重仓股去重，再逐只解析行业（同一只股票跨期只解析一次）
+        unique_codes: List[str] = []
+        seen_codes = set()
+        for _, row in df.iterrows():
+            stock = str(row.get("股票代码") or "").strip()
+            if stock and stock not in seen_codes:
+                seen_codes.add(stock)
+                unique_codes.append(stock)
+        # 墙钟预算：超时即停并如实标注，不猜行业、不用残缺样本打漂移分
+        industry_map: Dict[str, Optional[str]] = {}
+        deadline = time.monotonic() + STYLE_INDUSTRY_BUDGET
+        truncated: List[str] = []
+        for item in unique_codes:
+            if time.monotonic() >= deadline:
+                truncated = unique_codes[len(industry_map):]
+                break
+            industry_map[item] = stock_provider.stock_industry(item)
+        if truncated:
+            logger.warning(
+                "风格稳定性行业解析超预算 %.0fs：%d/%d 只未解析（自 %s 起）",
+                STYLE_INDUSTRY_BUDGET, len(truncated), len(unique_codes), truncated[0])
+            missing.append(
+                f"重仓股行业解析超出 {STYLE_INDUSTRY_BUDGET:.0f}s 墙钟预算，"
+                f"{len(truncated)}/{len(unique_codes)} 只未解析（{truncated[0]} 等），"
+                "本次不打风格分"
+            )
         # 每期取前 10 大重仓股的行业聚合（东财接口每期返回前 10 大重仓）
         industry_series: List[Dict[str, Any]] = []
         for period in periods:
@@ -1270,7 +1302,7 @@ def get_style_history(code: str) -> Dict[str, Any]:
                 pct = _num(row.get("占净值比例"))
                 if not stock or pct is None:
                     continue
-                industry = stock_provider.stock_industry(stock) or "未知"
+                industry = industry_map.get(stock) or "未知"
                 weights[industry] = weights.get(industry, 0.0) + pct
             # 归一化到 100%（重仓股合计通常 70~95%，剩余为非重仓+现金）
             industry_series.append({
@@ -1279,6 +1311,18 @@ def get_style_history(code: str) -> Dict[str, Any]:
                 "top_industry": max(weights, key=weights.get) if weights else None,
             })
         periods_used = len(industry_series)
+        if truncated:
+            # 样本不完整 → 三态里的 unavailable（不打分），序列照旧透出供界面展示
+            return {
+                "code": code, "status": "unavailable", "periods_used": periods_used,
+                "avg_drift_pct": None, "style_score": None,
+                "industry_series": industry_series,
+                "caliber": (
+                    f"重仓股行业解析超出 {STYLE_INDUSTRY_BUDGET:.0f}s 墙钟预算，样本不完整，"
+                    "本次不打风格分（不用残缺样本算漂移，也不冒充 50 分）"
+                ),
+                "missing": missing,
+            }
         if periods_used < 4:
             return {
                 "code": code, "status": "accumulating", "periods_used": periods_used,
