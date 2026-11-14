@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "大龙虾投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "3.6.1"  # 语义化版本号：3.6.1 = P0 修复——打包产物补收 py_mini_racer（V8 运行库），恢复冻结形态下 akshare 新浪 K 线通道；并修复首屏迷你走势阻塞、K 线缓存时段分流、启动预热扩展
-BUILD_TAG = "v3.6.1-20261114"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "3.7.0"  # 语义化版本号：3.7.0 = REQ-20261115-01 看盘体验补齐（大盘云图/指数走势/完整板块K线/中文表头/全表排序/三级板块选择器/行业资金流/快讯原文 + 拥挤度风控名单/板块研判/仪表板CRUD/搜索板块/组件自由拉伸），并修复「渲染后注入被 innerHTML 覆盖」的既存缺陷
+BUILD_TAG = "v3.7.0-20261115"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
