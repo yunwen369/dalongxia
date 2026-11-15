@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "大龙虾投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "3.7.1"  # 语义化版本号：3.7.1 = REQ-20261115-02 板块端点冷启动提速（fundflow 24.3s→2.9s、crowding/rankings 24.3s→6~7.5s；同花顺 d 域限流实测下调 + 线程内会话复用 + 四档并发预取 + 排行缓存键去 limit 单飞合流），口径零变化
-BUILD_TAG = "v3.7.1-20261115"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "3.7.2"  # 语义化版本号：3.7.2 = 单板块拥挤度冷启动提速（16.1s→2.9s：成分股 K 线/换手率并发 + 流通市值合计落盘缓存，换手率分母口径由「快照总市值近似」修正为设计原定的「同花顺流通市值」）
+BUILD_TAG = "v3.7.2-20261115"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。

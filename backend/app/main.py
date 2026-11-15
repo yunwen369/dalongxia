@@ -809,6 +809,16 @@ def _bg_prewarm() -> None:
             time.sleep(0.3)
     except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
         logger.info("拥挤度排行后台预热启动失败（不影响启动）：%s", type(exc).__name__)
+    # 2.5 单板块拥挤度的一次性初始化（v3.7.2）：清缓存后第一个 /api/sector/crowding
+    #     请求 9.09s、之后同板块换一个只要 3.2–4.6s——差额 5.6s 是进程内首次走
+    #     akshare 日线路径 + 批量建链的成本，与板块无关。排在排行预热之后空跑一次，
+    #     把这份成本留在后台，用户首屏即 3.5s 量级。
+    try:
+        cost = sector_provider.warm_crowding_once()
+        if cost:
+            logger.info("拥挤度一次性初始化预热完成：%.2fs", cost)
+    except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+        logger.info("拥挤度一次性初始化预热失败（不影响启动）：%s", type(exc).__name__)
     # 3. 全市场快照（M13 候选池依赖）：缺失时自动建库，用户无需先去筛选器页点按钮
     #    （第二轮检测 P3-1：首次使用需手动建快照）
     try:
@@ -828,6 +838,19 @@ def _bg_prewarm() -> None:
             logger.info("板块四档资金流预热第 %d 轮完成：%d 个板块", round_index + 1, done)
         except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
             logger.info("板块四档资金流预热失败（不影响启动）：%s", type(exc).__name__)
+        # v3.7.2：顺手补「已建成分映射但缺流通市值合计」的板块（升级场景）。
+        # 每轮只补 **1** 个板块（约 8s，全是后台）：
+        #   · 实测连续补 52 个板块（约 7 分钟、400+ 次 q 域请求）会触发同花顺 401 反爬；
+        #   · 且补齐翻页会占用 q 域 1.1s 进程级限流——若与用户请求同时发生，用户那次
+        #     /api/sector/crowding 会被排到队尾（实测启动 10s 内并发时出现 37.7s 极端值）。
+        # 故按「每轮 1 个 + 轮间隔 600s」的极低强度摊开，宁可补得慢也不抢用户的时间片。
+        # 补齐后该板块的换手率分母从「快照总市值」升级为「同花顺流通市值」（设计原定）。
+        try:
+            filled = sector_provider.warm_board_caps(max_boards=1)
+            if filled:
+                logger.info("板块流通市值合计补齐第 %d 轮：%d 个板块", round_index + 1, filled)
+        except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
+            logger.info("板块流通市值合计补齐失败（不影响启动）：%s", type(exc).__name__)
         time.sleep(600)
 
 

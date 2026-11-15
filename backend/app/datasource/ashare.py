@@ -22,6 +22,7 @@ from backend.app import config
 from backend.app.core import netfix
 from backend.app.core.errors import NonRetryableError
 from backend.app.core.source_prefs import ensure_enabled
+from backend.app.core.v8_guard import serial_v8
 from backend.app.datasource import tencent, utils
 from backend.app.datasource.common import default_range as _common_default_range
 
@@ -48,6 +49,29 @@ def _call_ak(func) -> Any:
         return func()
     except requests.exceptions.ProxyError as exc:
         raise NonRetryableError("东财通道代理异常，跳过重试并切换备源") from exc
+
+
+def _call_ak_v8(func) -> Any:
+    """调用**新浪系** akshare 接口：额外做进程级 V8 串行化。
+
+    新浪系接口（``stock_zh_a_daily`` / ``stock_zh_a_minute`` /
+    ``stock_zh_index_daily`` / ``index_us_stock_sina``）内部用 py_mini_racer 执行 JS。
+    V8 的 PartitionAlloc **不允许并发首次初始化**，多线程同时进会直接 FATAL 带走
+    进程（``Check failed: !IsConfigurablePoolInitialized()``）。v3.7.2 把成分股 K 线
+    改成并发后实测触发过整进程崩溃（uvicorn 退出码 3），故所有新浪系调用点统一经
+    :func:`core.v8_guard.serial_v8` 串行；东财系（``stock_zh_a_hist`` 等）不需要，
+    保持并发能力。
+
+    Args:
+        func: 无参 akshare 调用。
+
+    Returns:
+        Any: akshare 返回值。
+
+    Raises:
+        NonRetryableError: 本机代理配置异常，重试只会放大无效请求。
+    """
+    return _call_ak(serial_v8(func))
 
 
 def _date_text(value: Any) -> str:
@@ -169,7 +193,7 @@ def get_kline_sina(symbol: str, period: str = "daily", adjust: str = "qfq") -> L
         raise NonRetryableError("新浪K线仅支持日线")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
     start, end = _default_range()
-    frame = _call_ak(
+    frame = _call_ak_v8(
         lambda: ak.stock_zh_a_daily(
             symbol=tencent_code,
             start_date=start,
@@ -368,7 +392,7 @@ def get_minute_sina(symbol: str, period: str = "1") -> List[Dict[str, Any]]:
     """
     ensure_enabled("sina")
     code, _, tencent_code = utils.normalize_symbol(symbol, "a")
-    frame = _call_ak(
+    frame = _call_ak_v8(
         lambda: ak.stock_zh_a_minute(symbol=tencent_code, period=str(period), adjust="")
     )
     if frame is None or frame.empty:
@@ -478,7 +502,7 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
     normalized, _ = utils.index_code_to_tencent(code)
     if normalized in ("DJI", "IXIC", "INX"):
         # 新浪美股指数历史：symbol 形如 .DJI，返回 date/open/high/low/close/volume
-        frame = _call_ak(lambda: ak.index_us_stock_sina(symbol=f".{normalized}"))
+        frame = _call_ak_v8(lambda: ak.index_us_stock_sina(symbol=f".{normalized}"))
         rows = utils.clean_records(frame)
         items = []
         for row in rows:
@@ -498,7 +522,7 @@ def get_index_kline_sina(code: str, period: str = "daily") -> List[Dict[str, Any
         items.sort(key=lambda item: item["date"])
         logger.info("新浪美股指数K线命中：%s，%d 条", normalized, len(items))
         return items[-320:]
-    frame = _call_ak(lambda: ak.stock_zh_index_daily(symbol=utils.index_code_to_tencent(code)[1]))
+    frame = _call_ak_v8(lambda: ak.stock_zh_index_daily(symbol=utils.index_code_to_tencent(code)[1]))
     if frame is None or frame.empty:
         raise ValueError("新浪指数K线返回空数据")
     rows = utils.clean_records(frame)

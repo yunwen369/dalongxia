@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from datetime import date
@@ -1167,6 +1168,9 @@ def _cons_ths(board: str) -> List[Dict[str, Any]]:
     kind = "industry" if code.startswith("88") else "concept"
     rows = ths_http.get_board_cons(code, kind=kind)
     total_cap = sum((_num(row.get("float_cap")) or 0.0) for row in rows)
+    # v3.7.2：本次翻页拿到的流通市值合计顺手落盘，供 `_board_float_cap` 第①级
+    # 直接命中——否则该函数会为了同一个合计值再翻一遍同样的 5–10 页。
+    _remember_cap(board, total_cap)
     items: List[Dict[str, Any]] = []
     for row in rows:
         cap = _num(row.get("float_cap"))
@@ -1500,12 +1504,35 @@ _FLOW_TIER_CACHE = memcache.get_cache("flow_tier")  # B2 收编：原手写 {boa
 # 板块四档并发预取的线程数（v3.7.1）：90 个板块各 1 次新浪批量请求，
 # 串行实测 13.9s；8 路并发实测 ~2s 且无失败（新浪批量接口无严格限流）。
 FLOW_TIER_WORKERS = 8
+# 成分股样本取数的并发路数（v3.7.2）：拥挤度里的成分股相关性/换手率各取 20 只样本。
+# 串行实测：东财 K 线 0.68–0.76s/只 ⇒ 相关性 13s、腾讯报价 ⇒ 换手率 2s。
+# 取 4 路而非 8 路：8 路实测 3.4s，但连续压测会把东财打成 `RemoteDisconnected`
+# （按客户端的短时限流，正式环境同接口实测仍 0.58–0.76s 正常）；4 路约 4.5s，
+# 仍远低于 8s 目标，且请求密度减半。`pool.map` 保序，累加顺序与串行版一致。
+CONSTITUENT_WORKERS = 4
+# 东财通道失败后，最多补几只样本走新浪（v3.7.2）
+# 新浪系 akshare 经 ``serial_v8`` 串行（V8 禁止并发首次初始化），单只约 0.7s；
+# 若 20 只全部补新浪，实测单板块从 3.5s 退化到 16s。相关性只要 ≥3 只样本即可计算，
+# 故限量补取：东财局部抖动时仍拿到完整样本，东财整体故障时耗时封顶在约 5.6s。
+CONSTITUENT_FALLBACK_MAX = 8
 # 板块成分映射：{板块名: [6 位代码]}（落盘缓存 7 天，构建慢）
 _CONS_CACHE: Dict[str, List[str]] = {}
 _CONS_CACHE_LOADED = False
 _CONS_CACHE_MTIME: float = 0.0
 _CONS_CACHE_LOCK = threading.Lock()
 _TIER_WARMING: set[str] = set()
+
+# 板块成分流通市值合计：{板块名: (时间戳, 元)}（落盘缓存，TTL 6h）
+# v3.7.2：`_cons_ths` 翻页时本来就已经逐行解析出 ``float_cap`` 并求和（局部变量
+# ``total_cap``），但旧实现把它丢掉了——结果 ``_board_float_cap`` 的第①级
+# 取不到值，每次都要再翻 5–10 页同花顺（实测 7.83s/次）后才退化到第③级
+# 「本地快照总市值」，口径还从流通市值降成总市值。改为翻页时顺手落盘，
+# 既让第①级真正生效（口径回到设计原定），又让跨进程重启也能零网络命中。
+_CAP_CACHE: Dict[str, float] = {}
+_CAP_CACHE_TS: Dict[str, float] = {}
+_CAP_CACHE_LOADED = False
+_CAP_CACHE_MTIME: float = 0.0
+_CAP_CACHE_TTL = 6 * 3600
 
 
 def _cons_cache_file():
@@ -1560,6 +1587,250 @@ def _save_cons_cache() -> None:
         logger.warning("板块成分映射写盘失败：%s", type(exc).__name__)
 
 
+def _cap_cache_file():
+    """板块流通市值合计落盘文件路径。
+
+    Returns:
+        Path: ``<DATA_DIR>/board_cap.json``（与 ``board_cons.json`` 同目录：
+        两者由同一次 ``_cons_ths`` 翻页产出，清缓存不应拆散）。
+    """
+    return config.DATA_DIR / "board_cap.json"
+
+
+def _load_cap_cache() -> None:
+    """从磁盘载入板块流通市值合计（进程内缓存；文件有更新时重载）。"""
+    global _CAP_CACHE_LOADED, _CAP_CACHE_MTIME
+    path = _cap_cache_file()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else 0.0
+    except OSError:
+        mtime = 0.0
+    with _CONS_CACHE_LOCK:
+        if _CAP_CACHE_LOADED and mtime <= _CAP_CACHE_MTIME:
+            return
+        _CAP_CACHE_LOADED = True
+        _CAP_CACHE_MTIME = mtime
+        if mtime == 0.0:
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            for board, block in (payload or {}).items():
+                if not isinstance(block, dict):
+                    continue
+                value = _num(block.get("value"))
+                ts = _num(block.get("ts"))
+                if value and value > 0 and board not in _CAP_CACHE:
+                    _CAP_CACHE[board] = float(value)
+                    _CAP_CACHE_TS[board] = float(ts or 0.0)
+            logger.info("板块流通市值合计已载入：%d 个板块", len(_CAP_CACHE))
+        except Exception as exc:  # noqa: BLE001 - 缓存损坏不影响主流程
+            logger.warning("板块流通市值合计载入失败：%s", type(exc).__name__)
+
+
+def _save_cap_cache() -> None:
+    """把板块流通市值合计原子写盘（失败仅告警，不影响接口）。"""
+    global _CAP_CACHE_MTIME
+    try:
+        from backend.app.core import atomic
+
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            board: {"value": value, "ts": _CAP_CACHE_TS.get(board, 0.0)}
+            for board, value in _CAP_CACHE.items()
+        }
+        atomic.atomic_write_json(_cap_cache_file(), payload, ensure_ascii=False)
+        # 同步 mtime：否则下次 _load_cap_cache 会因「文件比自己记的新」而白重载一次
+        try:
+            _CAP_CACHE_MTIME = _cap_cache_file().stat().st_mtime
+        except OSError:
+            pass
+    except Exception as exc:  # noqa: BLE001 - 写盘失败不影响内存缓存
+        logger.warning("板块流通市值合计写盘失败：%s", type(exc).__name__)
+
+
+def _remember_cap(board: str, total_yi: Optional[float]) -> None:
+    """记录板块成分流通市值合计（``_cons_ths`` 翻页后顺手调用）。
+
+    Args:
+        board: 板块名。
+        total_yi: 流通市值合计，**单位亿元**（同花顺 ``float_cap`` 原始口径）。
+    """
+    if not total_yi or total_yi <= 0:
+        return
+    value = round(float(total_yi) * 1e8, 2)  # 亿元 → 元（取 2 位小数，消除 ×1e8 的浮点尾差）
+    _load_cap_cache()
+    _CAP_CACHE[board] = value
+    _CAP_CACHE_TS[board] = time.time()
+    _save_cap_cache()
+
+
+def _cached_cap(board: str) -> Optional[float]:
+    """取板块流通市值合计（元）；未缓存或已过期返回 None。
+
+    Args:
+        board: 板块名。
+
+    Returns:
+        Optional[float]: 流通市值合计（元）。
+    """
+    _load_cap_cache()
+    value = _CAP_CACHE.get(board)
+    if value is None:
+        return None
+    if time.time() - _CAP_CACHE_TS.get(board, 0.0) > _CAP_CACHE_TTL:
+        return None
+    return value
+
+
+# 待补齐流通市值的板块队列（去重 + **全局串行**）
+# 为什么是串行队列而不是「每板块一个线程」：补齐要翻同花顺成分页 5–10 页，而
+# `ths_http._throttle` 对 q 域是**进程级 1.1s 排队**。若多个补齐线程并行，它们会
+# 把用户那次 /api/sector/crowding 排到队尾——实测服务启动 10s 内并发时出现 37.7s
+# 极端值。改为单线程串行消费，同一时刻只有一个翻页在跑。
+_CAP_FILL_PENDING: List[str] = []
+_CAP_FILL_WORKER: Optional[threading.Thread] = None
+_CAP_FILL_LOCK = threading.Lock()
+
+
+def _cap_fill_allowed() -> bool:
+    """是否允许启动「后台补齐板块流通市值」的线程。
+
+    测试环境一律不启动：一次补齐会真实翻同花顺成分页 5–10 页（实测 7.83s/板块），
+    在 pytest 里既污染网络环境，又让本已 mock 掉取数的用例退化成真实请求——
+    实测会让整个套件从 8 分钟变成 24% 处长时间卡住（CPU 零增长、纯网络等待）。
+
+    Returns:
+        bool: 允许启动补齐线程返回 True。
+    """
+    return not os.environ.get("PYTEST_CURRENT_TEST")
+
+
+def _cap_fill_loop() -> None:
+    """串行消费补齐队列；队列空即退出（下次入队时重新起线程）。"""
+    while True:
+        with _CAP_FILL_LOCK:
+            if not _CAP_FILL_PENDING:
+                return
+            board = _CAP_FILL_PENDING.pop(0)
+        try:
+            get_cons_ths(board)  # 全量翻页：内部 _remember_cap 落盘
+        except Exception as exc:  # noqa: BLE001 - 后台任务失败仅记日志
+            logger.info("板块流通市值后台补齐失败 %s：%s", board, type(exc).__name__)
+            continue
+        # 关键：失效外层 `_lookup` 的缓存。否则本次已按「快照总市值」写入的结果
+        # 会在内存里锁住（6h），即使市值已落盘也不会切到精确口径。
+        key = f"sector:floatcap:{board}"
+        _LOOKUP.pop(key, None)
+        _LOOKUP_TS.pop(key, None)
+
+
+def _start_cap_fill(board: str) -> bool:
+    """把一个板块的流通市值合计排进后台补齐队列（不阻塞调用方）。
+
+    背景：补齐需要全量翻同花顺成分页（实测 7.83s/板块），放进请求路径会把
+    ``/api/sector/crowding`` 的冷启动拖回 20s+。故改为「本次按快照口径兜底返回、
+    后台补下一次即命中精确口径」——请求侧零额外等待，口径随缓存逐步升级。
+
+    Args:
+        board: 板块名。
+
+    Returns:
+        bool: True 表示已入队；False 表示该板块已在队列、无需补或被禁用。
+    """
+    if not _cap_fill_allowed():
+        return False
+    _load_cons_cache()
+    if not _CONS_CACHE.get(board):  # 连成分映射都没有，翻页也无从校验
+        return False
+    _load_cap_cache()
+    if _cached_cap(board) is not None:
+        return False
+    global _CAP_FILL_WORKER
+    with _CAP_FILL_LOCK:
+        if board in _CAP_FILL_PENDING:
+            return False
+        _CAP_FILL_PENDING.append(board)
+        if _CAP_FILL_WORKER is not None and _CAP_FILL_WORKER.is_alive():
+            return True
+        _CAP_FILL_WORKER = threading.Thread(target=_cap_fill_loop, daemon=True, name="cap-fill")
+        _CAP_FILL_WORKER.start()
+    return True
+
+
+def warm_board_caps(*, max_boards: int = 1) -> int:
+    """为「已建成分映射但缺流通市值合计」的板块批量补齐（升级场景）。
+
+    背景：``board_cap.json`` 是 v3.7.2 新增的落盘缓存。从旧版本升级上来时
+    ``board_cons.json`` 已有 codes、但没有对应市值；不补齐的话，每个板块的首次
+    ``/api/sector/crowding`` 只能按「本地快照总市值」口径返回（偏小、标注近似）。
+    本函数在后台预热里分批补，补完即永久命中精确口径。
+
+    Args:
+        max_boards: 单次最多补多少个板块（默认 1：翻页会占用 q 域 1.1s 进程级限流，
+            补得越猛越容易与用户请求抢时间片，也越容易触发同花顺 401 反爬）。
+
+    Returns:
+        int: 本次实际补齐成功的板块数。
+    """
+    if not _cap_fill_allowed():
+        return 0
+    _load_cons_cache()
+    _load_cap_cache()
+    with _CAP_FILL_LOCK:
+        pending = set(_CAP_FILL_PENDING)
+    todo = [
+        board for board in list(_CONS_CACHE)
+        if _cached_cap(board) is None and board not in pending
+    ]
+    if not todo:
+        return 0
+    filled = 0
+    for board in todo[:max_boards]:
+        try:
+            get_cons_ths(board)  # 全量翻页，内部 _remember_cap 落盘
+        except Exception as exc:  # noqa: BLE001 - 单板块失败继续下一个
+            logger.info("板块流通市值补齐跳过 %s：%s", board, type(exc).__name__)
+            continue
+        if _cached_cap(board) is not None:
+            filled += 1
+    if filled:
+        logger.info("板块流通市值合计补齐：%d 个板块（剩余 %d 待补）", filled, len(todo) - filled)
+    return filled
+
+
+def warm_crowding_once() -> float:
+    """空跑一次单板块拥挤度的两条成分股取数路径，吃掉「进程内首次调用」的开销。
+
+    实测（v3.7.2，源码实例 + 清缓存）：清缓存后**第一个** ``/api/sector/crowding``
+    请求 9.09s，紧接着换板块只要 3.2–4.6s。差额与板块无关、与数据量无关，是进程内
+    第一次走 akshare 日线路径 / 腾讯报价 / 首次批量建链的一次性成本。
+
+    这里把 ``_constituent_correlation``（东财 K 线 + 相关性）与
+    ``_constituent_turnover``（腾讯报价）各空跑一次，把成本留在后台预热里。
+
+    Returns:
+        float: 本次空跑总耗时（秒）；未执行返回 0.0。
+    """
+    if not _cap_fill_allowed():
+        return 0.0
+    _load_cons_cache()
+    for board, codes in list(_CONS_CACHE.items()):
+        if len(codes) < 3:
+            continue
+        sample = [{"code": code, "board": board} for code in codes[:20]]
+        started = time.time()
+        for step, label in (
+            (_constituent_correlation, "相关性（东财 K 线）"),
+            (_constituent_turnover, "换手率（腾讯报价）"),
+        ):
+            try:
+                step(sample)
+            except Exception as exc:  # noqa: BLE001 - 预热失败不影响启动
+                logger.info("拥挤度一次性预热 %s 失败（不影响启动）：%s", label, type(exc).__name__)
+        return time.time() - started
+    return 0.0
+
+
 def get_board_constituents(board: str, *, kind: str = "industry", max_pages: int = 40) -> List[str]:
     """取板块成分股代码列表（内存 + 磁盘缓存，避免重复翻页触发同花顺限流）。
 
@@ -1585,6 +1856,10 @@ def get_board_constituents(board: str, *, kind: str = "industry", max_pages: int
     codes = [row["code"] for row in rows if row.get("code")]
     if not codes:
         raise ValueError(f"板块成分为空：{board}")
+    # 只有**全量**翻页的合计才代表整个板块；`warm_fundflow_tiers` 传 max_pages=12
+    # 是截断口径（约 240 只），据此记市值会系统性偏小，故显式排除。
+    if max_pages >= 40:
+        _remember_cap(board, sum((_num(row.get("float_cap")) or 0.0) for row in rows))
     _CONS_CACHE[board] = codes
     _save_cons_cache()
     return codes
@@ -2478,20 +2753,67 @@ def _constituent_correlation(
         Optional[Dict[str, Any]]: {corr, samples, caliber}；样本不足时 None。
     """
     sample = constituents[:max_samples]
-    series: Dict[str, List[float]] = {}
-    for item in sample:
-        code = item.get("code") or ""
-        if not code:
-            continue
+    codes_in = [str(item.get("code")) for item in sample if item.get("code")]
+    if len(codes_in) < 3:
+        return None
+
+    def _closes(klines: List[Dict[str, Any]]) -> List[float]:
+        """把 K 线记录折算成可用窗口的收盘价序列。
+
+        Args:
+            klines: K 线记录列表（按日期升序）。
+
+        Returns:
+            List[float]: 收盘价序列；长度不足 ``days + 1`` 时返回空列表。
+        """
+        values = [utils.to_float(k.get("close")) for k in klines]
+        values = [v for v in values if v is not None]
+        if len(values) < days + 1:
+            return []
+        return values[-days - 1:]
+
+    def _one_em(code: str) -> Tuple[str, List[float]]:
+        """阶段 1：只走东财日线（无需 V8，可安全并发）。
+
+        Args:
+            code: 6 位代码。
+
+        Returns:
+            Tuple[str, List[float]]: (代码, 收盘价)；失败返回 ("", [])。
+        """
         try:
-            klines = ashare.get_kline(code, "daily", "qfq", days + 5)
+            return code, _closes(ashare.get_kline_em(code, "daily", "qfq"))
         except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
-            logger.info("成分股 K 线失败 %s：%s", code, type(exc).__name__)
+            logger.info("成分股东财K线失败 %s：%s", code, type(exc).__name__)
+            return "", []
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 阶段 1：并发走东财。pool.map 保序，后面对齐 sample 顺序即可保证累加顺序不变。
+    em_series: Dict[str, List[float]] = {}
+    with ThreadPoolExecutor(max_workers=min(CONSTITUENT_WORKERS, len(codes_in))) as pool:
+        for code, closes in pool.map(_one_em, codes_in):
+            if code:
+                em_series[code] = closes
+
+    # 阶段 2：东财失败的样本补新浪（内部 serial_v8 串行，限量以免东财整体故障时拖长）
+    sina_series: Dict[str, List[float]] = {}
+    for code in [c for c in codes_in if c not in em_series][:CONSTITUENT_FALLBACK_MAX]:
+        try:
+            closes = _closes(ashare.get_kline_sina(code, "daily", "qfq"))
+        except Exception as exc:  # noqa: BLE001 - 单只失败不阻断
+            logger.info("成分股新浪K线失败 %s：%s", code, type(exc).__name__)
             continue
-        closes = [utils.to_float(k.get("close")) for k in klines]
-        closes = [c for c in closes if c is not None]
-        if len(closes) >= days + 1:
-            series[code] = closes[-days - 1:]
+        if closes:
+            sina_series[code] = closes
+
+    # 按 sample 原顺序重建，保证两两累加顺序与串行版完全一致（浮点严格等价）
+    series: Dict[str, List[float]] = {}
+    for code in codes_in:
+        if code in em_series:
+            series[code] = em_series[code]
+        elif code in sina_series:
+            series[code] = sina_series[code]
     if len(series) < 3:
         return None
 
@@ -2559,6 +2881,9 @@ def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
     成交额序列」，分位（相对位置）对分母口径不敏感，但**绝对换手率水平会偏小**，
     故在 note 内明确标注所用口径，不做无标注的静默替换。
 
+    v3.7.2：流通市值合计改由 :func:`_remember_cap` 在 ``_cons_ths`` 翻页时落盘，
+    命中即零网络；未命中转后台补齐（:func:`_start_cap_fill`）而不阻塞本次请求。
+
     Args:
         board: 板块名。
 
@@ -2566,32 +2891,27 @@ def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
         Optional[Dict[str, Any]]: {value, unit, caliber}；取不到返回 None。
     """
     def build() -> Optional[Dict[str, Any]]:
-        """缓存未命中时的三级取数：同花顺 → 新浪 → 本地全市场快照。
+        """缓存未命中时的两级取数：同花顺流通市值 → 本地全市场快照。
 
         Returns:
-            Optional[Dict[str, Any]]: {value, unit, caliber}；三级皆失败返回 None。
+            Optional[Dict[str, Any]]: {value, unit, caliber}；两级皆失败返回 None。
         """
-        # ① 同花顺成分（含流通市值，口径最准）——失败不影响后续兜底
-        try:
-            payload = get_cons_ths(board)
-            items = payload.get("items") or []
-            total = 0.0
-            for item in items:
-                value = _num(item.get("float_cap")) or _num(item.get("流通市值"))
-                if value and value > 0:
-                    total += value
-            if total > 0:
-                return {"value": total, "unit": "元", "caliber": "同花顺成分流通市值合计"}
-        except Exception:  # noqa: BLE001 - 换源兜底
-            pass
-        # ② 新浪成分 nmc（板块名可能不在新浪名录，失败正常）
-        try:
-            items = _cons_sina(board)
-            total = sum((_num(item.get("nmc")) or 0.0) for item in items or [])
-            if total > 0:
-                return {"value": total, "unit": "元", "caliber": "新浪成分流通市值(nmc)合计"}
-        except Exception:  # noqa: BLE001 - 换源兜底
-            pass
+        # ① 同花顺成分流通市值合计（口径最准，设计原定）
+        # v3.7.2 修正：旧实现调 ``get_cons_ths()`` 再取 items 里的 ``float_cap``，
+        # 但该函数返回的 items 只有 code/name/pct/price/amount/weight 六个字段，
+        # 永远取不到 float_cap ⇒ 第①级是死代码，每次先白翻 5–10 页同花顺
+        # （实测 7.83s）再落到第③级「本地快照总市值」，口径也被动退化。
+        # 现改为读 ``_cons_ths`` 翻页时顺手落盘的 cap 缓存（``board_cap.json``）：
+        # 命中即零网络返回；未命中则**不阻塞本次请求**（转后台补齐，见
+        # :func:`_start_cap_fill`），本次按下面两级兜底并如实标注口径。
+        cached = _cached_cap(board)
+        if cached:
+            return {"value": cached, "unit": "元", "caliber": "同花顺成分流通市值合计"}
+        _start_cap_fill(board)
+        # ② 原「新浪成分 nmc」一级已移除（v3.7.2）：``_cons_sina`` 的 items 同样不
+        # 透出 ``nmc`` 字段，该级历史上从未取到过值，留着只会让名录命中的板块
+        # 白调一次 akshare（1–3s）。若将来确需此口径，应先让 ``_cons_sina``
+        # 透出 nmc 再启用，不能只把这里「看起来有降级链」当已实现。
         # ③ 本地全市场快照总市值（零网络、稳定；口径近似）
         try:
             from backend.app.datasource import screener as _screener
@@ -2614,7 +2934,11 @@ def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
             pass
         return None
 
-    return _lookup(f"sector:floatcap:{board}", 6 * 3600, build)
+    # TTL 动态：市值缓存已就绪（走第①级精确口径）→ 6h；未就绪（本次落到第③级快照
+    # 口径）→ 只 60s。否则「快照口径」会被锁 6 小时，即使后台补齐成功也不切口径
+    # （后台补齐通常 8s 内完成，60s 后重算即命中第①级）。
+    ttl = 6 * 3600 if _cached_cap(board) else 60
+    return _lookup(f"sector:floatcap:{board}", ttl, build)
 
 
 def _board_turnover_percentile(
@@ -2685,19 +3009,31 @@ def _constituent_turnover(
     """
     from backend.app.datasource import tencent
 
-    sample = constituents[:max_samples]
-    values: List[float] = []
-    for item in sample:
-        code = item.get("code") or ""
-        if not code:
-            continue
+    sample = [str(item.get("code")) for item in constituents[:max_samples] if item.get("code")]
+    if len(sample) < 3:
+        return None
+
+    def _one(code: str) -> Optional[float]:
+        """取单只样本的当日换手率（并发单元，不抛异常）。
+
+        Args:
+            code: 6 位代码。
+
+        Returns:
+            Optional[float]: 换手率（%）；取不到返回 None。
+        """
         try:
             quote = tencent.get_quote(code, market="a")
-            tv = utils.to_float(quote.get("turnover"))
-            if tv is not None:
-                values.append(tv)
+            return utils.to_float(quote.get("turnover"))
         except Exception as exc:  # noqa: BLE001
             logger.info("成分股报价失败 %s：%s", code, type(exc).__name__)
+            return None
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    # pool.map 保序 ⇒ values 顺序与串行版一致，均值累加顺序不变（严格等价）
+    with ThreadPoolExecutor(max_workers=min(CONSTITUENT_WORKERS, len(sample))) as pool:
+        values = [tv for tv in pool.map(_one, sample) if tv is not None]
     if len(values) < 3:
         return None
     avg = sum(values) / len(values)

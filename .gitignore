@@ -66,6 +66,8 @@ data/cache/
 data/exports/
 # 第十轮 R5/R7：板块成分映射预热缓存（2026-11-06 从 data/cache 迁至 DATA_DIR，清缓存不删但同样不入库）
 data/board_cons.json
+# v3.7.2：板块成分流通市值合计（与 board_cons.json 同一次翻页产出，同属运行时预热缓存）
+data/board_cap.json
 # 第十轮 R13：持仓逐日收益快照（每日收盘后落库的用户本地数据，随日期累积，不入库）
 data/portfolio_snapshots/
 # 第十轮 R11/C11：概念排行每日抽检日志（本地取证数据，随交易日累积，不入库）

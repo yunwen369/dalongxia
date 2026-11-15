@@ -198,6 +198,49 @@ def reset_state() -> None:
         _V8_SUCCESS_AT = 0.0
 
 
+def serial_v8(func: Callable[..., T]) -> Callable[..., T]:
+    """把函数包进 V8 串行锁，但**不做冻结禁用判断、不计入健康熔断**。
+
+    与 :func:`guard_v8` 的分工（两者共用同一把 ``_V8_LOCK``，彼此也互斥）：
+
+    - ``guard_v8``：用于 ths hexin-v 签名这类**冻结形态按规范 §13.6-2 应禁用**的源，
+      额外带「冻结即拒」与「连续失败熔断」；
+    - ``serial_v8``：用于「py_mini_racer 是合法依赖、只是不允许并发初始化」的通道
+      （典型：akshare 新浪日线 ``stock_zh_a_daily``，v3.6.1 已把 dll 打进产物）。
+      这类源在冻结形态下也要能用，所以不能套 ``guard_v8`` 的冻结判断。
+
+    **为什么必须加锁**（2026-11-15 实测实锤）：V8 的 PartitionAlloc 在「多线程并发
+    首次创建」时双初始化，直接 FATAL 带走进程：
+
+        [FATAL:partition_address_space.cc(243)]
+        Check failed: !IsConfigurablePoolInitialized().
+
+    触发场景：``_constituent_correlation`` 把 20 只样本 K 线改成 8 路并发后，东财通道
+    一旦 ``ConnectionError`` 就会降级到新浪；8 个线程同时首次初始化 V8 ⇒ 源码实例
+    实测**整进程崩溃**（uvicorn 退出码 3）。串行时代不会并发首初始化，所以这个缺口
+    一直没暴露。
+
+    Args:
+        func: 无参 loader（lambda），内部会触发 py_mini_racer 路径。
+
+    Returns:
+        加锁后的函数；异常原样透传。
+    """
+
+    def wrapper(*args, **kwargs) -> T:
+        """加锁执行原函数。
+
+        Returns:
+            T: 计算结果（透传 func 返回值）。
+        """
+        with _V8_LOCK:
+            return func(*args, **kwargs)
+
+    wrapper.__name__ = getattr(func, "__name__", "wrapper")
+    wrapper.__doc__ = func.__doc__
+    return wrapper
+
+
 def guard_v8(func: Callable[..., T]) -> Callable[..., T]:
     """把函数调用包进进程级 V8 互斥锁（同步阻塞语义）。
 
