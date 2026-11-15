@@ -879,6 +879,16 @@ body[data-theme="v6"] .v-legend-row { border-bottom-color: var(--c-cyan-75a24); 
 .dw-preview b { font-weight: 600; }
 .dw-preview .pv-up { color: var(--up); }
 .dw-preview .pv-down { color: var(--down); }
+/* ===== v3.7.3（T3）编排卡点击跳转：卡片底部「前往 xx →」锚点 + 整卡点击 ===== */
+.dw-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.dw-jump {
+  font-size: 10px; color: var(--accent); text-decoration: none; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.dw-jump:hover { text-decoration: underline; }
+.demo-widget { cursor: pointer; }
+.demo-widget .dw-remove, .demo-widget .dw-resize { cursor: pointer; }
+.demo-widget:active { cursor: grabbing; }
 .widget-add {
   width: 100%; margin-top: 7px; padding: 5px 6px; border-radius: 4px; cursor: pointer;
   border: 1px solid var(--border-strong); background: transparent; color: var(--accent); font-size: 10px;

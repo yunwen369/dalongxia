@@ -208,7 +208,9 @@ def main() -> None:
             state = eval_js(cdp, "JSON.stringify({"
                             "\"title\": (document.getElementById('view-title')||{}).textContent||'',"
                             "\"nav\": (document.querySelector('#main-nav .nav-item.active')||{}).textContent||'',"
-                            "\"container\": (function(){var el=document.getElementById('page-" + view + "')||document.getElementById('viewport');return el?el.children.length:0;})(),"
+                            # 2026-11-15 判据修正：真实容器是 #view-body（V6 整站后 page-<view>/viewport
+                            # 容器已退役，旧选择器恒 0 → 全部视图假阴「children=0」）
+                            "\"container\": (function(){var el=document.getElementById('page-" + view + "')||document.getElementById('viewport')||document.getElementById('view-body');return el?el.children.length:0;})(),"
                             "\"ds\": (function(){var el=document.getElementById('page-" + view + "');return el?el.getAttribute('data-state'):null;})(),"
                             "\"errs\": (window.__cb_errors||[]).map(function(e){return e.kind+':'+e.text.slice(0,160)})"
                             "})")

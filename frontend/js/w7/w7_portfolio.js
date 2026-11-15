@@ -462,6 +462,55 @@
     });
   }
 
+  /* ---------- 21d. 编排卡点击跳转（v3.7.3 T3）----------
+   * 根因：grid 的 click 监听只处理 .dw-remove，点卡片本体无任何动作。
+   * 方案：整卡 click → 注册表 page 对应详情页；jump 模板（#/sector-val?board={板块名}）
+   * 在 params 命中时实例化；拖拽/拉伸/移除三种操作不触发跳转。 */
+  /** 页面 hash → 中文短名（跳转链接文案）。 */
+  var DW_PAGE_LABEL = {
+    "#/sectors": "板块行情", "#/sector-val": "板块估值", "#/stock": "个股详情",
+    "#/news": "新闻资讯", "#/fund": "基金详情", "#/portfolio": "我的持仓",
+    "#/watchlist": "我的自选", "#/lhb": "龙虎榜", "#/yjb": "养基宝"
+  };
+  function dwPageLabel(page) {
+    var p = String(page || "").split("?")[0];
+    return DW_PAGE_LABEL[p] || (p.replace("#/", "") || "详情页");
+  }
+  /** 跳转目标：注册表 jump 模板参数命中时实例化（V-02 → #/sector-val?board=影视院线），
+   *  否则组件所在页 page。 */
+  function dwJumpTarget(m, w) {
+    var page = String((m && m.page) || "");
+    var jump = String((m && m.jump) || "");
+    if (!jump || jump.indexOf("{") < 0) { return page || jump; }
+    // jump 模板形如 #/sector-val?board={板块名}&market={市场}；params 有对应值才实例化
+    var params = (w && w.params) || {};
+    var board = params.board || "";
+    if (board && jump.indexOf("{板块名}") >= 0) { jump = jump.replace(/\{板块名\}/g, encodeURIComponent(board)); }
+    var market = params.market || "a";
+    if (jump.indexOf("{市场}") >= 0) { jump = jump.replace(/\{市场\}/g, encodeURIComponent(market)); }
+    var symbol = params.symbol || "";
+    if (symbol && jump.indexOf("{代码}") >= 0) { jump = jump.replace(/\{代码\}/g, encodeURIComponent(symbol)); }
+    if (jump.indexOf("{") >= 0) { return page; }  // 模板参数没填齐 → 退回组件所在页
+    return jump;
+  }
+  /** 整卡点击跳转：点 .dw-jump 锚点由浏览器接管；点卡片其他区域走这里。
+   *  排除：移除按钮 / 拉伸手柄 / 刚结束的拖拽（dragging class 残留）/ 文本选择。 */
+  function bindGridJump(grid, target) {
+    grid.addEventListener("click", function (e) {
+      if (e.target.closest(".dw-remove") || e.target.closest(".dw-resize")) { return; }
+      if (e.target.closest(".dw-jump")) { return; }  // 锚点默认行为已跳转，不重复
+      var card = e.target.closest(".demo-widget");
+      if (!card) { return; }
+      var a = card.querySelector(".dw-jump");
+      if (!a) { return; }
+      var href = a.getAttribute("href");
+      if (!href || href === "#") { return; }
+      e.preventDefault();
+      if (location.hash === href) { return; }
+      location.hash = href;
+    });
+  }
+
   /** 把 /api/dashboards 的真实布局注入「48 栅格」预览卡。
    *
    * BUG-20261112-04：视图是异步渲染的，afterRoute 首次调用时栅格容器往往还没挂载，
@@ -503,6 +552,8 @@
         var h = Number(x.h) || 0;
         // v3.7.3（A+B）：desc 说明行 + 实时微预览占位（.dw-preview 由 fillDashboardPreviews 回填）
         var hasApi = (m.api || []).length > 0;
+        // v3.7.3（T3 点击跳转）：跳转目标 = 注册表 page；jump 模板参数有值时优先
+        var jump = dwJumpTarget(m, x);
         return '<div class="demo-widget cat-' + esc(m.category || "table") + '" draggable="true" data-id="' + esc(x.id) +
           '" data-span="' + span + '" data-h="' + h + '" style="grid-column: span ' + span +
           (h ? ";height:" + h + "px" : "") + '">' +
@@ -511,13 +562,18 @@
           " · 高 " + (h ? h + "px" : "自动") + "</div>" +
           (m.desc ? '<div class="dw-desc" title="' + esc(m.desc) + '">' + esc(m.desc) + "</div>" : "") +
           '<div class="dw-preview" data-pv="' + esc(x.id) + '">' + (hasApi ? "预览加载中…" : "") + "</div>" +
+          '<div class="dw-foot">' +
+          '<a class="dw-jump" href="' + esc(jump || m.page || "#") + '" draggable="false" title="打开组件所在页：' +
+          esc(jump || m.page || "—") + '">前往 ' + esc(dwPageLabel(jump || m.page)) + " →</a>" +
           '<button class="dw-remove" type="button" draggable="false" data-remove="' + esc(x.id) + '">移除</button>' +
+          "</div>" +
           '<span class="dw-resize" draggable="false" title="拖拽右下角自由拉伸：左右改宽度（档位）/ 上下改高度（120–900px）"></span>' +
           "</div>";
       }).join("") : '<div class="v-empty">仪表板为空，从组件库添加</div>';
       grid.setAttribute("data-v7-bound", "1");
       bindGridDrag(grid, target, list, data);
       bindGridResize(grid, target, list, data);
+      bindGridJump(grid, target);
       fillDashboardPreviews(grid, ws, meta);
       var note = grid.closest(".card") && grid.closest(".card").querySelector(".card-note");
       if (note) { note.textContent = "拖拽卡片调顺序 · 拖右下角把手自由拉伸宽高，松手即保存到 /api/dashboards"; }
