@@ -1532,7 +1532,15 @@ _CAP_CACHE: Dict[str, float] = {}
 _CAP_CACHE_TS: Dict[str, float] = {}
 _CAP_CACHE_LOADED = False
 _CAP_CACHE_MTIME: float = 0.0
+# 「新鲜」阈值：超过即排后台刷新（口径不变，仍用旧值）。
 _CAP_CACHE_TTL = 6 * 3600
+# 「可信」硬上限：超过则**不再拿旧值兜口径**，如实退回第③级并标近似。
+# 两档的意义（v3.7.2 修正）：旧实现只有一档，超 6h 就直接返回 None ⇒
+# `_board_float_cap` 掉到「本地快照总市值」这一**不同口径**（实测比分母真值
+# 大 2.084 倍，换手率水平被腰斩），即每 6 小时静默换一次分母、60 秒后再换回。
+# 现改为 stale-while-revalidate：6h~7d 之间照用旧流通市值（日变动个位数
+# 百分比，作分位分母完全够用）+ 后台刷新，口径标签始终如实；超 7d 才算真过期。
+_CAP_CACHE_MAX_STALE = 7 * 24 * 3600
 
 
 def _cons_cache_file():
@@ -1665,21 +1673,42 @@ def _remember_cap(board: str, total_yi: Optional[float]) -> None:
 
 
 def _cached_cap(board: str) -> Optional[float]:
-    """取板块流通市值合计（元）；未缓存或已过期返回 None。
+    """取板块流通市值合计（元）；无缓存或已「真过期」返回 None。
+
+    v3.7.2 修正：过期语义分两档（:data:`_CAP_CACHE_TTL` / :data:`_CAP_CACHE_MAX_STALE`）。
+    旧实现「超 6h 即返回 None」会让调用方掉到**另一套口径**（本地快照总市值），
+    等于每 6 小时静默换一次换手率分母。现在 6h~7d 之间仍然返回值（口径不变），
+    由调用方按 :func:`_cap_is_stale` 排后台刷新。
 
     Args:
         board: 板块名。
 
     Returns:
-        Optional[float]: 流通市值合计（元）。
+        Optional[float]: 流通市值合计（元）；无缓存或超过硬上限返回 None。
     """
     _load_cap_cache()
     value = _CAP_CACHE.get(board)
     if value is None:
         return None
-    if time.time() - _CAP_CACHE_TS.get(board, 0.0) > _CAP_CACHE_TTL:
+    age = time.time() - _CAP_CACHE_TS.get(board, 0.0)
+    if age > _CAP_CACHE_MAX_STALE:
         return None
     return value
+
+
+def _cap_is_stale(board: str) -> bool:
+    """该板块的流通市值是否已过「新鲜期」（需要排后台刷新，但仍可继续用）。
+
+    Args:
+        board: 板块名。
+
+    Returns:
+        bool: 已过新鲜期返回 True；无缓存也返回 True（等价于「需补齐」）。
+    """
+    _load_cap_cache()
+    if board not in _CAP_CACHE:
+        return True
+    return time.time() - _CAP_CACHE_TS.get(board, 0.0) > _CAP_CACHE_TTL
 
 
 # 待补齐流通市值的板块队列（去重 + **全局串行**）
@@ -1743,7 +1772,7 @@ def _start_cap_fill(board: str) -> bool:
     if not _CONS_CACHE.get(board):  # 连成分映射都没有，翻页也无从校验
         return False
     _load_cap_cache()
-    if _cached_cap(board) is not None:
+    if not _cap_is_stale(board):  # 有值且仍新鲜：无需补
         return False
     global _CAP_FILL_WORKER
     with _CAP_FILL_LOCK:
@@ -1780,7 +1809,7 @@ def warm_board_caps(*, max_boards: int = 1) -> int:
         pending = set(_CAP_FILL_PENDING)
     todo = [
         board for board in list(_CONS_CACHE)
-        if _cached_cap(board) is None and board not in pending
+        if _cap_is_stale(board) and board not in pending
     ]
     if not todo:
         return 0
@@ -1791,7 +1820,7 @@ def warm_board_caps(*, max_boards: int = 1) -> int:
         except Exception as exc:  # noqa: BLE001 - 单板块失败继续下一个
             logger.info("板块流通市值补齐跳过 %s：%s", board, type(exc).__name__)
             continue
-        if _cached_cap(board) is not None:
+        if _cached_cap(board) is not None and not _cap_is_stale(board):
             filled += 1
     if filled:
         logger.info("板块流通市值合计补齐：%d 个板块（剩余 %d 待补）", filled, len(todo) - filled)
@@ -2906,6 +2935,10 @@ def _board_float_cap(board: str) -> Optional[Dict[str, Any]]:
         # :func:`_start_cap_fill`），本次按下面两级兜底并如实标注口径。
         cached = _cached_cap(board)
         if cached:
+            # 口径不变，只在「过新鲜期」时排后台刷新（stale-while-revalidate）：
+            # 不能在过期时改走第③级——那是换分母口径，不是刷新数据。
+            if _cap_is_stale(board):
+                _start_cap_fill(board)
             return {"value": cached, "unit": "元", "caliber": "同花顺成分流通市值合计"}
         _start_cap_fill(board)
         # ② 原「新浪成分 nmc」一级已移除（v3.7.2）：``_cons_sina`` 的 items 同样不

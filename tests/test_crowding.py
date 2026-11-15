@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -110,3 +112,84 @@ def test_margin_by_board_shape(client: TestClient) -> None:
         if pcts:
             assert all(0 <= p <= 100 for p in pcts), "分位应在 0–100"
             assert pcts == sorted(pcts, reverse=True), "应按分位降序"
+
+
+# ---------------------------------------------------------------------------
+# v3.7.2：板块流通市值合计缓存的三档过期语义（纯内存，不触网）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def cap_probe(monkeypatch: pytest.MonkeyPatch):
+    """注入一个受控板块的流通市值缓存条目，并隔离落盘读写。
+
+    隔离手段：把 ``_CAP_CACHE_LOADED`` 置 True 且 mtime 设成极大值，
+    使 :func:`sector_provider._load_cap_cache` 直接早退，不读 ``board_cap.json``。
+    同时把落盘函数换成空实现，避免测试污染真实缓存文件。
+
+    Yields:
+        Callable[[float], None]: 传入「已存在多少秒」，重设该条目的时间戳。
+    """
+    board = "_TEST_CAP_BOARD_"
+    saved = (
+        dict(sector_provider._CAP_CACHE),
+        dict(sector_provider._CAP_CACHE_TS),
+        sector_provider._CAP_CACHE_LOADED,
+        sector_provider._CAP_CACHE_MTIME,
+    )
+    board_value = 4.195433999999e12  # 半导体量级（元）
+    monkeypatch.setattr(sector_provider, "_save_cap_cache", lambda: None)
+    monkeypatch.setattr(sector_provider, "_CAP_CACHE_LOADED", True)
+    monkeypatch.setattr(sector_provider, "_CAP_CACHE_MTIME", float("inf"))
+    sector_provider._CAP_CACHE[board] = board_value
+
+    def set_age(seconds: float) -> None:
+        """把该条目的时间戳设为「距今 seconds 秒前」。
+
+        Args:
+            seconds: 距今秒数。
+        """
+        sector_provider._CAP_CACHE_TS[board] = time.time() - seconds
+
+    try:
+        yield set_age
+    finally:
+        sector_provider._CAP_CACHE.clear()
+        sector_provider._CAP_CACHE.update(saved[0])
+        sector_provider._CAP_CACHE_TS.clear()
+        sector_provider._CAP_CACHE_TS.update(saved[1])
+        sector_provider._CAP_CACHE_LOADED = saved[2]
+        sector_provider._CAP_CACHE_MTIME = saved[3]
+
+
+def test_cap_cache_fresh_entry_is_reused(cap_probe) -> None:
+    """新鲜条目：返回值，且不标记为需要刷新。"""
+    cap_probe(60)  # 1 分钟前
+    assert sector_provider._cached_cap("_TEST_CAP_BOARD_") is not None
+    assert sector_provider._cap_is_stale("_TEST_CAP_BOARD_") is False
+
+
+def test_cap_cache_stale_entry_still_returns_value(cap_probe) -> None:
+    """v3.7.2 回归：超过新鲜期仍必须返回旧值（口径不能翻转），只标记待刷新。
+
+    旧实现此处返回 None，导致 ``_board_float_cap`` 掉到「本地快照总市值」，
+    即分母口径被静默换掉（实测差 2.084 倍）。
+    """
+    cap_probe(sector_provider._CAP_CACHE_TTL + 600)  # 6h 出头
+    assert sector_provider._cached_cap("_TEST_CAP_BOARD_") is not None, (
+        "过期只是需要刷新，不能返回 None——否则换手率分母会换口径"
+    )
+    assert sector_provider._cap_is_stale("_TEST_CAP_BOARD_") is True
+
+
+def test_cap_cache_beyond_max_stale_returns_none(cap_probe) -> None:
+    """超过 7 天硬上限：视为真过期，如实退回近似口径并标待刷新。"""
+    cap_probe(sector_provider._CAP_CACHE_MAX_STALE + 60)
+    assert sector_provider._cached_cap("_TEST_CAP_BOARD_") is None
+    assert sector_provider._cap_is_stale("_TEST_CAP_BOARD_") is True
+
+
+def test_cap_cache_absent_board_is_stale(cap_probe) -> None:
+    """完全无缓存的板块：返回 None 且标记待补齐（走后台队列）。"""
+    cap_probe(0)
+    assert sector_provider._cached_cap("_TEST_CAP_UNKNOWN_") is None
+    assert sector_provider._cap_is_stale("_TEST_CAP_UNKNOWN_") is True
