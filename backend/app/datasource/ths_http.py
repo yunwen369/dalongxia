@@ -52,7 +52,16 @@ logger = logging.getLogger(__name__)
 # 实测（2026-11-02）：q.10jqka.com.cn 间隔 1.2s 连续 8 次全部 200；间隔 0.35s 连续 6 次
 # 即被 401 拦截。故对「行情中心」域名做**进程级最小间隔**限流，行情数据域名（d.10jqka.com.cn）
 # 为纯静态 JSON 无此限制，保持低延迟。
-_POLITE_DELAY = {"q": 1.1, "d": 0.1}
+#
+# v3.7.1 实测修正（2026-11-15，tools/_probe_ths_rate.py 三轮共 440 次请求）：
+# ``d`` 域原取 0.1s 是第八轮**未实测的保守值**，它才是板块排行冷启动的真正下限——
+# 90 板块 × 2 个文件（all.js + last.js）= 180 次请求，被 0.1s 串成 ≥18s
+# （与会话复用后的实测 19.5s 吻合）。直测该域：间隔 0、8 并发下
+# 80 次→1.10s / 73 QPS、180 次→2.40s / 75 QPS、180 次→2.23s / 81 QPS，
+# **三轮全部 200，零 401/403**。故下调到 0.01s：既让间隔不成为瓶颈
+# （8 路并发自然吞吐约 80 QPS < 1/0.01=100 QPS，不触发等待），
+# 又保留一层「拒绝零间隔空转」的兜底。``q`` 域实证有拦截，维持 1.1s 不动。
+_POLITE_DELAY = {"q": 1.1, "d": 0.01}
 # 401/403 处理：同花顺反爬是**按 IP 的短时封禁**（实测约 30–60 秒），
 # 单请求逐个退避会拖成几十秒且拖慢整批预热。改为「全局冷却 + 指数退避」：
 # 一旦命中 401/403，整个进程对该域名暂停 ``_COOLDOWN`` 秒，后续每次失败
@@ -73,6 +82,45 @@ _PERIOD_PATH = {"daily": "01", "weekly": "11", "monthly": "21"}
 # 进程级限流状态：{域名键: 上次请求完成时间}
 _THROTTLE_LOCK = threading.Lock()
 _THROTTLE_TS: Dict[str, float] = {}
+
+# 线程内复用的 HTTP 会话（v3.7.1）：原实现每次请求都 netfix.make_session() 新建连接池、
+# 用完即 close，等于「一次请求一次 TLS 握手」。90 板块排行要发 180 次请求，
+# cProfile 实测 ssl.do_handshake 占 22.0s（占整链 92%）——握手而非取数是瓶颈。
+# 改为按线程持有会话，连接池复用（threading.local 而非全局单例：requests.Session
+# 并非严格线程安全，连接池本身线程安全但 Cookie/Session 状态不宜跨线程共享）。
+_SESSION_LOCAL = threading.local()
+
+
+def _session() -> "Any":
+    """取当前线程的复用会话（首次调用时创建，之后复用连接池）。
+
+    Returns:
+        requests.Session: 已配置 trust_env=False / 浏览器 UA / 重试适配器的会话。
+
+    Notes:
+        不主动 close：线程池线程是长期存活的，会话随线程回收。
+        池化连接若被源站单方关闭，urllib3 的 Retry(total=MAX_RETRY) 会透明重连。
+    """
+    session = getattr(_SESSION_LOCAL, "session", None)
+    if session is None:
+        # 延迟导入避免 core → datasource 循环依赖
+        from backend.app.core import netfix
+
+        session = netfix.make_session()
+        _SESSION_LOCAL.session = session
+    return session
+
+
+def _drop_session() -> None:
+    """丢弃当前线程的会话（网络确定性失败后调用，避免复用已失效连接）。"""
+    session = getattr(_SESSION_LOCAL, "session", None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001 - 关闭失败不阻断
+            pass
+        _SESSION_LOCAL.session = None
+
 
 # 行业行情短缓存：(时间戳, 行列表)，供行情/K线/资金流共用，避免重复翻页触发限流
 _INDUSTRY_ROWS: Dict[str, Any] = {}
@@ -121,9 +169,7 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
         "Accept": "text/html,application/javascript,*/*",
         "Accept-Language": "zh-CN,zh;q=0.9",
     }
-    # 延迟导入避免 core → datasource 循环依赖
-    from backend.app.core import netfix
-
+    # netfix 的导入已收敛到 _session()：本函数不再直接构造会话
     # 命中原站封禁时先等待全局冷却（其它线程同样受益，避免各自重试放大封禁）
     with _THROTTLE_LOCK:
         cool_until = _COOLDOWN_UNTIL.get(host_key, 0.0)
@@ -133,7 +179,8 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
     cooldown = _COOLDOWN
     for attempt in range(_MAX_ATTEMPTS):
         _throttle(host_key)
-        session = netfix.make_session()
+        # v3.7.1：复用线程内会话（连接池），不再每请求新建/关闭（省掉 180 次 TLS 握手）
+        session = _session()
         try:
             response = session.get(url, headers=headers, timeout=config.DATASOURCE_TIMEOUT)
             if response.status_code in (401, 403):
@@ -152,10 +199,11 @@ def _get_text(url: str, *, referer: str = "", encoding: str = "gbk") -> str:
         except Exception as exc:  # noqa: BLE001 - 统一转译为可降级异常
             name = type(exc).__name__
             if name in ("ProxyError", "SSLError", "ConnectionError", "RemoteDisconnected"):
+                # 连接层异常（含池内连接被源站单方断开）：丢弃本线程会话后再上报，
+                # 避免后续请求继续复用坏连接；具体降级由调用方决定。
+                _drop_session()
                 raise NonRetryableError(f"同花顺通道不可用：{name}") from exc
             last_error = f"{name}"
-        finally:
-            session.close()
     raise NonRetryableError(f"同花顺请求失败：{last_error or '未知原因'}（已重试 {_MAX_ATTEMPTS} 次）")
 
 

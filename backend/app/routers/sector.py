@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Query
@@ -34,6 +35,62 @@ router = APIRouter(prefix="/api/sector", tags=["板块"])
 
 # 板块域白名单：cn=国内（A股）、hk=港股、us=美股
 _ALLOWED_MARKETS = utils.MARKET_WHITELIST_SECTOR
+
+# 拥挤度排行的**缓存口径长度**（v3.7.1）：一次扫描覆盖所有 `limit`。
+# 扫描成本与 limit 无关（必须给全部板块打分才能排名），故统一按上限 120 缓存，
+# 请求侧再切片；否则前端 120 / 默认 50 / 探针 20 会各扫一遍 90 板块。
+RANKINGS_CACHE_LIMIT = 120
+
+# 无缓存时「合流等待后台扫描」的最长秒数（按板块类型分档：行业 90 个 ≈ 6s，
+# 概念约 375 个 ≈ 30s；留足余量，超时才回退到同步计算兜底）。
+RANKINGS_WAIT_TIMEOUT = {"industry": 60.0, "concept": 180.0}
+
+
+def _slice_rankings(payload: Dict[str, Any], limit: int) -> Dict[str, Any]:
+    """把缓存的全量排行按请求的 limit 切片（不改口径、不重算）。
+
+    Args:
+        payload: 缓存中的排行结果（items 已按分数降序，长度为 RANKINGS_CACHE_LIMIT）。
+        limit: 本次请求要的条数。
+
+    Returns:
+        Dict[str, Any]: 浅拷贝副本，仅 `items` 被截断；scanned/total/failed/level_counts
+        等汇总字段保持全量口径（它们与 limit 无关）。
+    """
+    items = payload.get("items") or []
+    size = max(1, min(int(limit or 50), 120))
+    if len(items) <= size:
+        return payload
+    sliced = dict(payload)
+    sliced["items"] = items[:size]
+    return sliced
+
+
+def _await_rankings(cache_key: str, limit: int, *, timeout: float = 12.0) -> Optional[Dict[str, Any]]:
+    """等待正在进行的后台排行扫描完成并返回其结果（v3.7.1）。
+
+    背景：服务启动预热会在后台扫一遍 90 板块（约 6.5s）。若此时来了一个
+    ``/crowding/rankings`` 请求且**没有旧值可返回**，改造前会另起一次同样的扫描 ——
+    同一份 90 板块数据被算两遍、互相拖慢（实测首请求 7.47s，单跑 6.5s）。
+    这里改为「等它算完」，把两遍算成一遍。
+
+    Args:
+        cache_key: 排行缓存键。
+        limit: 本次请求要的条数。
+        timeout: 最长等待秒数（超时则回退到同步扫描）。
+
+    Returns:
+        Optional[Dict[str, Any]]: 已按 limit 切片的结果；超时或后台失败返回 None。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not sector_provider.rankings_in_flight(cache_key):
+            break
+        time.sleep(0.2)
+    fresh = cache.get(cache_key, 3600 * 24)
+    if fresh is None:
+        return None
+    return _slice_rankings(fresh, limit)
 
 
 def _status_now() -> tuple[str, str, bool]:
@@ -700,32 +757,44 @@ def sector_crowding_rankings(
     if key_kind not in ("industry", "concept"):
         return api_error(ErrorCode.INVALID_PARAM, "kind 仅支持 industry（行业）/ concept（概念）")
 
-    # P1-1：排行需扫描 90 行业（约 20 秒）/ 800 概念（约 40 秒）。
+    # P1-1：排行需扫描 90 行业 / 800 概念。
     # 第八轮起全程纯 HTTP（无 V8 串行），并改为「缓存优先 + 后台刷新」：
     #   ① 命中未过期缓存 → 直接返回（<0.5s）；
     #   ② 缓存过期 → 先返回旧值（stale-while-revalidate）并触发后台重算；
-    #   ③ 无缓存 → 本次同步计算（服务启动预热已覆盖默认 industry 口径）。
+    #   ③ 无缓存 → 本次同步计算（服务启动预热已覆盖 industry 口径）。
     # 不再返回「计算中」空态（空态不得掩盖正常数据）。
-    cache_key = f"sector:crowding:rankings:{key_kind}:{limit}"
-    cached = None if force else cache.get(cache_key, 3600 * 24)
-    if cached is not None and not force:
-        # 缓存命中即返回；若已超过 1 小时则在后台刷新（用户无感知）
-        if cache.get(cache_key, 3600) is None and not sector_provider.rankings_in_flight(cache_key):
-            sector_provider.start_rankings_bg(key_kind, limit, cache_key)
-        return ok(cached)
-    if sector_provider.rankings_in_flight(cache_key) and not force:
-        stale = cache.get(cache_key, 3600 * 24)
-        if stale is not None:
-            return ok(stale)
+    #
+    # v3.7.1（REQ-20261115-02）：缓存键**不再带 limit**。扫描成本与 limit 无关
+    # （都要给全部板块打分才能排名），原键带 limit 导致同一份扫描被重复算多次：
+    # 前端看盘页取 limit=120、视图页取默认 50，而启动预热只写 limit=50 ——
+    # 冷启动时三个口径各扫一遍 90 板块。现统一缓存「前 RANKINGS_CACHE_LIMIT 名」，
+    # 请求侧按 limit 切片，一次扫描覆盖所有长度。
+    cache_key = f"sector:crowding:rankings:{key_kind}"
+    if not force:
+        cached = cache.get(cache_key, 3600 * 24)
+        if cached is not None:
+            # 缓存命中即返回；若已超过 1 小时则在后台刷新（用户无感知）
+            if cache.get(cache_key, 3600) is None:
+                sector_provider.start_rankings_bg(key_kind, RANKINGS_CACHE_LIMIT, cache_key)
+            return ok(_slice_rankings(cached, limit))
+        # 无缓存：启动**单一**后台扫描并合流等待。
+        # v3.7.1：原实现在这里直接同步计算，而启动预热的扫描走的是另一条线程 ——
+        # 同一时刻可能有两份 90 板块扫描同时在跑（实测首请求 7.44s，单跑 6.06s）。
+        # 改为统一经 start_rankings_bg（同 key 幂等）+ 等待，进程内永远只有一份扫描。
+        sector_provider.start_rankings_bg(key_kind, RANKINGS_CACHE_LIMIT, cache_key)
+        joined = _await_rankings(cache_key, limit, timeout=RANKINGS_WAIT_TIMEOUT.get(key_kind, 120.0))
+        if joined is not None:
+            return ok(joined)
 
     def loader() -> Dict[str, Any]:
         """全量扫描（1 小时缓存：日频数据）。
 
         Returns:
-            Dict[str, Any]: 排行结果。
+            Dict[str, Any]: 排行结果（按缓存口径取前 RANKINGS_CACHE_LIMIT 名）。
         """
-        return sector_provider.get_crowding_rankings(kind=key_kind, limit=limit)
+        return sector_provider.get_crowding_rankings(kind=key_kind, limit=RANKINGS_CACHE_LIMIT)
 
+    # force=true，或后台扫描失败（无结果可合流）时：同步计算兜底
     try:
         data = loader()
         cache.set(cache_key, data, 3600)
@@ -734,7 +803,7 @@ def sector_crowding_rankings(
     except Exception as exc:  # noqa: BLE001
         logger.warning("拥挤度排行失败：%s", type(exc).__name__)
         return api_error(ErrorCode.UPSTREAM_ERROR, f"拥挤度排行计算失败（{type(exc).__name__}），请稍后重试")
-    return ok(data)
+    return ok(_slice_rankings(data, limit))
 
 
 @router.get("/margin")

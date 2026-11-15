@@ -1455,6 +1455,8 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - 对齐失败不影响资金流主功能
         logger.info("资金流 pct 同源对齐跳过：%s", type(exc).__name__)
     items: List[Dict[str, Any]] = []
+    # v3.7.1：先把整表四档并发预热（原串行 90 次 HTTP 占整链 92%），循环内只读缓存。
+    _prefetch_flow_tiers(rows)
     for row in rows:
         name = row.get("name")
         tier = _flow_tier(name, row.get("code")) or {}
@@ -1495,6 +1497,9 @@ def get_fundflow(market: str = "cn") -> List[Dict[str, Any]]:
 
 # 板块四档缓存：{板块名: (时间戳, {super_big, big, medium, small, covered})}
 _FLOW_TIER_CACHE = memcache.get_cache("flow_tier")  # B2 收编：原手写 {board: (ts, payload)}，TTL config.TTL["flow_tier"]
+# 板块四档并发预取的线程数（v3.7.1）：90 个板块各 1 次新浪批量请求，
+# 串行实测 13.9s；8 路并发实测 ~2s 且无失败（新浪批量接口无严格限流）。
+FLOW_TIER_WORKERS = 8
 # 板块成分映射：{板块名: [6 位代码]}（落盘缓存 7 天，构建慢）
 _CONS_CACHE: Dict[str, List[str]] = {}
 _CONS_CACHE_LOADED = False
@@ -1777,42 +1782,100 @@ def _flow_tier(board: str, code: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def warm_fundflow_tiers(*, max_boards: int = 90) -> int:
-    """后台预热板块四档：逐个构建成分映射并聚合四档（守护线程调用）。
+def _prefetch_flow_tiers(rows: List[Dict[str, Any]], *, max_workers: int = FLOW_TIER_WORKERS) -> int:
+    """并发预取整表板块四档（把 90 次串行 HTTP 压成并发）。
 
-    顺序执行的目的是遵守同花顺 1.1s 限流；成分映射落盘后 7 天内不再重复翻页，
-    后续刷新只走新浪批量接口（约 3 秒完成 90 个板块）。
+    v3.7.1（REQ-20261115-02）：`get_fundflow` 原先在结果循环里逐板块调 :func:`_flow_tier`，
+    即「90 个板块 × 1 次新浪批量请求」**串行**执行 —— 实测单项 13.9s（占整条链路 15.1s 的 92%），
+    是冷启动 24.3s 的主因。此处先并发预热，循环里只剩缓存命中。
+
+    口径不变：单板块失败仍返回 None（四档为 None、不补 0、不估算），
+    成功项写 `_FLOW_TIER_CACHE`；`covered` 判据与 :func:`_flow_tier` 完全一致。
+
+    Args:
+        rows: 资金流行（含 name）。
+        max_workers: 并发线程数（新浪批量接口无严格限流，8 路实测稳定）。
+
+    Returns:
+        int: 本次实际发请求的板块数（已命中缓存的跳过，不重复打源站）。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    _load_cons_cache()
+    pending: List[str] = []
+    for row in rows:
+        name = row.get("name")
+        if not name:
+            continue
+        if _FLOW_TIER_CACHE.get(name, config.TTL["flow_tier"]) is not None:
+            continue  # 缓存命中：不重复请求
+        if not _CONS_CACHE.get(name):
+            continue  # 无成分映射：交给预热线程，本次按 None 处理
+        pending.append(name)
+    if not pending:
+        return 0
+    if len(pending) == 1 or max_workers <= 1:
+        for name in pending:
+            _flow_tier(name, None)
+        return len(pending)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # 逐个消费以捕获异常：_flow_tier 内部已 try/except，此处仅防御线程池异常
+        list(pool.map(lambda board: _flow_tier(board, None), pending))
+    return len(pending)
+
+
+def warm_fundflow_tiers(*, max_boards: int = 90) -> int:
+    """后台预热板块四档：先补成分映射，再并发刷新四档（守护线程调用）。
+
+    v3.7.1（REQ-20261115-02）把原「一个 for 循环里既建映射又算四档」拆成两段：
+
+    - **阶段 A｜成分映射**：仍**顺序**执行（同花顺详情页有 1.1s 进程级限流，
+      并发只会互相排队）。映射落盘后 7 天内不再重复翻页。
+    - **阶段 B｜四档数值**：改走 :func:`_prefetch_flow_tiers` 并发刷新。
+
+    分开的原因：原实现阶段 B 也是串行的 —— 90 个板块 × 1 次新浪批量请求 ≈ 13.9s，
+    而同一时刻 ``/api/sector/fundflow`` 的预取也在跑同样 90 个板块，
+    **同一份数据被算两遍且互相拖慢**（实测服务启动后首个 fundflow 请求 16.8s，
+    单跑只要 3.1s）。改并发后预热一轮约 2s，且与请求侧共享同一份 ``_FLOW_TIER_CACHE``。
 
     Args:
         max_boards: 本次最多预热多少个板块（默认全量 90）。
 
     Returns:
-        int: 成功聚合的板块数。
+        int: 预热后缓存中可用的板块数（四档有值才算）。
     """
     _load_cons_cache()
-    done = 0
     try:
         names = [row["name"] for row in ths_http.get_industry_rows() if row.get("name")]
     except Exception as exc:  # noqa: BLE001 - 名录不可用则本次不预热
         logger.info("板块四档预热跳过（名录不可用：%s）", type(exc).__name__)
         return 0
-    for name in names[:max_boards]:
-        if name in _TIER_WARMING:
+    targets = names[:max_boards]
+
+    # 阶段 A：补齐缺失的成分映射（顺序执行，遵守同花顺 1.1s 限流）
+    for name in targets:
+        if name in _CONS_CACHE or name in _TIER_WARMING:
             continue
         _TIER_WARMING.add(name)
         try:
-            if name not in _CONS_CACHE:
-                # 预热优先速度：12 页约 240 只，已覆盖绝大多数行业板块（半导体 182 只全覆盖）；
-                # 全量 40 页实测单板块 24s，89 个板块要 35 分钟，启动后台不划算。
-                get_board_constituents(name, max_pages=12)
-            payload = _flow_tier(name, None)
-            if payload:
-                done += 1
+            # 预热优先速度：12 页约 240 只，已覆盖绝大多数行业板块（半导体 182 只全覆盖）；
+            # 全量 40 页实测单板块 24s，89 个板块要 35 分钟，启动后台不划算。
+            get_board_constituents(name, max_pages=12)
         except Exception as exc:  # noqa: BLE001 - 单板块失败继续下一个
-            logger.info("板块四档预热跳过 %s：%s", name, type(exc).__name__)
+            logger.info("板块成分映射预热跳过 %s：%s", name, type(exc).__name__)
         finally:
             _TIER_WARMING.discard(name)
-    logger.info("板块四档预热完成：%d/%d 个板块", done, min(len(names), max_boards))
+
+    # 阶段 B：并发刷新四档（与 /api/sector/fundflow 的预取共用同一实现与同一缓存）
+    try:
+        _prefetch_flow_tiers([{"name": name} for name in targets])
+    except Exception as exc:  # noqa: BLE001 - 预热失败不影响主流程
+        logger.info("板块四档并发预热失败：%s", type(exc).__name__)
+    done = sum(
+        1 for name in targets
+        if _FLOW_TIER_CACHE.get(name, config.TTL["flow_tier"]) is not None
+    )
+    logger.info("板块四档预热完成：%d/%d 个板块", done, len(targets))
     return done
 
 
@@ -1862,6 +1925,13 @@ CROWDING_WEIGHTS = {
     "amplitude": 0.08,      # 振幅分位（R4 新增：波动放大=分歧加剧）
     "high_distance": 0.07,  # 距 60 日高点分位（R4 新增：贴近高点=追高密集）
 }
+
+# 拥挤度排行扫描的并发线程数（v3.7.1）。原为 6，实测（同一进程多轮取均值）：
+# 6 路 7.40s / 8 路 6.90s / 10 路 7.33s / **12 路 6.06s** / 14 路 6.14s / 16 路 6.24s。
+# 单板块成本以「两次 HTTP + 解析」为主，提高并发能把 90 板块的等待重叠掉，12 路见底。
+# 同花顺行情数据域实测 8 并发 / 78 QPS 零拦截（tools/_probe_ths_rate.py 三轮共 440 次），
+# 12 路仍在该域充裕范围内。
+CROWDING_SCAN_WORKERS = 12
 
 CROWDING_MISSING = (
     "设计原定五维（成交额/换手率/两融/相关性/动量），第十轮 P3 R4 扩为六维实测："
@@ -1934,6 +2004,9 @@ def get_crowding(board: str, *, kind: str = "industry", fill_today: bool = True,
     # 原设计用「占全市场比重」，但全市场成交额源（东财 push2his）在本机被源站重置，
     # 新浪指数日线只有成交量没有成交额，无法合成可靠分母；改用「相对自身历史强度」，
     # 只依赖板块日线自身，口径自洽且可复算。差异已在 caliber 写明。
+    # 注：虽然 all.js 返回全历史（实测 1932 根），但其中只有近 140 根带成交额
+    # （last.js 覆盖范围），故 amounts 实际长度约 140，本循环 O(n×250) 仅 ~3.5 万次加法
+    # （实测 0.2ms），无需改滚动和（v3.7.1 曾试改，实测无收益且有浮点尾差，已回退）。
     amounts = [item["amount"] for item in rows]
     strengths: List[float] = []
     for index in range(0, len(amounts)):
@@ -2177,7 +2250,7 @@ def get_crowding_rankings(
     *,
     kind: str = "industry",
     limit: int = 50,
-    max_workers: int = 6,
+    max_workers: int = CROWDING_SCAN_WORKERS,
 ) -> Dict[str, Any]:
     """全板块拥挤度排行（第七轮 M12）。
 
@@ -2187,7 +2260,8 @@ def get_crowding_rankings(
     Args:
         kind: 板块类型，目前仅支持 industry（概念板块接口在本机不稳定，未纳入）。
         limit: 返回前 N 名（1–120）。
-        max_workers: 并发线程数（同花顺签名在进程级锁内串行，HTTP 可部分并行）。
+        max_workers: 并发线程数（纯 HTTP 通道无签名锁，可并行；默认值见
+            :data:`CROWDING_SCAN_WORKERS`）。
 
     Returns:
         Dict[str, Any]: {items, scanned, total, failed, level_counts, caliber, as_of}
@@ -2202,7 +2276,7 @@ def get_crowding_rankings(
     return _scan_rankings(kind, limit, max_workers=max_workers)
 
 
-def _scan_rankings(kind: str, limit: int, *, max_workers: int = 6) -> Dict[str, Any]:
+def _scan_rankings(kind: str, limit: int, *, max_workers: int = CROWDING_SCAN_WORKERS) -> Dict[str, Any]:
     """排行实际扫描体（后台线程调用；不查缓存、不启动后台）。
 
     Args:

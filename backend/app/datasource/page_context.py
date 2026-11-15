@@ -251,8 +251,9 @@ def _crowding_summary() -> Optional[str]:
     Returns:
         Optional[str]: 摘要文本；不可得返回 None。
     """
-    for key in ("sector:crowding:rankings:industry:30", "sector:crowding:rankings:industry:50",
-                "sector:crowding:rankings:industry:20"):
+    # v3.7.1：排行缓存键已去掉 limit（一次扫描覆盖所有榜单长度，见 routers/sector.py），
+    # 故只需读这一个键；旧键（:30 / :50 / :20）不再产生。
+    for key in ("sector:crowding:rankings:industry",):
         cached = cache.get(key, _PROBE_TTL)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list) and cached["items"]:
             top = [

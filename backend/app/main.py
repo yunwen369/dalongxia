@@ -788,18 +788,27 @@ def _bg_prewarm() -> None:
     """
     import time
 
-    from backend.app.core import cache as cache_module
     from backend.app.datasource import sector as sector_provider
 
     time.sleep(6)  # 等服务就绪，避免与启动探测抢网络
     _warm_first_screen()
+    # v3.7.1：改走 start_rankings_bg 而非直接调用 provider —— 后者不会置「在飞」标记，
+    # 导致此刻进来的 /crowding/rankings 请求无从判断后台正在扫，会另起一遍同样的
+    # 90 板块扫描（实测首请求 7.44s，单跑 6.06s）。走同一入口后请求侧可合流等待。
+    # 缓存键与路由层同键（v3.7.1：键不带 limit，一次扫描覆盖所有榜单长度）。
     try:
-        result = sector_provider.get_crowding_rankings(kind="industry", limit=50)
-        cache_module.set("sector:crowding:rankings:industry:50", result, 3600)
-        logger.info("拥挤度排行（industry）后台预热完成：扫描 %d/%d，缓存已写",
-                    result.get("scanned"), result.get("total"))
+        rankings_key = "sector:crowding:rankings:industry"
+        sector_provider.start_rankings_bg(
+            "industry", sector.RANKINGS_CACHE_LIMIT, rankings_key
+        )
+        # 等它算完再进入下一段预热：排行扫描走同花顺行情数据域，紧接着的资金流四档
+        # 走新浪 + 同花顺行情中心，两批并发会互相抢连接、把首请求拖慢约 1.5s
+        # （实测单跑 6.06s / 与资金流并发 7.58s）。排队执行对用户无损——两段都在后台。
+        deadline = time.time() + 90
+        while time.time() < deadline and sector_provider.rankings_in_flight(rankings_key):
+            time.sleep(0.3)
     except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
-        logger.info("拥挤度排行后台预热失败（不影响启动）：%s", type(exc).__name__)
+        logger.info("拥挤度排行后台预热启动失败（不影响启动）：%s", type(exc).__name__)
     # 3. 全市场快照（M13 候选池依赖）：缺失时自动建库，用户无需先去筛选器页点按钮
     #    （第二轮检测 P3-1：首次使用需手动建快照）
     try:
