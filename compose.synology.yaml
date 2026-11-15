@@ -1,0 +1,32 @@
+# =============================================================
+# 大龙虾投研工作台 · Docker Compose（群晖 NAS 部署版）
+# 用法：
+#   1. 在 /volume1/docker/dalongxia/ 下建 .env（或 DSM Container Manager 界面填环境变量）：
+#        OPENBB_ACCESS_PASSWORD=你的口令
+#        OPENAI_BASE_URL=（可选）
+#        OPENAI_API_KEY=（可选）
+#   2. docker compose up -d
+#   3. 浏览器访问 http://<NAS_IP>:8114
+# 镜像：ghcr.io/yunwen369/dalongxia，随 GitHub tag 自动构建发布
+# =============================================================
+
+services:
+  dalongxia:
+    # 镜像随 GitHub tag 自动发布（ghcr.io 镜像路径全小写）
+    image: ghcr.io/yunwen369/dalongxia:latest
+    container_name: dalongxia
+    ports:
+      - 8114:6900          # 左侧可改宿主端口，如 "8080:6900"
+    environment:
+      # 访问口令（≥4 字符启用口令中间件；放 .env 或导出环境变量，勿写死在仓库）
+      OPENBB_ACCESS_PASSWORD: ${OPENBB_ACCESS_PASSWORD:-}
+      # AI 能力（可选）：财报中文摘要 / 新闻情绪复核 / AI 助手
+      # 注意：Linux 容器无 Windows DPAPI，界面「AI 设置」保存不可用，
+      #       统一走环境变量注入（config 优先级：环境变量 > .env > data/ai_config.json）
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - /volume1/docker/dalongxia/data:/app/data     # 运行时数据（缓存/用户配置），升级镜像不丢
+      - /volume1/docker/dalongxia/log:/app/logs      # 日志（按天滚动）
+    restart: unless-stopped
+    init: true               # 以 init 转发信号，stop 更干净
