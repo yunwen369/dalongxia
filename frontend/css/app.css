@@ -862,6 +862,23 @@ body[data-theme="v6"] .v-legend-row { border-bottom-color: var(--c-cyan-75a24); 
 .dw-meta { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); }
 .dw-remove { align-self: flex-start; border: 0; background: transparent; color: var(--text-muted); font-size: 10px; padding: 2px 0; cursor: pointer; }
 .dw-remove:hover { color: var(--up); }
+/* ===== v3.7.3（A+B）编排卡：desc 说明行 + 实时微预览 ===== */
+.dw-desc {
+  font-size: 10px; color: var(--text-muted); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dw-preview {
+  font-size: 10px; line-height: 1.5; color: var(--text);
+  border-top: 1px dashed var(--border-strong); padding-top: 4px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  min-height: 14px;
+}
+.dw-preview.pv-ok { color: var(--text); }
+.dw-preview.pv-fallback { color: var(--text-muted); font-style: italic; }
+.dw-preview.pv-none { display: none; }
+.dw-preview b { font-weight: 600; }
+.dw-preview .pv-up { color: var(--up); }
+.dw-preview .pv-down { color: var(--down); }
 .widget-add {
   width: 100%; margin-top: 7px; padding: 5px 6px; border-radius: 4px; cursor: pointer;
   border: 1px solid var(--border-strong); background: transparent; color: var(--accent); font-size: 10px;

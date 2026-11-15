@@ -215,6 +215,253 @@
     });
   }
 
+  /* ---------- 21c. 编排卡实时微预览（v3.7.3 方案 B）----------
+   * 每张编排卡内嵌 1-2 行真实数据摘要：热力图=领涨/领跌板块、摘要=Top3、
+   * 个股域=绑定标的行情、基金域=绑定基金名称净值……让「版面图」自己会说话。
+   * 同 URL 请求去重共享；8s 超时/失败回退注册表 desc（方案 A），绝不阻塞编排操作。 */
+  /** 与 registry_view.js PARAM_HINTS 同源（演示视图默认参数），微预览 GET 需要参数的端点共用。 */
+  var DW_PARAM_HINTS = {
+    "/api/stock/realtime-panel": "?symbol=300750",
+    "/api/stock/profile": "?symbol=300750",
+    "/api/stock/holders": "?symbol=300750",
+    "/api/sector/cons": "?board=" + encodeURIComponent("影视院线"),
+    "/api/sector/kline": "?board=" + encodeURIComponent("影视院线"),
+    "/api/sentiment/board": "?board=" + encodeURIComponent("影视院线"),
+    "/api/sentiment/stock": "?symbol=300750",
+    "/api/fund/nav": "?code=017811",
+    "/api/fund/drawdown": "?code=017811",
+    "/api/fund/performance": "?code=017811",
+    "/api/fund/holding": "?code=017811",
+    "/api/fund/info": "?code=017811",
+    "/api/fund/dividend": "?code=017811",
+    "/api/fund/position": "?code=017811",
+    "/api/fund/realtime": "?code=017811",
+    "/api/news/stock": "?symbol=300750",
+    "/api/market/quote": "?symbol=000001",
+    "/api/fund/yjb/realtime": "?code=002112"
+  };
+  /** 微预览按 widget id 定制渲染器：输入 data（信封 data），输出 HTML 片段（已 esc 化）。 */
+  var DW_PREVIEW_FORMATTERS = {
+    "S-03": function (d) {   // 板块热力图：领涨/领跌各 1（红涨绿跌）
+      var ns = d.nodes || [];
+      if (!ns.length) { return "板块数据为空"; }
+      var sorted = ns.slice().sort(function (a, b) { return (b.pct || 0) - (a.pct || 0); });
+      var top = sorted[0], low = sorted[sorted.length - 1];
+      return ns.length + " 板块 · 领涨 <b class=\"pv-up\">" + esc(top.name) + " " + pvPct(top.pct) +
+        "</b> · 领跌 <b class=\"pv-down\">" + esc(low.name) + " " + pvPct(low.pct) + "</b>";
+    },
+    "S-04": function (d) {   // 行业排行
+      var items = d.items || [];
+      if (!items.length) { return "行业数据为空"; }
+      var t = items[0];
+      return items.length + " 个行业 · 涨幅第一 <b class=\"pv-up\">" + esc(t.name) + " " + pvPct(t.pct) + "</b>";
+    },
+    "S-05": function (d) {   // 概念排行
+      var items = d.items || [];
+      if (!items.length) { return "概念数据为空"; }
+      var t = items[0];
+      return items.length + " 个概念 · 涨幅第一 <b class=\"pv-up\">" + esc(t.name) + " " + pvPct(t.pct) + "</b>";
+    },
+    "S-06": function (d) {   // 板块摘要：领涨 Top3
+      var g = d.gainers || [];
+      if (!g.length) { return "摘要数据为空"; }
+      return "领涨 " + g.slice(0, 3).map(function (x) {
+        return "<b class=\"pv-up\">" + esc(x.name) + " " + pvPct(x.pct) + "</b>";
+      }).join(" / ");
+    },
+    "S-07": function (d) {   // 板块资金流向：净流入第一
+      var items = d.items || [];
+      if (!items.length) { return "资金流数据为空"; }
+      var sorted = items.slice().sort(function (a, b) { return (b.net_inflow || 0) - (a.net_inflow || 0); });
+      var t = sorted[0], b0 = sorted[sorted.length - 1];
+      return "净流入第一 <b class=\"pv-up\">" + esc(t.name) + " " + pvYi(t.net_inflow) +
+        "</b> · 净流出第一 <b class=\"pv-down\">" + esc(b0.name) + " " + pvYi(b0.net_inflow) + "</b>";
+    },
+    "V-01": function (d, w) { // 板块 K 线：最新收盘
+      var items = d.items || [];
+      if (!items.length) { return "K 线数据为空"; }
+      var last = items[items.length - 1];
+      return esc(d.board || "") + " 最新收盘 " + pvNum(last.close) + "（" + esc(last.date || "") + "，" + items.length + " 根）";
+    },
+    "V-02": function (d) {   // 板块估值指标：同 V-01 数据源
+      var items = d.items || [];
+      if (!items.length) { return "估值数据为空"; }
+      var last = items[items.length - 1];
+      return esc(d.board || "") + " 近一年区间，最新收盘 " + pvNum(last.close) + "（" + esc(last.date || "") + "）";
+    },
+    "V-03": function (d) {   // 成分股表
+      var items = d.items || [];
+      if (!items.length) { return "成分股数据为空"; }
+      return esc(d.board || "") + " " + items.length + " 只成分 · 涨幅第一 <b class=\"pv-up\">" +
+        esc(items[0].name) + " " + pvPct(items[0].pct) + "</b>";
+    },
+    "N-01": function (d) {   // 三级板块树
+      var tree = d.tree || d.items || [];
+      var n = Array.isArray(tree) ? tree.length : 0;
+      return n ? ("板块树 " + n + " 个一级分类，可选中过滤资讯") : "板块树数据为空";
+    },
+    "N-02": function (d) {   // 资讯流：最新 1 条标题
+      var items = d.items || [];
+      if (!items.length) { return "暂无快讯"; }
+      return esc(String(items[0].title || "").slice(0, 42)) + "…（共 " + items.length + " 条）";
+    },
+    "F-01": function (d, w) { // 基金概览：绑定基金名 + 最新净值
+      var code = pvQuery(w, "code") || "017811";
+      var info = d;
+      if (info.name) { return esc(info.name) + "（" + esc(code) + "）净值见运行视图（T+1）"; }
+      return "基金 " + esc(code) + " 档案加载完成";
+    },
+    "F-04": function (d) {   // 重仓股
+      var items = d.items || [];
+      if (!items.length) { return "重仓数据为空"; }
+      return esc(d.quarter || "") + " 第一重仓 <b>" + esc(items[0].name) + "</b> 占 " + pvNum(items[0].ratio, 2) + "%";
+    },
+    "P-01": function (d) {   // 持仓汇总
+      var t = d.totals || {};
+      var mv = t.cny_market_value || 0;
+      return "持仓人民币市值 <b>" + pvNum(mv / 10000, 2) + "</b> 万元" + (t.count != null ? "（" + t.count + " 只）" : "");
+    },
+    "P-04": function (d) {   // 市场分布：占比第一的市场
+      var dist = d.distribution || [];
+      var real = dist.filter(function (x) { return x.ratio != null && x.ratio > 0; });
+      if (!real.length) { return "暂无持仓，分布为空"; }
+      var t = real.slice().sort(function (a, b) { return b.ratio - a.ratio; })[0];
+      return "占比第一 <b>" + esc(t.label) + " " + pvNum(t.ratio, 1) + "%</b>（" + real.length + " 个市场有持仓）";
+    },
+    "W-01": function (d) {   // 自选概览
+      var c = d.counts || {};
+      if (!c.total) { return "自选清单为空（页面可直接添加）"; }
+      return "自选 " + c.total + " 只：涨 <b class=\"pv-up\">" + c.up + "</b> / 跌 <b class=\"pv-down\">" + c.down + "</b> / 平 " + c.flat;
+    },
+    "W-02": function (d) {   // 自选股行情
+      var q = d.quote || {};
+      if (!q.name) { return "行情待加载"; }
+      return esc(q.name) + " 现价 " + pvNum(q.price) + " " + pvPct(q.pct);
+    },
+    "L-01": function (d) {   // 北向净流入
+      var t = d.turnover || {};
+      return "最新 " + esc(d.latest || "") + " 沪深股通成交 <b>" + pvNum((t.total || 0) / 1e8, 0) + "</b> 亿元";
+    },
+    "L-02": function (d) {   // 北向 Top10
+      var items = d.items || [];
+      if (!items.length) { return d.empty_note ? "季度披露口径，当日无数据" : "无数据"; }
+      return "Top1 <b>" + esc(items[0].name || "") + "</b>";
+    },
+    "L-03": function (d) {   // 龙虎榜
+      var items = d.items || [];
+      if (!items.length) { return "当日无上榜个股"; }
+      return esc(d.date || "") + " 上榜 " + items.length + " 条 · 净买第一 <b>" + esc(items[0].name) + " " + pvYi(items[0].net_buy) + "</b>";
+    },
+    "Y-05": function (d) {   // 养基宝账户概览
+      if (d.setup_required) { return "尚未绑定养基宝"; }
+      return "总资产 <b>" + pvNum(d.total_assets, 0) + "</b> 元 · 今日估算 <b class=\"" +
+        ((d.today_income || 0) >= 0 ? "pv-up" : "pv-down") + "\">" + pvNum(d.today_income, 0) + "</b> 元";
+    },
+    "Y-06": function (d) {   // 养基宝持仓
+      var items = d.items || [];
+      if (!items.length) { return d.setup_required ? "尚未绑定养基宝" : "无持仓记录"; }
+      return "持仓 " + items.length + " 只 · 第一大 <b>" + esc(items[0].name) + "</b> 市值 " + pvNum(items[0].money, 0) + " 元";
+    }
+  };
+  /** realtime-panel 域（ST-01~07）按块渲染，与 DW_PREVIEW_FORMATTERS 并联。 */
+  var DW_PANEL_FORMATTERS = {
+    "ST-01": function (d) { var q = d.quote || {}; return q.name ? (esc(q.name) + " " + pvNum(q.price) + " " + pvPct(q.pct)) : "行情待加载"; },
+    "ST-02": function (d) { var k = d.kline || []; return k.length ? ("日 K " + k.length + " 根 · 最新收盘 <b>" + pvNum(k[k.length - 1].close) + "</b>（" + esc(k[k.length - 1].date) + "）") : "K 线数据为空"; },
+    "ST-03": function (d) { var m = d.minute || []; return m.length ? ("今日分时 " + m.length + " 点 · 最新价 <b>" + pvNum(m[m.length - 1].price) + "</b>") : "分时数据为空"; },
+    "ST-04": function (d) {
+      var t = (d.fund_dist || {}).tiers || [];
+      if (!t.length) { return "资金分布数据为空"; }
+      var s0 = t[0];
+      return "超大单净 <b class=\"" + ((s0.net || 0) >= 0 ? "pv-up" : "pv-down") + "\">" + pvYi(s0.net) + "</b>（占比 " + pvNum(s0.ratio, 1) + "%）· 四档环形见运行视图";
+    },
+    "ST-05": function (d) { var n = d.news || []; return n.length ? ("最新相关新闻：" + esc(String(n[0].title || "").slice(0, 30)) + "…（共 " + n.length + " 条）") : "无相关新闻"; },
+    "ST-06": function (d) {
+      var f = d.forecast || {};
+      var r = f.ratings || {};
+      var buy = r["买入"] || 0, add = r["增持"] || 0;
+      if (!f.org_count) { return "暂无机构预测"; }
+      return f.org_count + " 家机构：买入 <b class=\"pv-up\">" + buy + "</b>/增持 " + add +
+        " · 目标均价 " + (f.target_avg ? pvNum(f.target_avg) : "—");
+    },
+    "ST-07": function (d) { var n = d.news || []; var s = n.filter(function (x) { return x.sentiment; }); return s.length ? ("舆情样本 " + s.length + " 条，情绪标签见运行视图") : "暂无舆情样本"; }
+  };
+  /** 百分比带涨跌色（涨红跌绿，与 K 线/云图同一约定）。 */
+  function pvPct(v) {
+    if (v == null || isNaN(v)) { return "—"; }
+    var cls = v > 0 ? "pv-up" : (v < 0 ? "pv-down" : "");
+    var sign = v > 0 ? "+" : "";
+    return "<b class=\"" + cls + "\">" + sign + Number(v).toFixed(2) + "%</b>";
+  }
+  /** 亿元（输入已是亿元口径时直接两位；数值无意义时 —）。 */
+  function pvYi(v) {
+    if (v == null || isNaN(v)) { return "—"; }
+    var cls = v > 0 ? "pv-up" : (v < 0 ? "pv-down" : "");
+    return "<b class=\"" + cls + "\">" + (v > 0 ? "+" : "") + Number(v).toFixed(2) + " 亿</b>";
+  }
+  function pvNum(v, fixed) {
+    if (v == null || isNaN(v)) { return "—"; }
+    return Number(v).toFixed(fixed == null ? 2 : fixed);
+  }
+  /** 从 widget.params 取查询参数（编排骨架上存了 params 的场景）。 */
+  function pvQuery(w, key) {
+    var p = (w && w.params) || {};
+    var v = p[key];
+    return v == null ? "" : String(v);
+  }
+  /** 端点 → 本次微预览的查询串：params 优先，回退 PARAM_HINTS 默认。 */
+  function pvUrl(api, w) {
+    var hint = DW_PARAM_HINTS[api] || "";
+    if (api === "/api/fund/yjb/collect" || api === "/api/fund/yjb/holdings" ||
+        api === "/api/fund/yjb/status") { return api; }
+    if (!hint) { return api; }
+    var code = pvQuery(w, "code") || pvQuery(w, "symbol");
+    if (code && hint.indexOf("symbol=") >= 0) { return api + "?symbol=" + encodeURIComponent(code); }
+    if (code && hint.indexOf("code=") >= 0) { return api + "?code=" + encodeURIComponent(code); }
+    var board = pvQuery(w, "board");
+    if (board && hint.indexOf("board=") >= 0) { return api + "?board=" + encodeURIComponent(board); }
+    return api + hint;
+  }
+  /** 微预览填充：同 URL 去重共享一次请求；8s 超时；失败回退 desc。 */
+  function fillDashboardPreviews(grid, ws, meta) {
+    var inflight = {};
+    ws.forEach(function (w) {
+      var node = grid.querySelector('.dw-preview[data-pv="' + w.id + '"]');
+      if (!node) { return; }
+      var m = meta[w.id] || {};
+      var api = (m.api || [])[0];
+      if (!api) { node.innerHTML = m.desc ? "" : "该组件无数据端点"; node.classList.add("pv-none"); return; }
+      var url = pvUrl(api, w);
+      var fmt = DW_PREVIEW_FORMATTERS[w.id] || DW_PANEL_FORMATTERS[w.id];
+      var desc = m.desc || "";
+      node.textContent = "预览加载中…";
+      var done = false;
+      var timer = setTimeout(function () {
+        if (!done) { done = true; node.textContent = desc || "预览超时"; node.classList.add("pv-fallback"); }
+      }, 8000);
+      var fetchIt = inflight[url];
+      if (!fetchIt) {
+        fetchIt = OB.http.getJSON(url).then(function (j) { return (j && j.data) || null; });
+        inflight[url] = fetchIt;
+      }
+      fetchIt.then(function (d) {
+        if (done) { return; }
+        done = true; clearTimeout(timer);
+        if (!d) { node.textContent = desc || "暂无数据"; node.classList.add("pv-fallback"); return; }
+        try {
+          var html = fmt ? fmt(d, w) : "";
+          if (!html) { node.textContent = desc || "暂无数据"; node.classList.add("pv-fallback"); return; }
+          node.innerHTML = html;
+          node.classList.add("pv-ok");
+        } catch (e) { node.textContent = desc || "预览渲染失败"; node.classList.add("pv-fallback"); }
+      }).catch(function () {
+        if (done) { return; }
+        done = true; clearTimeout(timer);
+        node.textContent = desc || "预览不可用";
+        node.classList.add("pv-fallback");
+      });
+    });
+  }
+
   /** 把 /api/dashboards 的真实布局注入「48 栅格」预览卡。
    *
    * BUG-20261112-04：视图是异步渲染的，afterRoute 首次调用时栅格容器往往还没挂载，
@@ -254,12 +501,16 @@
         var span = Number(x.span) || 48;
         // v3.7.0（⑩）：卡片高度 h（120–900px，后端 _clean_widget 已收）随渲染还原
         var h = Number(x.h) || 0;
+        // v3.7.3（A+B）：desc 说明行 + 实时微预览占位（.dw-preview 由 fillDashboardPreviews 回填）
+        var hasApi = (m.api || []).length > 0;
         return '<div class="demo-widget cat-' + esc(m.category || "table") + '" draggable="true" data-id="' + esc(x.id) +
           '" data-span="' + span + '" data-h="' + h + '" style="grid-column: span ' + span +
           (h ? ";height:" + h + "px" : "") + '">' +
           '<div class="dw-head"><b>' + esc(x.id) + "</b><span>" + esc(m.title || x.id) + "</span></div>" +
           '<div class="dw-meta">span ' + span + " · " + (V7_SPAN_LABEL[span] || "—") + " / 48 列" +
           " · 高 " + (h ? h + "px" : "自动") + "</div>" +
+          (m.desc ? '<div class="dw-desc" title="' + esc(m.desc) + '">' + esc(m.desc) + "</div>" : "") +
+          '<div class="dw-preview" data-pv="' + esc(x.id) + '">' + (hasApi ? "预览加载中…" : "") + "</div>" +
           '<button class="dw-remove" type="button" draggable="false" data-remove="' + esc(x.id) + '">移除</button>' +
           '<span class="dw-resize" draggable="false" title="拖拽右下角自由拉伸：左右改宽度（档位）/ 上下改高度（120–900px）"></span>' +
           "</div>";
@@ -267,6 +518,7 @@
       grid.setAttribute("data-v7-bound", "1");
       bindGridDrag(grid, target, list, data);
       bindGridResize(grid, target, list, data);
+      fillDashboardPreviews(grid, ws, meta);
       var note = grid.closest(".card") && grid.closest(".card").querySelector(".card-note");
       if (note) { note.textContent = "拖拽卡片调顺序 · 拖右下角把手自由拉伸宽高，松手即保存到 /api/dashboards"; }
     }).catch(function () { /* 静默：预览卡属辅助视图，失败不影响主画布 */ });
