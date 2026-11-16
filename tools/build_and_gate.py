@@ -149,10 +149,13 @@ def sync_nsi() -> bool:
     import re
 
     version, date = _version_and_date()
+    build_tag = f"v{version}-{date}"
     product = f"OpenBB中文投研工作台_v{version}_{date}_setup.exe"
     raw = NSI_FILE.read_text(encoding="utf-16")
     patched = re.sub(r'(!define APPVER\s+)"[^"]*"', lambda m: f'{m.group(1)}"{version}"', raw)
     patched = re.sub(r'(!define APPVER4\s+)"[^"]*"', lambda m: f'{m.group(1)}"{version}.0"', patched)
+    # N-01（2026-11-17）：APPBUILD 供安装段写 VERSION.txt 用，保证安装后自证 BUILD_TAG
+    patched = re.sub(r'(!define APPBUILD\s+)"[^"]*"', lambda m: f'{m.group(1)}"{build_tag}"', patched)
     outfile = 'OutFile "${OUTDIR}\\' + product + '"'
     patched = re.sub(r'OutFile\s+"[^"]*"', lambda m: outfile, patched)
     patched = re.sub(r'(;\s*产物：)[^\r\n]*', lambda m: m.group(1) + product, patched)
@@ -163,6 +166,7 @@ def sync_nsi() -> bool:
     check = NSI_FILE.read_text(encoding="utf-16")
     ok = (f'!define APPVER   "{version}"' in check
           and f'!define APPVER4  "{version}.0"' in check
+          and f'!define APPBUILD "{build_tag}"' in check
           and product in check)
     if not ok:
         print("[失败] installer.nsi 版本同步校验不通过（APPVER/APPVER4/OutFile 与 config 不一致）")
