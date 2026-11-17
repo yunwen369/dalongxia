@@ -10,7 +10,8 @@
 1. 备份：``dist/OpenBB-CN`` → ``dist/OpenBB-CN_prev_<时间戳>``（保留上一版便于回滚）；
 2. 打包：用构建虚拟环境跑 PyInstaller（默认 ``../.venv_build_20261021``）；
 3. 部署：把 ``dist/OpenBB-CN/*`` 同步到目标目录（默认 ``../正式环境``），
-   目标已存在同版本产物时先整体备份为 ``<目标>_v<旧版本>_<时间戳>``；
+   目标已存在时先整体备份到 ``C_历史备份/<YYYYMMDD>/运行环境_历史/<目标>_v<旧版本>_<时间戳>``
+   （**A 层只留现行 1 份**，避免回滚点在同级无限堆积——2026-11-17 曾一次清理出 8 份 1.75 GB）；
 4. 凭据落位：目标 ``data/`` 缺 ``yjb_token.json``/``yjb_secret.json`` 时，
    从源码树 ``data/`` 复制（同 Windows 用户 DPAPI 可解）；两者都没有则明确告警，
    由首启向导兜底（门禁会失败，不会静默放行）；
@@ -37,6 +38,9 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]  # openbb-cn
 DIST_DIR = PROJECT_DIR / "dist" / "OpenBB-CN"
 BUILD_PY = PROJECT_DIR.parent / ".venv_build_20261021" / "Scripts" / "python.exe"
 TARGET_DIR = PROJECT_DIR.parent / "正式环境"
+# 运行环境历史备份落点：A 层只留现行 1 份（规范 §2.12），旧环境一律进 C 层
+PROJECT_ROOT = PROJECT_DIR.parent.parent
+ENV_BACKUP_ROOT = PROJECT_ROOT / "C_历史备份"
 SPEC = PROJECT_DIR / "OpenBB-CN.spec"
 BJ = timezone(timedelta(hours=8))
 # NSIS 安装脚本与编译器（版本号由本脚本从 config 派生写入）
@@ -210,6 +214,32 @@ def _old_version(target: Path) -> str:
     return "unknown"
 
 
+def _backup_target(target: Path) -> Path | None:
+    """把目标运行环境整体备份到 C 层，保持 A 层只有 1 份现行环境。
+
+    规范 §2.12「运行资产目录只留最新一份」：历史运行环境按日期归档到
+    ``C_历史备份\\YYYYMMDD\\运行环境_历史\\``。旧实现在目标同级新建
+    ``<目标>_v<旧版本>_<时间戳>``，导致 A 层回滚点无限堆积（2026-11-17
+    一次清理出 8 份 / 1.75 GB），故改为直接落 C 层。
+
+    Args:
+        target: 目标运行环境目录（如 ``A_运行资产\\正式环境``）。
+
+    Returns:
+        Path | None: 备份目录路径；目标不存在时返回 None。
+    """
+    if not target.exists():
+        return None
+    old = _old_version(target)
+    stamp = _stamp()
+    dest_root = ENV_BACKUP_ROOT / stamp[:8] / "运行环境_历史"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    backup = dest_root / f"{target.name}_v{old}_{stamp}"
+    print(f"[备份] 目标目录整体备份 → C 层 {backup}")
+    shutil.copytree(target, backup)
+    return backup
+
+
 def deploy(target: Path) -> bool:
     """把 dist 产物同步到目标目录，并做凭据落位。
 
@@ -223,10 +253,11 @@ def deploy(target: Path) -> bool:
         print(f"[失败] 未找到打包产物目录：{DIST_DIR}")
         return False
     if target.exists():
-        old = _old_version(target)
-        backup = target.with_name(f"{target.name}_v{old}_{_stamp()}")
-        print(f"[备份] 目标目录整体备份 → {backup.name}")
-        shutil.copytree(target, backup)
+        # 备份到 C 层（A 层只留现行 1 份）；失败不阻断部署，但必须醒目提示
+        try:
+            _backup_target(target)
+        except OSError as exc:  # noqa: BLE001 - 备份失败不应静默，但也不该卡住部署
+            print(f"[警告] 目标环境备份失败（继续部署）：{exc}")
     target.mkdir(parents=True, exist_ok=True)
     # 只覆盖程序本体与 _internal，保留目标 data/ 与 logs/（凭据、缓存、日志不能清）
     for name in ("OpenBB-CN.exe", "_internal"):
