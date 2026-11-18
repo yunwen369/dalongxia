@@ -9,7 +9,7 @@
   var H = window.V6_HELPERS;
   var esc = H.esc, num = H.num, cls = H.cls, pct = H.pct, d = H.d;
   var card = H.card, table = H.table, kpis = H.kpis, feed = H.feed, chartCard = H.chartCard;
-  var pctCell = H.pctCell, plainNum = H.plainNum, levelCell = H.levelCell;
+  var pctCell = H.pctCell, plainNum = H.plainNum, signedNum = H.signedNum, levelCell = H.levelCell;
 
   var V = {};
 
@@ -175,7 +175,7 @@
     render: function (m) {
       return card("行业板块（90）", table([["name", "板块", "22%"], ["code", "代码", "14%"],
         ["pct", "涨跌幅", "14%", "num", pctCell], ["amount", "成交额(亿)", "16%", "num", plainNum],
-        ["net_inflow", "净流入(亿)", "16%", "num", plainNum], ["lead_stock", "领涨股", "18%"]],
+        ["net_inflow", "净流入(亿)", "16%", "num", signedNum], ["lead_stock", "领涨股", "18%"]],
         d(m, "ind").items), "/api/sector/industry", "板");
     }
   };
@@ -192,7 +192,7 @@
         ["今开", num(q.open)], ["最高", num(q.high)], ["最低", num(q.low)], ["成交量", num(q.volume, 0)]
       ]), "/api/stock/realtime-panel", "股") +
         '<div class="card v-card"><div class="card-head"><span class="card-title"><span class="badge-ico">K</span>日 K 线</span>' +
-        '<span class="card-note">本地 ECharts</span></div><div id="v-chart" class="v-chart"></div></div>' +
+        '<span class="card-note">本地图表库</span></div><div id="v-chart" class="v-chart"></div></div>' +
         card("个股资讯", feed(p.news, 6), "/api/stock/realtime-panel · news", "讯");
     }
   };
@@ -254,7 +254,7 @@
         ["涨跌幅", pct(q.pct || 0), cls(q.pct || 0)], ["K线根数", (d(m, "p").kline || []).length]]),
         "/api/stock/realtime-panel", "图") +
         '<div class="card v-card"><div class="card-head"><span class="card-title"><span class="badge-ico">K</span>蜡烛图 + 成交量</span>' +
-        '<span class="card-note">本地 ECharts</span></div><div id="v-chart" class="v-chart"></div></div>';
+        '<span class="card-note">本地图表库</span></div><div id="v-chart" class="v-chart"></div></div>';
     }
   };
 
@@ -262,7 +262,7 @@
     title: "板块估值", group: "market", sidebar: "market", template: "list", crumb: ["市场", "板块估值"],
     api: { v: ["/api/valuation/percentile", "valuation"] },
     render: function (m) {
-      return card("指数估值分位", table([["name", "指数", "26%"], ["pe", "PE", "14%", "num", plainNum],
+      return card("指数估值分位", table([["name", "指数", "26%"], ["pe", "市盈率", "14%", "num", plainNum],
         ["pct3y", "3年分位", "20%", "num", plainNum], ["pct5y", "5年分位", "20%", "num", plainNum],
         ["pct10y", "10年分位", "20%", "num", plainNum]], d(m, "v").indices),
         "/api/valuation/percentile", "估") +
@@ -335,7 +335,7 @@
           '<div class="v-hint">口径：金十数据美联储利率决议（存在发布延迟，以「决议日期」为准）；' +
           "档位划分 0–6% 五档映射（&lt;1 宽松 / 1–2.5 中性 / 2.5–4 紧缩 / ≥4 限制性）。</div>",
           "/api/macro/overview · fed_funds", "盘") +
-        card("利率对照（中国）", kpis([["10Y 国债", ten.value == null ? "—" : num(ten.value, 2) + "%"],
+        card("利率对照（中国）", kpis([["10年期国债", ten.value == null ? "—" : num(ten.value, 2) + "%"],
           ["期限利差", spread.value == null ? "—" : num(spread.value, 2) + "%"],
           ["利差状态", spread.value == null ? "—" : (spread.value < 0 ? "倒挂" : "正常")]]),
           "/api/macro/overview · bond_10y", "债") +
@@ -355,9 +355,9 @@
         ["指数数", (data.indices || []).length], ["行业数据", (data.industries || []).length ? "有" : "无"],
         ["市场层", data.market && data.market.available ? "可用" : "不可用"]]),
         "/api/valuation/percentile", "估") +
-        card("分位明细", table([["name", "指数", "26%"], ["pe", "PE", "14%", "num", plainNum],
+        card("分位明细", table([["name", "指数", "26%"], ["pe", "市盈率", "14%", "num", plainNum],
           ["pct3y", "3年", "20%", "num", plainNum], ["pct5y", "5年", "20%", "num", plainNum],
-          ["erp", "ERP", "20%", "num", plainNum]], data.indices), "/api/valuation/percentile", "位");
+          ["erp", "股权风险溢价", "20%", "num", plainNum]], data.indices), "/api/valuation/percentile", "位");
     }
   };
 
@@ -386,7 +386,7 @@
         ["版本", esc(s.version)], ["股息覆盖", num(s.dividend_coverage, 1) + "%"]]),
         "/api/screener/status", "筛") +
         card("强势板块（真实接口派生）", table([["name", "板块", "26%"], ["pct", "涨跌幅", "20%", "num", pctCell],
-          ["amount", "成交额(亿)", "20%", "num", plainNum], ["net_inflow", "净流入(亿)", "18%", "num", plainNum],
+          ["amount", "成交额(亿)", "20%", "num", plainNum], ["net_inflow", "净流入(亿)", "18%", "num", signedNum],
           ["lead_stock", "领涨股", "16%"]], rows), "/api/sector/industry · 涨幅降序", "选");
     }
   };
@@ -397,7 +397,7 @@
     render: function (m) {
       return card("龙虎榜 · " + esc(d(m, "l").date || "—"), table([["code", "代码", "14%"],
         ["name", "名称", "16%"], ["reason", "上榜原因", "30%"], ["close", "收盘", "12%", "num", plainNum],
-        ["pct", "涨跌幅", "14%", "num", pctCell], ["net_buy", "净买入(亿)", "14%", "num", plainNum]],
+        ["pct", "涨跌幅", "14%", "num", pctCell], ["net_buy", "净买入(亿)", "14%", "num", signedNum]],
         d(m, "l").items), "/api/moneyflow/lhb", "榜");
     }
   };
@@ -410,7 +410,7 @@
       return card("基金业绩 · " + esc(f.name || "017811"), kpis([["单位净值", num(f.unit_nav, 4)],
         ["累计净值", num(f.unit_acc_nav, 4)], ["日涨跌", pct(f.day_growth || 0), cls(f.day_growth || 0)],
         ["定投1年", num(f.aip && f.aip["1y"], 2) + "%"]]), "/api/fund/performance", "基") +
-        card("区间业绩", table([["period", "区间", "34%"], ["growth", "涨幅", "33%", "num", plainNum],
+        card("区间业绩", table([["period", "区间", "34%"], ["growth", "涨幅", "33%", "num", signedNum],
           ["rank", "排名", "33%", "num"]], f.periods), "/api/fund/performance · periods", "区");
     }
   };
@@ -422,7 +422,7 @@
       var a = d(m, "a");
       return card("持仓概览", kpis([["持仓数", (d(m, "p").items || []).length],
         ["人民币市值", num(a.totals && a.totals.cny_market_value)],
-        ["人民币成本", num(a.totals && a.totals.cny_cost)], ["USD 汇率", num(a.fx && a.fx.USD, 4)]]),
+        ["人民币成本", num(a.totals && a.totals.cny_cost)], ["美元汇率", num(a.fx && a.fx.USD, 4)]]),
         "/api/portfolio/analysis", "仓") +
         card("市场分布", table([["label", "市场", "40%"], ["value_cny", "市值(元)", "30%", "num", plainNum],
           ["ratio", "占比", "30%", "num", plainNum]], a.distribution), "/api/portfolio/analysis · distribution", "布") +
@@ -484,7 +484,7 @@
           "</div>", "/api/fund/manager", "经");
       }
       return head +
-        card("业绩代理（同 code 基金真实业绩）",
+        card("业绩代理（同代码基金真实业绩）",
           kpis([["基金", esc(f.name || "—")], ["单位净值", num(f.unit_nav, 4)],
             ["日涨跌", pct(f.day_growth || 0), cls(f.day_growth || 0)], ["净值日期", esc(f.end_date)]]),
           "/api/fund/performance · 口径已标注", "理") +
@@ -548,10 +548,10 @@
     render: function (m) {
       var a = d(m, "a");
       var p = d(m, "p");
-      return card("AI 配置（只读）", '<div class="v-form"><label>已配置</label><div class="v-form-value">' +
+      return card("智能配置（只读）", '<div class="v-form"><label>已配置</label><div class="v-form-value">' +
         (a.configured ? "是" : "否") + "</div><label>模型</label><div class=\"v-form-value\">" + esc(a.model || "未配置") +
-        "</div><label>Base URL</label><div class=\"v-form-value\">" + esc(a.base_url || "未配置") + "</div></div>",
-        "/api/ai/config", "AI") +
+        "</div><label>接口地址</label><div class=\"v-form-value\">" + esc(a.base_url || "未配置") + "</div></div>",
+        "/api/ai/config", "智") +
         card("桌面偏好（只读）", '<div class="v-form"><label>关闭动作</label><div class="v-form-value">' +
           esc(p.close_action) + "</div><label>可选项</label><div class=\"v-form-value\">" +
           esc((p.options || []).join(" / ")) + "</div></div>", "/api/system/desktop-prefs", "桌") +
@@ -619,7 +619,7 @@
   }
 
   function demoRuleHTML() {
-    return '<div class="v-note">48 列 CSS Grid：组件按数组顺序依次放入，累计 span 超过 48 自动换行。' +
+    return '<div class="v-note">48 列网格布局：组件按数组顺序依次放入，累计 span 超过 48 自动换行。' +
       '合法宽度 <span class="mono">12 / 16 / 20 / 24 / 28 / 32 / 48</span>' +
       '（1/4、1/3、5/12、1/2、7/12、2/3、整行）；默认宽度来自 /api/widgets 的 grid 字段。</div>' +
       '<div class="demo-rows demo-row-summary">' + demoSummaryHTML() + "</div>";
@@ -710,7 +710,7 @@
       (x.items || []).forEach(function (i) { var h = String(i.time || "").slice(11, 13) || "--"; buckets[h] = (buckets[h] || 0) + 1; });
       return Object.keys(buckets).sort().map(function (k) { return { label: k + "时", value: buckets[k] }; });
     } },
-    sectors: { type: "bar", key: "ind", title: "板块涨幅 Top12", src: "/api/sector/industry", pick: topN("items", "pct", 12, "name") },
+    sectors: { type: "bar", key: "ind", title: "板块涨幅前12名", src: "/api/sector/industry", pick: topN("items", "pct", 12, "name") },
     stock: { type: "line", key: "p", title: "分时走势", src: "/api/stock/realtime-panel · minute", pick: function (x) {
       return (x.minute || []).filter(function (_, i) { return i % 6 === 0; }).map(function (i) { return { label: i.time, value: i.price }; });
     } },
@@ -731,12 +731,12 @@
     } },
     "sector-val": { type: "bar", key: "v", title: "指数 5 年估值分位", src: "/api/valuation/percentile", pick: topN("indices", "pct5y", 8, "name") },
     macro: { type: "bar", key: "m", title: "宏观指标最新值", src: "/api/macro/overview · indicators", pick: topN("indicators", "value", 9, "name") },
-    valuation: { type: "bar", key: "v", title: "指数 PE", src: "/api/valuation/percentile", pick: topN("indices", "pe", 8, "name") },
-    crowding: { type: "bar", key: "c", title: "拥挤度评分 Top12", src: "/api/sector/crowding/rankings", pick: function (x) {
+    valuation: { type: "bar", key: "v", title: "指数市盈率", src: "/api/valuation/percentile", pick: topN("indices", "pe", 8, "name") },
+    crowding: { type: "bar", key: "c", title: "拥挤度评分前12名", src: "/api/sector/crowding/rankings", pick: function (x) {
       return (x.items || []).slice(0, 12).map(function (i) { return { label: i.board, value: i.score }; });
     } },
     screener: { type: "bar", key: "ind", title: "强势板块涨幅", src: "/api/sector/industry", pick: topN("items", "pct", 12, "name") },
-    lhb: { type: "bar", key: "l", title: "龙虎榜净买入 Top12", src: "/api/moneyflow/lhb", pick: topN("items", "net_buy", 12, "name") },
+    lhb: { type: "bar", key: "l", title: "龙虎榜净买入前12名", src: "/api/moneyflow/lhb", pick: topN("items", "net_buy", 12, "name") },
     "fund-combo": { type: "bar", key: "f", title: "区间涨幅", src: "/api/fund/performance · periods", pick: topN("periods", "growth", 8, "period") },
     portfolio: { type: "donut", key: "a", title: "市场分布", src: "/api/portfolio/analysis · distribution", pick: function (x) {
       return (x.distribution || []).map(function (i) { return { label: i.label, value: i.value_cny }; });
@@ -847,9 +847,9 @@
 
   /* v7.0 新增：AI 助手独立视图（REQ-20261112-01 P0-4；用户裁决 = 独立视图页） */
   V.ai = {
-    title: "AI 助手", group: "system", sidebar: "sys", template: "detail", crumb: ["系统", "AI 助手"],
+    title: "智能助手", group: "system", sidebar: "sys", template: "detail", crumb: ["系统", "智能助手"],
     render: function () {
-      var quick = ["解读大盘", "诊断持仓", "同业对比", "生成复盘", "翻译"];
+      var quick = ["解读大盘", "诊断持仓", "同业对比", "生成复盘", "翻译", "清空会话"];
       var chat =
         '<div class="v7-chat">' +
           '<div class="v7-msg me">帮我解读今天大盘，并对比我的持仓</div>' +
@@ -865,7 +865,7 @@
         '<div class="v7-quick">' + quick.map(function (q) {
           return '<span class="v7-pill">' + esc(q) + "</span>";
         }).join("") + "</div>";
-      return card("AI 助手 · Copilot", chat, "独立视图 · /api/ai/chat", "AI") +
+      return card("智能助手 · 智能对话", chat, "独立视图 · /api/ai/chat", "智") +
         card("能力与口径", kpis([["上下文", "当前视图"], ["数据口径", "真实接口"],
           ["模型", "默认"], ["会话留存", "本机"]]), "/api/ai/config", "置");
     }
@@ -916,6 +916,32 @@
         "投入 / 份额 / 市值 / 收益率 / 年化", "果");
     }
   };
+
+  /* ---------- 大盘云图（2026-11-18 集成） ----------
+     侧栏一级目录「大盘云图」，下挂 5 个二级入口；均为 fullbleed 全幅页，
+     iframe 承载 market-cloud/index.html，进入后按 cloudCmd 下发 PRD §4.14 命令。
+     更细的视图（快捷指数、筛选、设置）由云图页面内部左栏承载（三级）。 */
+  var CLOUD_BASE = { group: "cloud", sidebar: "cloud", template: "cloud", fullbleed: true };
+
+  V.cloud = Object.assign({}, CLOUD_BASE, {
+    title: "云图总览", crumb: ["大盘云图", "云图总览"]
+  });
+  V.cloud_stock = Object.assign({}, CLOUD_BASE, {
+    title: "A 股快照", crumb: ["大盘云图", "A 股快照"],
+    cloudCmd: { name: "setMarket", payload: { market: "stock" } }
+  });
+  V.cloud_etf = Object.assign({}, CLOUD_BASE, {
+    title: "ETF", crumb: ["大盘云图", "ETF"],
+    cloudCmd: { name: "setMarket", payload: { market: "etf" } }
+  });
+  V.cloud_cb = Object.assign({}, CLOUD_BASE, {
+    title: "可转债", crumb: ["大盘云图", "可转债"],
+    cloudCmd: { name: "setMarket", payload: { market: "convertible" } }
+  });
+  V.cloud_hk = Object.assign({}, CLOUD_BASE, {
+    title: "港股", crumb: ["大盘云图", "港股"],
+    cloudCmd: { name: "setMarket", payload: { market: "hk" } }
+  });
 
   window.V6_VIEWS = V;
 })();

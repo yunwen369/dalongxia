@@ -1,0 +1,35 @@
+/* ===== 主题变量（v3.0 对齐 dapanyuntu 取色）=====
+   暗色：背景 #0b0d11 / 左栏 #12161b / 底栏·面板 #151a21 / 卡片 #1a1f27 / 边框 #242a33
+   涨跌端点：涨 #f03a3f 跌 #12b146；0% 中性 #3d4250
+   data-palette="workbench" 时切回《工作规范》§7.4 色板。 */
+:root{--up:#FF4B4B;--down:#00B061;--warn:#E8A33D;--info:#4B9EFF}
+body[data-theme="dark"]{
+  --bg-app:#070707;--bg-panel:#151518;--bg-side:#101013;--bg-card:#1b1b20;--border:#2a2a2a;
+  --text:#f6f6f6;--dim:#a2a2a2;--faint:#6b7078;--halt:#3b4048;--neutral-block:#3d4250;
+  --pop:#1a1a20;--shadow:0 8px 28px rgba(0,0,0,.55);--legend-mid:#4a505c;--track:#2b2f37;
+}
+body[data-theme="dark"][data-palette="prd"]{
+  --bg-app:#0b0d11;--bg-panel:#151a21;--bg-side:#12161b;--bg-card:#1a1f27;--border:#242a33;
+  --text:#e8eaed;--dim:#9aa0aa;--faint:#6b7280;--halt:#3b4048;--neutral-block:#3d4250;
+  --pop:#171c23;--shadow:0 10px 34px rgba(0,0,0,.6);--legend-mid:#3d4250;--track:#2a3039;
+  --up:#f03a3f;--down:#12b146;
+}
+body[data-theme="light"]{
+  --bg-app:#f2f2f4;--bg-panel:#ffffff;--bg-side:#fafafa;--bg-card:#ffffff;--border:#dcdcdc;
+  --text:#1a1a1a;--dim:#5a5a5a;--faint:#8b8f96;--halt:#c9ced6;--neutral-block:#e7e9ed;
+  --pop:#ffffff;--shadow:0 8px 28px rgba(0,0,0,.18);--legend-mid:#c9ced6;--track:#dfe2e7;
+}
+body[data-theme="light"][data-palette="prd"]{
+  --bg-app:#f5f6f8;--bg-panel:#ffffff;--bg-side:#ffffff;--bg-card:#ffffff;--border:#e5e7eb;
+  --text:#1f2329;--dim:#646a73;--up:#e03131;--down:#0e9f6e;
+}
+
+/* canvas 内文字/标题带由 canvasview.js 按 data-theme 自行切换明暗，
+   这里只处理仍以 DOM 呈现的浮层与面板 */
+body[data-theme="light"] .mc-crumb,
+body[data-theme="light"] .mc-zoom,
+body[data-theme="light"] .mc-thumb,
+body[data-theme="light"] .mc-popover{box-shadow:0 6px 22px rgba(0,0,0,.14)}
+
+/* 设计令牌：面板圆角 8px / 方块无圆角（canvas 直绘）/ 间距基准 4px */
+:root{--radius-panel:8px;--radius-tile:3px;--sp:4px}

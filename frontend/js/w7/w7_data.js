@@ -108,8 +108,8 @@
   }
 
   /* ---------- 28. 资讯工具（v3.4.0：ai-feed / board-tree / sector-search / financial-detail） ---------- */
-  var newsTabState = "AI 资讯流";
-  /* R14（v3.6.0）：newsInput 增加市场字段（a/hk/us），财报正文 / AI 摘要三市场共用。 */
+  var newsTabState = "智能资讯流";
+  /* R14（v3.6.0）：newsInput 增加市场字段（a/hk/us），财报正文 / 智能摘要三市场共用。 */
   W7.st.newsInput = { sector: "半导体", code: "", title: "", market: "a" };
   /** 输入框优先、状态兜底（12 秒刷新会重建卡片，输入值必须持久）。 */
   function newsVal(id, fallback) {
@@ -128,10 +128,10 @@
     card.className = "card v7-news";
     card.innerHTML =
       '<div class="card-head"><span class="card-title"><span class="badge-ico">▦</span>资讯工具</span>' +
-        '<span class="card-note">AI 资讯流 / 板块树 / 板块资讯 / 财报正文</span></div>' +
+        '<span class="card-note">智能资讯流 / 板块树 / 板块资讯 / 财报正文</span></div>' +
         '<div class="v-body">' +
           '<div class="v7-kline-tools" style="margin:0 0 8px">' +
-            ["AI 资讯流", "板块树", "板块资讯", "财报正文", "AI 摘要"].map(function (t) {
+            ["智能资讯流", "板块树", "板块资讯", "财报正文", "智能摘要"].map(function (t) {
               return '<button class="v7-tab' + (t === newsTabState ? " on" : "") + '" data-news-tab="' + t + '" type="button">' + t + "</button>";
             }).join("") +
             ["relevance:相关", "time:最新", "impact:影响"].map(function (x) {
@@ -145,13 +145,13 @@
           "</div>" +
           '<div class="v7-form" style="margin-bottom:8px">' +
             '<div><label>板块（板块资讯用）</label><input id="v7-news-sector" value="' + esc(W7.st.newsInput.sector) + '"></div>' +
-            '<div><label>市场（财报正文 / AI 摘要用）</label><select id="v7-news-market">' +
+            '<div><label>市场（财报正文 / 智能摘要用）</label><select id="v7-news-market">' +
               [["a", "A股"], ["hk", "港股"], ["us", "美股"]].map(function (x) {
                 return '<option value="' + x[0] + '"' + (x[0] === (W7.st.newsInput.market || "a") ? " selected" : "") + ">" + x[1] + "</option>";
               }).join("") +
             "</select></div>" +
-            '<div><label>公告代码（财报正文 / AI 摘要用）</label><input id="v7-news-code" value="' + esc(W7.st.newsInput.code) + '" placeholder="A股 600519 / 港股 00700 / 美股 AAPL"></div>' +
-            '<div><label>公告标题（AI 摘要用，可空）</label><input id="v7-ai-title" value="' + esc(W7.st.newsInput.title) + '" placeholder="如 2026年第三季度报告"></div>' +
+            '<div><label>公告代码（财报正文 / 智能摘要用）</label><input id="v7-news-code" value="' + esc(W7.st.newsInput.code) + '" placeholder="A股 600519 / 港股 00700 / 美股代码"></div>' +
+            '<div><label>公告标题（智能摘要用，可空）</label><input id="v7-ai-title" value="' + esc(W7.st.newsInput.title) + '" placeholder="如 2026年第三季度报告"></div>' +
           "</div>" +
           '<div id="v7-news-body"><div class="loading">加载中…</div></div>' +
         "</div>";
@@ -170,7 +170,7 @@
         W7.st.newsInput.market = t.value;
         var codeEl = $("v7-news-code");
         if (codeEl && !codeEl.value.trim()) {
-          codeEl.placeholder = t.value === "hk" ? "如 00700" : t.value === "us" ? "如 AAPL" : "如 600519";
+          codeEl.placeholder = t.value === "hk" ? "如 00700" : t.value === "us" ? "如美股代码" : "如 600519";
         }
       }
     });
@@ -196,7 +196,7 @@
     var put = function (h) { var b = $("v7-news-body"); if (b) { b.innerHTML = h; } };
     box.innerHTML = '<div class="loading">加载中…</div>';
 
-    if (tab === "AI 资讯流") {
+    if (tab === "智能资讯流") {
       apiJson("/api/news/ai-feed?limit=20&sort=" + W7.st.newsSort + "&region=" + W7.st.newsRegion + "&market=all").then(function (r) {
         var d = (r.body && r.body.data) || {};
         if (r.body && r.body.error) { put('<div class="v-empty">' + esc(r.body.error) + "</div>"); return; }
@@ -261,7 +261,7 @@
       });
       return;
     }
-    if (tab === "AI 摘要") {
+    if (tab === "智能摘要") {
       loadAiSummary();
       return;
     }
@@ -646,9 +646,9 @@
 
   /* ---------- 32. 选股器（v3.4.0：恢复 screener/refresh · screener/run） ---------- */
   var SCREENER_FACTORS = [
-    ["pe", "PE-TTM", "倍"], ["pb", "PB-MRQ", "倍"], ["ps", "PS-TTM", "倍"],
+    ["pe", "市盈率(近12月)", "倍"], ["pb", "市净率(MRQ)", "倍"], ["ps", "市销率(近12月)", "倍"],
     ["pcf", "经营现金流市值比", "倍"], ["chg", "涨跌幅", "%"], ["mktcap", "总市值", "亿元"],
-    ["roe_min", "ROE（近3年年报均）", "%"], ["gross", "销售毛利率", "%"],
+    ["roe_min", "净资产收益率(近3年年报均值)", "%"], ["gross", "销售毛利率", "%"],
     ["rev_yoy", "营收同比", "%"], ["np_yoy", "净利同比", "%"],
     ["debt_ratio", "资产负债率", "%"], ["ocf", "经营现金流净额", "元"],
     ["dividend_yield", "股息率", "%"]
@@ -756,7 +756,7 @@
           " 只，返回 " + esc(String(d.returned)) + " 只" + (d.truncated ? "（已截断）" : "") +
           " · 快照 " + esc((d.snapshot || {}).trade_date || "—") + " · " + esc(d.caliber || "") + "</div>";
         html += '<div class="v7-preview-table"><table><tr><th>代码</th><th>名称</th><th>板块</th><th>收盘</th>' +
-          "<th>涨跌幅</th><th>PE</th><th>PB</th><th>ROE(3年最低)</th><th>资产负债率</th><th>股息率</th></tr>" +
+          "<th>涨跌幅</th><th>市盈率</th><th>市净率</th><th>净资产收益率(3年最低)</th><th>资产负债率</th><th>股息率</th></tr>" +
           items.map(function (x) {
             return "<tr><td>" + esc(x.code) + "</td><td>" + esc(x.name) + "</td><td>" + esc(x.board || "—") + "</td><td>" +
               secFixed(x.close, 2) + "</td><td>" + secSigned(x.chg, 2, "%") + "</td><td>" + secFixed(x.pe, 2) +

@@ -743,6 +743,10 @@ body[data-theme="v6"] .index-name { color: var(--c-cyan-98); }
 body[data-theme="v6"] .index-value { color: var(--c-red-65); font-size: clamp(21px, 2.05vw, 29px); font-weight: 700; text-shadow: 0 0 16px var(--c-red-65a60); }
 body[data-theme="v6"] .index-value.down { color: var(--c-green-42); }
 body[data-theme="v6"] .index-pct { color: var(--c-green-42); font-weight: 600; }
+/* 2026-11-17 涨红跌绿：上方规则无条件染绿，会压过全局 .up，导致「上涨的涨跌幅」显示绿色；
+   此处按 up/down 显式覆盖，恢复方向语义（与 .index-value 一致）。 */
+body[data-theme="v6"] .index-pct.up { color: var(--c-red-65); }
+body[data-theme="v6"] .index-pct.down { color: var(--c-green-42); }
 body[data-theme="v6"] .spark { min-height: 32px; }
 body[data-theme="v6"] .gauge-meta { color: var(--c-cyan-98); }
 body[data-theme="v6"] .gauge-num { font-size: 16px; }
@@ -804,6 +808,10 @@ body[data-theme="v6"] .v-table th { background: var(--c-cyan-16); color: var(--c
 body[data-theme="v6"] .v-table td { color: var(--c-white-100); border-bottom-color: var(--c-cyan-75a24); }
 body[data-theme="v6"] .v-kpi { background: linear-gradient(155deg,var(--c-cyan-11-2),var(--c-cyan-8)); border-color: var(--c-cyan-46); box-shadow: inset 0 1px 0 var(--c-cyan-80a16); }
 body[data-theme="v6"] .v-kpi .k-value { color: var(--c-red-71); }
+/* 2026-11-17 涨红跌绿：上方规则把全部 KPI 数值无条件染红，压过全局 .up/.down；
+   此处按方向显式覆盖，未带方向 class 的指标仍保持原红色不变。 */
+body[data-theme="v6"] .v-kpi .k-value.up { color: var(--c-red-68); }
+body[data-theme="v6"] .v-kpi .k-value.down { color: var(--c-green-42); }
 body[data-theme="v6"] .v-feed-row { border-bottom-color: var(--c-cyan-75a24); }
 body[data-theme="v6"] .v-form-value { background: var(--c-cyan-8); border-color: var(--c-cyan-46); color: var(--c-white-100); }
 body[data-theme="v6"] .view-title-row h1 { color: var(--c-white-100); }

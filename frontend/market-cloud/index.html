@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>大盘云图 · 工作台内嵌版 v3.0（PRD V1.0）</title>
+<link rel="stylesheet" href="css/theme.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body data-theme="dark" data-palette="prd">
+<div id="market-cloud-root" class="mc-root" data-embed="workbench">
+
+  <!-- ============ A 左栏（162px，对齐站点） ============ -->
+  <aside class="mc-side" id="A-side">
+    <div class="mc-brand">
+      <h1 data-i18n="brand.name">大盘云图</h1>
+      <span data-i18n="brand.sub">OpenBB Terminal Pro</span>
+    </div>
+
+    <div class="mc-mkts" id="A-markets"></div>
+
+    <div class="mc-refresh"><span data-i18n="nav.refresh">最近刷新</span><b id="A-refresh">--:--:--</b></div>
+
+    <div class="mc-side-scroll">
+      <div class="mc-views" id="A-views"></div>
+
+      <button class="mc-entry" id="A-filter-entry">
+        <span class="mc-entry-l">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 5h20M6 12h12M9 19h6"/></svg>
+          <b data-i18n="filter.entry">筛选</b>
+          <i class="mc-badge" id="A-filter-count" style="display:none">0</i>
+          <i class="mc-kbd">L</i>
+        </span>
+        <span class="mc-entry-s"><span data-i18n="filter.area">面积</span><em id="A-metric-hint">总市值</em></span>
+      </button>
+
+      <div class="mc-stats">
+        <div class="mc-cards" id="A-cards"></div>
+        <div class="mc-stat" id="A-stat"></div>
+      </div>
+
+      <div class="mc-source" id="A-source-note">行情加载中…</div>
+    </div>
+
+    <div class="mc-foot">
+      <button id="A-tools" data-i18n="foot.tools">投研工具</button>
+      <button id="A-pwa" data-i18n="foot.pwa">添加到桌面</button>
+      <button id="A-settings" data-i18n="foot.settings">设置</button>
+      <button id="A-collapse"><span class="txt" data-i18n="foot.collapse">收起侧栏</span> <i class="mc-kbd txt">B</i></button>
+    </div>
+  </aside>
+
+  <!-- ============ B 主画布（无顶栏，HUD 浮层） ============ -->
+  <main class="mc-main">
+    <div class="mc-stage" id="B-canvas">
+      <div class="mc-clip" id="B-wrap"><canvas id="B-inner"></canvas></div>
+
+      <div class="mc-crumb" id="B-crumb"></div>
+
+      <div class="mc-hud" id="B-hud">
+        <b id="B-title">A股全图</b>
+        <span id="B-session">--</span>
+        <span id="B-source">来源 东方财富 push2</span>
+        <span id="B-stale" style="display:none">● 延迟快照</span>
+      </div>
+
+      <div class="mc-zoom">
+        <button id="B-zoom-out" title="缩小">−</button><span class="z num" id="B-zoom-val">100%</span><button id="B-zoom-in" title="放大">+</button>
+        <button id="B-fit" title="适应屏幕">□</button><button id="B-reset" title="重置视图 (R)">↺</button>
+      </div>
+
+      <div class="mc-thumb" id="B-thumb"><div class="mini" id="B-thumb-mini"><div class="vp" id="B-thumb-vp" style="left:0;top:0;width:100%;height:100%"></div></div></div>
+
+      <div class="mc-popover" id="B-popover"></div>
+      <div class="mc-state" id="B-state"></div>
+    </div>
+
+    <!-- 底栏：色阶 + 口径 + 工具簇 -->
+    <div class="mc-bottom">
+      <div class="mc-scale">
+        <div class="bar" id="B-scale"></div>
+        <div class="ticks" id="B-ticks"></div>
+      </div>
+      <div class="meta" id="B-legend-meta"></div>
+      <div class="mc-tools">
+        <button id="B-help" title="操作提示"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.3"/><path d="M6.2 6.1a1.9 1.9 0 1 1 2.6 1.8c-.7.3-1 .8-1 1.6"/><circle cx="8" cy="11.8" r=".7" fill="currentColor" stroke="none"/></svg></button>
+        <button id="B-theme" title="浅色/深色 (D)"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.6 5.6 0 1 0 7.2 7.2z"/></svg></button>
+        <button id="B-thumb-toggle" title="缩略图"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
+        <button id="B-full" title="全屏 (F)"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+        <button id="B-share" class="share" title="截图分享 (C)" data-i18n="foot.share">分享</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ C 检视器 ============ -->
+  <section class="mc-inspector" id="C-inspector"></section>
+
+  <!-- ============ D 筛选浮层（按钮下方，非全高抽屉） ============ -->
+  <div class="mc-pop" id="D-drawer">
+    <div class="mc-pop-h"><span data-i18n="drawer.filter">筛选</span><i class="mc-kbd">L</i><button class="x" data-close="D-drawer">×</button></div>
+    <div class="mc-pop-b" id="D-body"></div>
+  </div>
+
+  <!-- ============ E 设置中心 ============ -->
+  <div class="mc-modal-bg" id="E-bg">
+    <div class="mc-modal">
+      <div class="mc-modal-h"><div><b data-i18n="settings.title">设置</b><small data-i18n="settings.sub">调整热力图的显示、语言和看盘偏好</small></div><button class="x" data-close="E-bg">×</button></div>
+      <div class="mc-modal-b"><div class="mc-tabs" id="E-tabs"></div><div class="mc-tabpane" id="E-pane"></div></div>
+    </div>
+  </div>
+
+  <!-- ============ F 操作提示 ============ -->
+  <div class="mc-drawer right" id="F-help">
+    <div class="mc-drawer-h"><span data-i18n="help.title">操作提示</span> <button class="x" data-close="F-help">×</button></div>
+    <div class="mc-drawer-b" id="F-body"></div>
+  </div>
+
+  <!-- ============ G 分享弹窗 ============ -->
+  <div class="mc-modal-bg" id="G-bg">
+    <div class="mc-modal small">
+      <div class="mc-modal-h"><div><b data-i18n="share.title">截图分享</b><small data-i18n="share.sub">导出当前画布 PNG 并生成带参数的链接</small></div><button class="x" data-close="G-bg">×</button></div>
+      <div class="mc-tabpane" id="G-body"></div>
+    </div>
+  </div>
+
+  <div class="mc-toast" id="H-toast"></div>
+</div>
+
+<script src="vendor/echarts.min.js"></script>
+<script src="data/demoData.js"></script>
+<script src="js/app.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/views.js"></script>
+<script src="js/canvasview.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/widgets.js"></script>
+<script src="js/data.js"></script>
+<script src="js/api.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

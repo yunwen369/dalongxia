@@ -11,6 +11,10 @@
   var statKpis = function () { return W7.portfolio.statKpis.apply(null, arguments); };
 
   /* ---------- 8. AI 视图输入 ---------- */
+  /* 2026-11-18 修复：维护本机会话历史，以 messages 数组发送，
+     启用后端 /api/ai/chat 已支持的多轮上下文（保留最近 10 轮）。 */
+  var chatHistory = [];
+
   function bindAi() {
     document.addEventListener("keydown", function (event) {
       var input = $("v7-ai-input");
@@ -30,6 +34,10 @@
         if (pill.textContent.trim() === "翻译" && $("v7-ai-input")) {
           translateText(($("v7-ai-input").value || "").trim());
           $("v7-ai-input").value = "";
+          return;
+        }
+        if (pill.textContent.trim() === "清空会话") {
+          clearAiHistory();
           return;
         }
         if ($("v7-ai-input")) { $("v7-ai-input").value = pill.textContent; $("v7-ai-input").focus(); }
@@ -54,8 +62,10 @@
     appendMsg("me", text);
     input.value = "";
     var loading = appendMsg("ai", "思考中…");
+    var history = chatHistory.slice(-10);
+    history.push({ role: "user", content: text });
     apiJson("/api/ai/chat", { method: "POST", body: JSON.stringify({
-      message: text, page: currentId(),
+      messages: history, page: currentId(),
       page_params: { symbol: localStorage.getItem("openbb-symbol") || "" } }) })
       .then(function (r) {
         var data = (r.body && r.body.data) || {};
@@ -64,11 +74,23 @@
           (r.body && r.body.error) || "无返回";
         if (loading) { loading.remove(); }
         appendMsg("ai", reply, '<div class="v7-warn">⚠️ 非投资建议 · 数据以真实接口为准</div>');
+        /* 仅成功时落历史；失败回滚，避免空回复进入上下文 */
+        if (!(r.body && r.body.error) && reply && reply !== "无返回") {
+          chatHistory.push({ role: "assistant", content: reply });
+        }
       })
       .catch(function () {
         if (loading) { loading.remove(); }
-        appendMsg("ai", "请求失败，请检查 AI 配置（设置页）");
+        appendMsg("ai", "请求失败，请检查智能配置（设置页）");
       });
+  }
+
+  /** 清空本机会话历史（多轮上下文复位，重新提问不再携带旧上下文）。 */
+  function clearAiHistory() {
+    chatHistory = [];
+    var host = document.querySelector(".v7-chat");
+    if (host) { host.innerHTML = ""; }
+    toast("已清空会话，重新提问");
   }
 
   function translateText(text) {
@@ -145,10 +167,10 @@
     card.className = "card v7-ai-test";
     card.innerHTML =
       '<div class="card-head"><span class="card-title"><span class="badge-ico">✦</span>AI 连接测试</span>' +
-        '<span class="card-note">最小请求验证鉴权与模型（15s 超时）</span></div>' +
+        '<span class="card-note">最小请求验证鉴权与模型（120s 超时，推理模型响应较慢）</span></div>' +
         '<div class="v-body">' +
           '<div class="v7-form" style="margin-bottom:8px">' +
-            '<div><label>Base URL</label><input id="v7-ai-base" placeholder="https://api.xxx.com/v1"></div>' +
+            '<div><label>接口地址</label><input id="v7-ai-base" placeholder="https://api.xxx.com/v1"></div>' +
             '<div><label>模型</label><input id="v7-ai-model" placeholder="如 deepseek-chat"></div>' +
             '<div><button class="v7-btn primary" data-act="ai-test" type="button">测试连接</button></div>' +
           "</div>" +
@@ -162,7 +184,7 @@
       if (m && d.model) { m.value = d.model; }
       var tip = $("v7-ai-test-body");
       if (tip && !d.configured) {
-        tip.innerHTML = '<div class="v7-sec-miss">未配置 AI：请先在上方「AI 配置」保存 base_url / api_key / model，再回来测试。</div>';
+        tip.innerHTML = '<div class="v7-sec-miss">未配置智能服务：请先在上方「智能配置」保存 接口地址 / 密钥 / 模型，再回来测试。</div>';
       }
     });
   }
@@ -174,7 +196,7 @@
     var base = ((($("v7-ai-base") || {}).value) || "").trim();
     var model = ((($("v7-ai-model") || {}).value) || "").trim();
     if (!base) { box.innerHTML = '<div class="v-empty">请填写 Base URL（以 http(s):// 开头）</div>'; return; }
-    box.innerHTML = '<div class="loading">测试中（最长 15 秒）…</div>';
+    box.innerHTML = '<div class="loading">测试中（最长 120 秒，推理模型响应较慢）…</div>';
     apiJson("/api/ai/test", { method: "POST", body: JSON.stringify({ base_url: base, model: model }) })
       .then(function (r) {
         var target = $("v7-ai-test-body");
@@ -186,7 +208,7 @@
         }
         target.innerHTML = statKpis([
           ["结果", d.ok ? "连通" : "不通"],
-          ["耗时", (d.latency_ms == null ? "—" : String(d.latency_ms)) + " ms"],
+          ["耗时", (d.latency_ms == null ? "—" : String(d.latency_ms)) + " 毫秒"],
           ["说明", d.detail || "—"]
         ]);
       });
@@ -234,7 +256,7 @@
     }
     /* R14：市场取自资讯工具下拉（默认 a，与 v3.5.0 前行为一致）。 */
     var mkt = (W7.st && W7.st.newsInput && W7.st.newsInput.market) || "a";
-    box.innerHTML = '<div class="loading">AI 摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
+    box.innerHTML = '<div class="loading">智能摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
     apiJson("/api/ai/summary", {
       method: "POST",
       body: JSON.stringify({ market: mkt, code: code, title: title, pub_time: "", doc_url: "" })
@@ -310,7 +332,7 @@
       box.innerHTML = '<div class="v-empty">请填写公告代码（或公告标题）后再生成摘要</div>';
       return;
     }
-    box.innerHTML = '<div class="loading">AI 摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
+    box.innerHTML = '<div class="loading">智能摘要生成中（读取公告正文 + 结构化，约 10–40 秒）…</div>';
     apiJson("/api/ai/summary", {
       method: "POST",
       body: JSON.stringify({ market: mkt, code: code, title: title, pub_time: "", doc_url: "" })
@@ -332,6 +354,7 @@
   /* 跨域导出（W7.ai） */
   W7.ai = W7.ai || {};
   W7.ai.bindAi = bindAi;
+  W7.ai.clearAiHistory = clearAiHistory;
   W7.ai.injectAiTestPanel = injectAiTestPanel;
   W7.ai.injectFinSummaryCard = injectFinSummaryCard;
   W7.ai.loadAiSummary = loadAiSummary;

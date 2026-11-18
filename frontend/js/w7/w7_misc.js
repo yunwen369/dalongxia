@@ -106,7 +106,7 @@
       '<select id="v7-wl-select"><option value="">选择标的…</option></select>' +
       '<button class="v7-btn" data-act="watch-edit-sel" type="button">编辑</button>' +
       '<button class="v7-btn danger" data-act="watch-del-sel" type="button">删除</button>' +
-      '<span class="v7-hint">W-01 / W-02 双卡保持不变，管理操作集中在工具栏</span>';
+      '<span class="v7-hint">双卡布局保持不变，管理操作集中在工具栏</span>';
     body.insertBefore(bar, body.firstChild);
     fillWatchOptions();
   }
@@ -132,7 +132,7 @@
     a.download = (viewKey || "export") + ".xls";
     a.click();
     URL.revokeObjectURL(a.href);
-    toast("已导出 Excel（.xls，Excel/WPS 可直接打开）");
+    toast("已导出表格（表格文件，表格软件可直接打开）");
   }
 
   // 主表数据行：排除首行 th 表头（无 thead 结构时首行是表头，不能参与分页）
@@ -344,7 +344,7 @@
     var exp = document.createElement("button");
     exp.className = "v7-btn v7-export";
     exp.type = "button";
-    exp.textContent = "导出 CSV";
+    exp.textContent = "导出表格(CSV)";
     exp.addEventListener("click", function () {
       var lines = [];
       Array.prototype.forEach.call(table.querySelectorAll("tr"), function (tr) {
@@ -361,14 +361,14 @@
       a.download = (currentId() || "export") + ".csv";
       a.click();
       URL.revokeObjectURL(a.href);
-      toast("已导出 CSV（" + (lines.length - 1) + " 行）");
+      toast("已导出表格（" + (lines.length - 1) + " 行）");
     });
     row.appendChild(exp);
     // Excel 导出（REQ-20261105-02 #6 收尾）：.xls HTML 表格格式，Excel/WPS 免插件打开
     var expXls = document.createElement("button");
     expXls.className = "v7-btn v7-export-xls";
     expXls.type = "button";
-    expXls.textContent = "导出 Excel";
+    expXls.textContent = "导出表格(Excel)";
     expXls.addEventListener("click", function () { exportExcel(table, viewKey); });
     row.appendChild(expXls);
     // v3.7.0（⑥）：先给 #view-body 内**所有**表绑排序（用户要求「所有数据表头都能排序」）
@@ -451,9 +451,9 @@
           { label: "周期：周K", run: function () { window.V6_APP && window.V6_APP.setPeriod("周k"); markPeriod("周k"); } },
           { label: "周期：月K", run: function () { window.V6_APP && window.V6_APP.setPeriod("月k"); markPeriod("月k"); } },
           "-",
-          { label: "指标：MA", run: function () { window.V6_APP && window.V6_APP.setIndicator("MA"); markIndicator("MA"); } },
-          { label: "指标：MACD", run: function () { window.V6_APP && window.V6_APP.setIndicator("MACD"); markIndicator("MACD"); } },
-          { label: "指标：KDJ", run: function () { window.V6_APP && window.V6_APP.setIndicator("KDJ"); markIndicator("KDJ"); } },
+          { label: "指标：均线", run: function () { window.V6_APP && window.V6_APP.setIndicator("MA"); markIndicator("MA"); } },
+          { label: "指标：异同移动平均线", run: function () { window.V6_APP && window.V6_APP.setIndicator("MACD"); markIndicator("MACD"); } },
+          { label: "指标：随机指标", run: function () { window.V6_APP && window.V6_APP.setIndicator("KDJ"); markIndicator("KDJ"); } },
           "-",
           { label: "复制当前链接", run: function () {
             if (navigator.clipboard) { navigator.clipboard.writeText(location.href); }

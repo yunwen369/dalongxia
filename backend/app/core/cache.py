@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import logging
@@ -39,7 +40,11 @@ def is_meaningful(value: Any) -> bool:
     """
     if value is None:
         return False
-    if isinstance(value, (str, list, tuple, dict, set)) and len(value) == 0:
+    # 注意：本模块定义了同名函数 ``set``，直接写 ``isinstance(..., set)`` 会把函数
+    # 当成类型传进去——对 str/list/tuple/dict 因先命中前面的类型而不报错，只有
+    # frozenset、int 等类型才会走到它并抛 TypeError，属于隐蔽缺陷。
+    # 故此处用 ``builtins.set`` 显式指向内建类型。
+    if isinstance(value, (str, list, tuple, dict, builtins.set, frozenset)) and len(value) == 0:
         return False
     if isinstance(value, dict) and value.get("error"):
         return False

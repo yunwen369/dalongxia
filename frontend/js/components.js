@@ -82,6 +82,19 @@
     return '<span class="' + cls(v) + ' mono">' + pct(v) + "</span>";
   };
   var plainNum = function (v) { return '<span class="mono">' + num(v, 2) + "</span>"; };
+  /** 带正负号的数值单元格（涨红跌绿；0 与缺失值不着色）。
+   *  2026-11-17 新增：净流入/净买入等「正负语义但非百分比」列统一用它，
+   *  与 pctCell（百分比）配套，避免这类列一直是中性色、与其它涨跌列不一致。
+   *  @param {*} v 原始数值
+   *  @param {number} [digits=2] 小数位
+   */
+  var signedNum = function (v, digits) {
+    var n = parseFloat(v);
+    if (!isFinite(n)) { return '<span class="mono">—</span>'; }
+    var c = n > 0 ? "up" : (n < 0 ? "down" : "");
+    return '<span class="' + (c ? c + " " : "") + 'mono">' +
+      (n > 0 ? "+" : "") + num(n, digits == null ? 2 : digits) + "</span>";
+  };
   var levelCell = function (v) {
     if (!v) { return "—"; }
     var c = v === "高位" ? "high" : (v === "偏高" ? "mid" : "low");
@@ -211,8 +224,8 @@
     value: "数值", temp: "温度", signal: "信号", days: "天数", value_text: "数值说明",
     definition: "口径", nav: "净值", shares: "份额", market_value: "市值", cost: "成本",
     pnl: "盈亏", pnl_pct: "收益率", total_assets: "总资产", today_income: "当日收益",
-    pe: "市盈率", pb: "市净率", roe: "ROE(%)", revenue: "营收", profit: "净利",
-    margin: "毛利率(%)", yield: "股息率(%)", beta: "Beta", vol: "波动率(%)",
+    pe: "市盈率", pb: "市净率", roe: "净资产收益率(%)", revenue: "营收", profit: "净利",
+    margin: "毛利率(%)", yield: "股息率(%)", beta: "贝塔系数", vol: "波动率(%)",
     drawdown: "最大回撤(%)", sharpe: "夏普", net: "净额(亿)", inflow: "流入(亿)",
     outflow: "流出(亿)", zd: "涨跌家数", is_realtime: "实时", market: "市场",
     // 以下为接口实际返回但早期未登记的字段（v3.7.0 ⑧ 由探针实测暴露后补全）
@@ -222,7 +235,7 @@
     correlation: "相关性", index_value: "指数点位", change: "涨跌额", prev_close: "昨收",
     open_interest: "持仓量", settlement: "结算价", basis: "基差", premium: "溢价",
     discount: "折价", float_market_cap: "流通市值", total_market_cap: "总市值",
-    pe_ttm: "市盈率(TTM)", ps_ttm: "市销率(TTM)", pcf: "市现率", dividend_yield: "股息率(%)",
+    pe_ttm: "市盈率(近12月)", ps_ttm: "市销率(近12月)", pcf: "市现率", dividend_yield: "股息率(%)",
     gross_margin: "毛利率(%)", debt_ratio: "资产负债率(%)", rev_yoy: "营收同比(%)",
     np_yoy: "净利同比(%)", ocf: "经营现金流", mktcap: "总市值(亿)", factor: "因子",
     threshold: "阈值", hit: "命中", size: "规模", span: "宽度", h: "高度",
@@ -420,7 +433,7 @@
       grid: hasVol ? [{ left: 52, right: 14, top: 26, height: 176 }, { left: 52, right: 14, top: 214, height: 62 }]
                    : [{ left: 52, right: 14, top: 26, bottom: 30 }],
       tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-      legend: { right: 10, top: 0, data: ["MA5", "MA10", "MA20"], textStyle: { fontSize: 10 } },
+      legend: { right: 10, top: 0, data: ["5日均线", "10日均线", "20日均线"], textStyle: { fontSize: 10 } },
       xAxis: hasVol ? [
         { type: "category", data: dates, axisLabel: { fontSize: 10 } },
         { type: "category", gridIndex: 1, data: dates, axisLabel: { show: false } }
@@ -429,11 +442,11 @@
                     : [{ scale: true, splitLine: { show: false } }],
       dataZoom: [{ type: "inside", start: 50, end: 100 }],
       series: [
-        { name: "K", type: "candlestick", data: candles,
+        { name: "K线", type: "candlestick", data: candles,
           itemStyle: { color: "#ff3b4e", color0: "#00c087", borderColor: "#ff3b4e", borderColor0: "#00c087" } },
-        { name: "MA5", type: "line", data: ma(5), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#f0b429" } },
-        { name: "MA10", type: "line", data: ma(10), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#4dabf7" } },
-        { name: "MA20", type: "line", data: ma(20), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#c084fc" } }
+        { name: "5日均线", type: "line", data: ma(5), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#f0b429" } },
+        { name: "10日均线", type: "line", data: ma(10), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#4dabf7" } },
+        { name: "20日均线", type: "line", data: ma(20), smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#c084fc" } }
       ].concat(hasVol ? [{ name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: vols }] : [])
     });
   }
@@ -478,7 +491,8 @@
 
   window.V6_HELPERS = {
     esc: esc, num: num, cls: cls, pct: pct, d: d, card: card, table: table, kpis: kpis,
-    feed: feed, chartCard: chartCard, pctCell: pctCell, plainNum: plainNum, levelCell: levelCell,
+    feed: feed, chartCard: chartCard, pctCell: pctCell, plainNum: plainNum, signedNum: signedNum,
+    levelCell: levelCell,
     COL: COL, colName: colName, sparkSVG: sparkSVG, idxCards: idxCards,
     treemapHtml: treemapHtml, drawTreemap: drawTreemap, squarify: squarify, boardPickerHtml: boardPickerHtml,
     drawPendingKlines: drawPendingKlines, drawCandles: drawCandles, bindBoardPicker: bindBoardPicker

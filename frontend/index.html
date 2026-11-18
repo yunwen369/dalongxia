@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>V6 视觉稿 · 大龙虾投研工作台（独立评审稿）</title>
+<title>大龙虾投研工作台 · V6 独立评审稿</title>
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/v7.css">
 </head>
@@ -21,8 +21,8 @@
       </svg>
     </div>
     <div>
-      <div class="brand-title">V6 量化看盘系统</div>
-      <div class="brand-sub">AI赋能选股 · 量化策略 · 风控社交辅助</div>
+      <div class="brand-title">量化看盘系统</div>
+      <div class="brand-sub">智能赋能选股 · 量化策略 · 风控社交辅助</div>
     </div>
   </div>
   <nav class="topnav">
@@ -56,7 +56,7 @@
       </div>
     </span>
     <button class="top-ico" id="v7-collapse" type="button" title="收起侧栏">«</button>
-    <button class="top-ico" id="v7-ai" type="button" title="AI 助手">AI</button>
+    <button class="top-ico" id="v7-ai" type="button" title="智能助手">智</button>
     <span class="top-ico" title="设置">⚙</span>
     <span class="dev-badge"><i class="dot"></i>开发者</span>
     <div class="skin-switch" title="新增第三套皮肤，原两套基准保持不变">
@@ -76,7 +76,7 @@
   <main class="main" id="home-main">
     <div class="statusbar">
       <span><b id="today-text">—</b> <b class="trade-day">A股交易日</b></span>
-      <span class="status-right">数据：<b>本地 /api 真实数据</b> · 状态：<i class="dot"></i><b>已连接</b> · 线路：<b>稳定</b> <span class="src" id="as-of">as_of: —</span></span>
+      <span class="status-right">数据：<b>本地 /api 真实数据</b> · 状态：<i class="dot"></i><b>已连接</b> · 线路：<b>稳定</b> <span class="src" id="as-of">数据时间：—</span></span>
     </div>
 
     <!-- 第一行：四指数 + 情绪 + 环境 -->
@@ -108,7 +108,7 @@
     <!-- 第二行：信号 / 策略 / 风控 / 表现 -->
     <section class="row row-2">
       <div class="card">
-        <div class="card-head"><span class="card-title"><span class="badge-ico">AI</span>AI 综合选股信号</span><span class="card-note">按板块涨跌分档派生</span></div>
+        <div class="card-head"><span class="card-title"><span class="badge-ico">智</span>智能综合选股信号</span><span class="card-note">按板块涨跌分档派生</span></div>
         <div class="signal-grid" id="signal-grid"><div class="loading">统计中…</div></div>
         <div class="src-tag" id="src-signal">/api/sector/industry（90 板块实时派生）</div>
       </div>
@@ -133,7 +133,7 @@
     <section class="row row-3">
       <div class="card">
         <div class="rank-toolbar">
-          <span class="rank-tab active"><span class="rank-ico">♛</span>AI 选股排行榜</span>
+          <span class="rank-tab active"><span class="rank-ico">♛</span>智能选股排行榜</span>
           <span class="rank-tab"><span class="rank-ico">◇</span>重点关注</span>
           <span class="rank-tab"><span class="rank-ico">⊕</span>买卖信号</span>
           <span class="rank-tab"><span class="rank-ico">▤</span>策略表现</span>
@@ -163,7 +163,7 @@
             <div class="tabs">
               <button class="active">K线走势</button><button>资金流向</button><button>技术指标</button><button>诊断分析</button>
             </div>
-            <span class="card-note">本地 ECharts</span>
+            <span class="card-note">本地图表库</span>
           </div>
           <div class="kline-head">
             <span class="kline-code mono" id="kline-code">000001</span>
@@ -176,7 +176,7 @@
           <div class="src-tag" id="src-kline">/api/market/index-kline</div>
         </div>
         <div class="card">
-          <div class="card-head"><span class="card-title"><span class="badge-ico">▤</span>AI 信号解释（真实结论）</span><span class="card-note ai-detail">详细分析 ›</span></div>
+          <div class="card-head"><span class="card-title"><span class="badge-ico">▤</span>智能信号解释（真实结论）</span><span class="card-note ai-detail">详细分析 ›</span></div>
           <div class="ai-buy-pill">数据结论（非交易指令）</div>
           <div class="ai-points" id="ai-points"><div class="loading">生成中…</div></div>
           <div class="src-tag" id="src-ai">/api/macro/overview + /api/sentiment/market</div>
@@ -195,6 +195,11 @@
     </div>
     <div class="view-body" id="view-body"><div class="loading">视图加载中…</div></div>
     <div class="view-src" id="view-src"></div>
+  </section>
+
+  <!-- 大盘云图全幅页（2026-11-18）：iframe 承载 market-cloud/index.html，进入即折叠侧栏 -->
+  <section id="view-cloud" hidden>
+    <iframe id="cloud-frame" src="market-cloud/index.html" title="大盘云图"></iframe>
   </section>
 </div>
 

@@ -3,8 +3,8 @@
 对应规范 v7.2 §5.6 / §12（AI 配置与密钥管理）与 D2 决策：
 - GET  /config  读取配置（密钥只返回掩码，绝不回显原文）；
 - POST /config  保存配置（写入 data/ai_config.json，已 gitignore，权限最小化）；
-- POST /test    测试连通性（R3-13：真实最小请求探测，15s 超时，失败分因给中文文案）；
-- POST /chat    对话（90s 超时；未配置时返回明确引导，不静默降级、不返回假回答）。
+- POST /test    测试连通性（R3-13：真实最小请求探测，120s 超时，失败分因给中文文案）；
+- POST /chat    对话（180s 超时；未配置时返回明确引导，不静默降级、不返回假回答）。
 
 安全要点：
 1. 密钥只在内存出现；落盘前必须用 Windows DPAPI 加密（``api_key_enc`` 字段），
@@ -162,7 +162,9 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         dict: 统一信封；data 含 ok / latency_ms / detail。
 
     Notes:
-        真实发送一次最小请求（max_tokens=1），超时 15 秒；
+        真实发送一次最小请求（max_tokens=64，兼容推理模型：token 会先消耗在
+        reasoning 上，max_tokens=1 时正文恒空），超时 120 秒（推理模型首字延迟
+        可达数十秒，与摘要链路 LLM_TIMEOUT=120 对齐）；
         失败时区分未配置 / 鉴权失败 / 超时 / 上游异常，文案均中文。
         响应绝不回显密钥，只在 detail 里给状态说明。
     """
@@ -201,14 +203,14 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 1,
+                "max_tokens": 64,
                 "temperature": 0,
             },
-            timeout=15,
+            timeout=120,
         )
     except requests.exceptions.Timeout:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
-                         "测试超时（15 秒）：请检查网络或 base_url 是否可达。",
+                         "测试超时（120 秒）：该模型响应较慢，请稍后重试或更换更轻量的模型。",
                          data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
     except requests.exceptions.RequestException as exc:
         # 真实网络类异常（连接拒绝/DNS 失败/TLS 等）：中文分因，保留 latency_ms
@@ -241,13 +243,16 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
     try:
         body = response.json()
-        content = body["choices"][0]["message"].get("content")
+        msg = body["choices"][0]["message"]
+        content = msg.get("content")
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
     except Exception:  # noqa: BLE001 - 非 OpenAI 结构
         return api_error(ErrorCode.UPSTREAM_ERROR,
                          "接口可达但返回格式无法解析：请确认服务商兼容 OpenAI Chat Completions。",
                          data={"ok": False, "latency_ms": latency_ms})
 
-    if not content:
+    # 推理模型：max_tokens 可能全部消耗在思考（reasoning_content）上，正文为空属正常
+    if not content and not reasoning:
         return api_error(ErrorCode.UPSTREAM_ERROR,
                          "接口返回空内容：模型可能暂不可用，请更换模型名重试。",
                          data={"ok": False, "latency_ms": latency_ms})
@@ -259,7 +264,7 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "model": model,
         "detail": f"连接成功，模型 {model} 可用",
         "source": base_url,
-        "caliber": "真实最小请求（max_tokens=1）探测，不产生计费对话记录之外的额外用量",
+        "caliber": "真实最小请求（max_tokens=64，兼容推理模型思考消耗）探测，不产生计费对话记录之外的额外用量",
         "as_of": _now(),
         "market_status": "连通性测试",
         "is_realtime": True,
@@ -268,7 +273,7 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @router.post("/chat")
 def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """对话（OpenAI 兼容 /chat/completions，90s 超时）。
+    """对话（OpenAI 兼容 /chat/completions，180s 超时）。
 
     Body:
         {message} 或 {messages:[{role,content}, ...]}；
@@ -330,11 +335,11 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             url,
             headers={"Authorization": f"Bearer {ai.api_key}", "Content-Type": "application/json"},
             json={"model": ai.model or "gpt-4o-mini", "messages": messages, "temperature": 0.3},
-            timeout=90,
+            timeout=180,
         )
     except requests.exceptions.Timeout:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
-                         "AI 响应超时（90 秒），请稍后重试或缩短问题。", data={"configured": True})
+                         "AI 响应超时（180 秒）：该模型响应较慢，请稍后重试或缩短问题。", data={"configured": True})
     except requests.exceptions.RequestException as exc:
         logger.warning("AI 对话连接失败（网络类 %s）：%s", type(exc).__name__, exc)
         return api_error(ErrorCode.UPSTREAM_ERROR,

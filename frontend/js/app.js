@@ -6,7 +6,7 @@
   "use strict";
 
   var PERIOD = encodeURIComponent("日k");
-  var INDICATOR = "MA";          // MA / MACD / KDJ（v3.3.0 恢复旧版技术指标切换）
+  var INDICATOR = "MA";          // MA / MACD / KDJ（v3.3.0 恢复旧版技术指标切换，内部数据键）
   var lastIndexRef = null;       // 最近一次渲染用到的指数，供周期/指标切换复用
   var API = {
     index: "/api/market/index?market=a",
@@ -41,7 +41,7 @@
   var sparkSeq = 0;
   var VIEWS = window.V6_VIEWS || {};
   var SIDEBAR_GROUPS = [
-    ["overview", "总览"], ["market", "市场"], ["research", "投研"],
+    ["cloud", "大盘云图"], ["overview", "总览"], ["market", "市场"], ["research", "投研"],
     ["my", "我的"], ["sys", "系统"]
   ];
   var VIEW_IDS = Object.keys(VIEWS);
@@ -57,7 +57,7 @@
       var payload = await OB.http.getJSON(path);
       if (!payload || payload.data == null) {
         // 业务态（未绑定 / 无权限 / EMPTY_DATA）不是通道故障：保留真实文案，不降级演示数据。
-        return { data: {}, error: (payload && payload.error) || "empty data", demo: false };
+        return { data: {}, error: (payload && payload.error) || "暂无数据", demo: false };
       }
       return { data: payload.data, demo: false };
     } catch (error) {
@@ -131,7 +131,7 @@
       if (result.demo) { card.querySelector(".src-tag").classList.add("demo"); }
     }
     var asOf = (result.data && result.data.as_of) || "—";
-    $("as-of").textContent = "as_of: " + asOf;
+    $("as-of").textContent = "数据时间：" + asOf;
     var sparks = host.querySelectorAll(".spark");
     // v3.6.1（D-2 修复）：迷你走势改为**不阻塞主流程**。
     // 原实现 `await Promise.all(...)` 会等 4 个 index-kline 逐个真实取数完成
@@ -394,9 +394,9 @@
     };
     $("kline-code").textContent = code;
     $("ma-legend").innerHTML = [
-      ["#f5a623", "MA5", lastMa(5)],
-      ["#3fa0c0", "MA10", lastMa(10)],
-      ["#c07ae8", "MA20", lastMa(20)]
+      ["#f5a623", "5日均线", lastMa(5)],
+      ["#3fa0c0", "10日均线", lastMa(10)],
+      ["#c07ae8", "20日均线", lastMa(20)]
     ].map(function (item) {
       return '<span class="ma-item"><i style="background:' + item[0] + '"></i>' +
         '<span style="color:' + item[0] + '">' + item[1] + ":" + item[2] + "</span></span>";
@@ -415,9 +415,9 @@
         itemStyle: { color: "#ff4b5f", color0: "#00d68f", borderColor: "#ff4b5f", borderColor0: "#00d68f" } }
     ];
     if (INDICATOR === "MA") {
-      series.push({ name: "MA5", type: "line", data: ma(5), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#f5a623" } });
-      series.push({ name: "MA10", type: "line", data: ma(10), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#3fa0c0" } });
-      series.push({ name: "MA20", type: "line", data: ma(20), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#c07ae8" } });
+      series.push({ name: "5日均线", type: "line", data: ma(5), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#f5a623" } });
+      series.push({ name: "10日均线", type: "line", data: ma(10), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#3fa0c0" } });
+      series.push({ name: "20日均线", type: "line", data: ma(20), smooth: true, symbol: "none", lineStyle: { width: 1.5, color: "#c07ae8" } });
       series.push({ name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes, barWidth: "55%" });
     } else if (INDICATOR === "MACD") {
       var e12 = ema(12), e26 = ema(26);
@@ -428,9 +428,9 @@
         dea.push(+prevDea.toFixed(3));
       });
       var hist = dif.map(function (v, i) { return +(2 * (v - dea[i])).toFixed(3); });
-      series.push({ name: "DIF", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dif, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
-      series.push({ name: "DEA", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dea, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
-      series.push({ name: "MACD", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barWidth: "55%", data: hist.map(function (v) {
+      series.push({ name: "差离值", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dif, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
+      series.push({ name: "信号线", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dea, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
+      series.push({ name: "柱状图", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barWidth: "55%", data: hist.map(function (v) {
         return { value: v, itemStyle: { color: v >= 0 ? "#ff4b5f" : "#00d68f" } };
       }) });
     } else {
@@ -444,9 +444,9 @@
         dPrev = (2 * dPrev + kPrev) / 3;
         kn.push(+kPrev.toFixed(2)); dn.push(+dPrev.toFixed(2)); jn.push(+(3 * kPrev - 2 * dPrev).toFixed(2));
       });
-      series.push({ name: "K", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: kn, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
-      series.push({ name: "D", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dn, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
-      series.push({ name: "J", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: jn, symbol: "none", lineStyle: { width: 1.2, color: "#c07ae8" } });
+      series.push({ name: "K值", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: kn, symbol: "none", lineStyle: { width: 1.2, color: "#f5a623" } });
+      series.push({ name: "D值", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: dn, symbol: "none", lineStyle: { width: 1.2, color: "#3fa0c0" } });
+      series.push({ name: "J值", type: "line", xAxisIndex: 1, yAxisIndex: 1, data: jn, symbol: "none", lineStyle: { width: 1.2, color: "#c07ae8" } });
     }
 
     var chart = OB.chart.init($("kline-chart"), { renderer: "canvas" });
@@ -617,6 +617,13 @@
               void node.offsetWidth;
               node.classList.add("live-flash");
             }
+            /* 2026-11-17 涨红跌绿：原逻辑只更新数字不更新方向 class，
+               定时刷新后颜色会停留在上一次的涨跌方向，此处同步修正。 */
+            var dirCls = signClass(Number(items[i].pct) || 0);
+            if (!node.classList.contains(dirCls)) {
+              node.classList.remove("up", "down");
+              node.classList.add(dirCls);
+            }
           });
         }
       } catch (ignored) {
@@ -728,7 +735,7 @@
       '<path d="M42 60 L52 64 M78 60 L68 64" stroke="#3f86c0" stroke-width="2"/>' +
       '<path d="M8 84 Q60 70 112 84" fill="none" stroke="#2f6cae" stroke-width="1" stroke-opacity=".5"/>' +
       "</svg>";
-    html += '<div class="side-foot">V6_VIEWS 同源 · ' + VIEW_IDS.length +
+    html += '<div class="side-foot">视图模块同源 · ' + VIEW_IDS.length +
       ' 视图<br>本地真实数据<br><span class="mono" id="side-version">' + esc(APP_VER || "版本读取中…") + "</span></div>";
     $("side-nav").innerHTML = html;
   }
@@ -833,12 +840,114 @@
     } catch (ignored) { /* 老浏览器无 CustomEvent 构造器时忽略 */ }
   }
 
-  /** 路由：home 显示原首页，其余视图显示通用视图外壳。 */
+  /* ---------- 大盘云图（2026-11-18 集成） ----------
+     fullbleed 视图：折叠工作台侧栏 + iframe 全幅 + 按视图配置下发 PRD §4.14 命令。
+     iframe 在页面加载时即开始加载，onReady 之后下发的指令才有效，故就绪后补发一次。 */
+  var cloudReady = false;
+
+  /** 折叠/展开工作台侧栏：云图页进入即折叠，离开恢复。 */
+  function setSideCollapsed(on) {
+    document.body.classList.toggle("v7-side-collapsed", !!on);
+  }
+
+  /** 向云图下发命令；返回是否真正发出（未就绪时为 false，便于调用方判断）。 */
+  function postCloud(cmd) {
+    if (!cmd || !cloudReady) { return false; }
+    var frame = $("cloud-frame");
+    if (!frame || !frame.contentWindow) { return false; }
+    try {
+      frame.contentWindow.postMessage(
+        { source: "workbench", type: "command", name: cmd.name, payload: cmd.payload || {} },
+        "*"
+      );
+      return true;
+    } catch (ignored) {
+      return false;
+    }
+  }
+
+  /** 对外契约门面：宿主其它模块可编程调用 PRD §4.14 的 7 个方法。 */
+  function exposeCloudApi() {
+    var call = function (name, payload) {
+      return postCloud({ name: name, payload: payload });
+    };
+    window.WorkbenchCloud = {
+      setMarket: function (market) { return call("setMarket", { market: market }); },
+      setAreaMetric: function (metric) { return call("setAreaMetric", { metric: metric }); },
+      setFilters: function (filters) { return call("setFilters", { filters: filters }); },
+      focusGroup: function (name) { return call("focusGroup", { name: name }); },
+      resetView: function () { return call("resetView"); },
+      exportImage: function () { return call("exportImage"); },
+      setTheme: function (theme) { return call("setTheme", { theme: theme }); },
+      /** 打开云图页（默认总览）。 */
+      open: function (viewId) { location.hash = "#/" + (viewId || "cloud"); },
+      /** 最近一次命令回执 / 最近一次点选，供宿主诊断与联动使用。 */
+      lastAck: function () { return window.__cloudAck || null; },
+      lastPick: function () { return window.__cloudLastPick || null; }
+    };
+  }
+
+  /** 显示云图全幅页。 */
+  function showCloud(id, view) {
+    $("home-main").hidden = true;
+    $("view-generic").hidden = true;
+    $("view-cloud").hidden = false;
+    setSideCollapsed(true);
+    postCloud(view.cloudCmd);
+  }
+
+  /** 接云图上报事件（onReady / onItemClick / onItemDoubleClick / onCommandAck）。 */
+  function bindCloudBridge() {
+    window.addEventListener("message", function (event) {
+      var data = event.data || {};
+      if (data.source !== "market-cloud") { return; }
+      if (data.name === "onReady") {
+        cloudReady = true;
+        postCloud((VIEWS[currentViewId()] || {}).cloudCmd);
+        return;
+      }
+      if (data.name === "onCommandAck") {
+        // 命令回执：记录最近一次结果，失败时留下可诊断痕迹（不弹窗打扰用户）
+        window.__cloudAck = data.payload || null;
+        if (data.payload && data.payload.ok === false) {
+          console.warn("[market-cloud] 命令未执行：", data.payload);
+        }
+        return;
+      }
+      if (data.name === "onItemClick") {
+        // 单击仅记录最近一次点选，云图内部检视器自行处理；不改宿主状态
+        window.__cloudLastPick = data.payload || null;
+        return;
+      }
+      if (data.name === "onItemDoubleClick") {
+        // 双击：按 PRD §4.14 语义打开宿主行情页（带 symbol 参数），离开云图前记录点选
+        var pick = data.payload || {};
+        window.__cloudLastPick = pick;
+        if (pick.code) {
+          location.hash = "#/stock?symbol=" + encodeURIComponent(pick.code);
+        }
+      }
+    });
+    var collapseBtn = $("v7-collapse");
+    if (collapseBtn) {
+      collapseBtn.addEventListener("click", function () {
+        document.body.classList.toggle("v7-side-collapsed");
+      });
+    }
+  }
+
+  /** 路由：home 显示原首页，fullbleed 显示云图全幅页，其余显示通用视图外壳。 */
   function route() {
     var id = currentViewId();
     var view = VIEWS[id] || VIEWS.home;
     renderSidebar(id);
     setTopActive(view.group);
+    if (view.fullbleed) {
+      showCloud(id, view);
+      return;
+    }
+    setSideCollapsed(false);
+    $("view-cloud").hidden = true;
     if (id === "home") {
       $("home-main").hidden = false;
       $("view-generic").hidden = true;
@@ -864,6 +973,8 @@
     bindNav();
     bindDemoActions();
     bindBoardChipJump();
+    bindCloudBridge();
+    exposeCloudApi();
     startLiveRefresh();
     // 2026-11-12 修复：原先 route() 与 hashchange 监听放在全部首页数据 await 之后，
     // 导致首屏最长 30s 无侧栏/顶栏，且期间的 hash 跳转被丢弃。改为启动即渲染导航。

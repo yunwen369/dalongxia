@@ -123,7 +123,9 @@ def test_ai_test_really_hits_network(stub_base: str) -> None:
     assert call["path"] == "/v1/chat/completions"
     assert call["auth"] == "Bearer sk-stub"
     assert call["body"]["model"] == "stub-model"
-    assert call["body"]["max_tokens"] == 1
+    # 2026-11-18 AI 修复：/api/ai/test 的 max_tokens 由 1 改为 64，
+    # 兼容 GLM 推理模型的思考消耗（max_tokens=1 时 token 全被思考消耗、content 恒空）
+    assert call["body"]["max_tokens"] == 64
 
 
 def test_ai_chat_really_hits_network(stub_base: str, monkeypatch: pytest.MonkeyPatch) -> None:

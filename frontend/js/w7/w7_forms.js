@@ -256,7 +256,7 @@
       }
       if (act === "edit-delete") {
         var ruleId = queryParam("id");
-        if (!ruleId) { toast("缺少规则 ID"); return; }
+        if (!ruleId) { toast("缺少规则编号"); return; }
         apiJson("/api/alerts/" + encodeURIComponent(ruleId), { method: "DELETE" }).then(function (r) {
           if (r.ok && r.body && !r.body.error) { toast("规则已删除"); setTimeout(function () { location.hash = "#/alerts"; }, 600); }
           else { toast((r.body && r.body.error) || "删除失败"); }

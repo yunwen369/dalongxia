@@ -84,7 +84,7 @@
             '<button class="v7-btn" data-act="yjb-poll" data-sid="' + esc(sid) + '" type="button">轮询状态</button>' +
             '<button class="v7-btn primary" data-act="yjb-bind" data-sid="' + esc(sid) + '" type="button">确认已扫码</button>' +
           "</div></div></div>";
-      if (hint) { hint.textContent = "用养基宝 App 扫码后点「确认已扫码」；会话仅存内存，重启需重扫"; }
+      if (hint) { hint.textContent = "用养基宝手机端扫码后点「确认已扫码」；会话仅存内存，重启需重扫"; }
     }).catch(function () {
       var box = $("yjb-qr-box");
       if (box) { box.innerHTML = '<div class="v-empty">生成失败</div>'; }
@@ -267,8 +267,8 @@
           (d.truncated ? "（已截断显示）" : "") + "</div>" +
           objTable(items, [["code", "代码"], ["name", "名称"], ["board", "行业"], ["close", "收盘"],
             ["chg", "涨跌%", function (v) { return v == null ? "—" : Number(v).toFixed(2); }],
-            ["pe", "PE", function (v) { return v == null ? "—" : Number(v).toFixed(1); }],
-            ["pb", "PB", function (v) { return v == null ? "—" : Number(v).toFixed(2); }]], "候选池为空"));
+            ["pe", "市盈率", function (v) { return v == null ? "—" : Number(v).toFixed(1); }],
+            ["pb", "市净率", function (v) { return v == null ? "—" : Number(v).toFixed(2); }]], "候选池为空"));
       }).catch(function () { put('<div class="v-empty">候选池请求失败</div>'); });   // F14
       return;
     }

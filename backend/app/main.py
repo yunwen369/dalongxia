@@ -53,6 +53,7 @@ from backend.app.routers import (  # noqa: E402
     fund,
     macro,
     market,
+    market_cloud,
     moneyflow,
     news,
     portfolio,
@@ -353,6 +354,8 @@ def create_app() -> FastAPI:
     # API 必须先于根路径静态挂载注册，保证 /api/* 不被 StaticFiles 截获
     application.include_router(system.router)
     application.include_router(market.router)
+    # 大盘云图：独立模块的概览/筛选树（PRD §7.1 / §7.2），与工作台既有行情接口互不依赖
+    application.include_router(market_cloud.router)
     # 阶段 5.1：板块 8 接口 + 个股 7 接口 + 组件元数据下发
     application.include_router(sector.router)
     application.include_router(stock.router)

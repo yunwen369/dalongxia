@@ -158,7 +158,8 @@
           ({ "日k": "日K", "周k": "周K", "月k": "月K" }[x]) + "</button>";
       }).join("") +
       INDICS.map(function (x) {
-        return '<button class="v7-tab" data-indicator="' + x + '" type="button">' + x + "</button>";
+        return '<button class="v7-tab" data-indicator="' + x + '" type="button">' +
+          ({ "MA": "均线", "MACD": "异同移动平均线", "KDJ": "随机指标" }[x]) + "</button>";
       }).join("");
     head.appendChild(bar);
     var cur = (window.V6_APP && window.V6_APP.getPeriod && window.V6_APP.getPeriod()) || "日k";
@@ -214,11 +215,12 @@
     card.className = "card v7-stock";
     card.innerHTML =
       '<div class="card-head"><span class="card-title"><span class="badge-ico">ST</span>个股深度 · ' + esc(stockSymbol) + "</span>" +
-        '<span class="card-note">概况 / 财务指标 / 三大报表 / 一致预期 / FCF 健康度</span></div>' +
+        '<span class="card-note">概况 / 财务指标 / 三大报表 / 一致预期 / 现金流健康度</span></div>' +
         '<div class="v-body">' +
           '<div class="v7-kline-tools" style="margin:0 0 8px">' +
-            ["概况", "财务指标", "三大报表", "一致预期", "FCF"].map(function (t, i) {
-              return '<button class="v7-tab' + (t === stockTabState ? " on" : "") + '" data-stock-tab="' + t + '" type="button">' + t + "</button>";
+            [["概况", "概况"], ["财务指标", "财务指标"], ["三大报表", "三大报表"], ["一致预期", "一致预期"], ["FCF", "现金流健康度"]].map(function (pair) {
+              var t = pair[0], label = pair[1];
+              return '<button class="v7-tab' + (t === stockTabState ? " on" : "") + '" data-stock-tab="' + t + '" type="button">' + label + "</button>";
             }).join("") +
           "</div>" +
           '<div id="v7-stock-body"><div class="loading">加载中…</div></div>' +
@@ -319,11 +321,12 @@
         var d = (r.body && r.body.data) || {};
         if (r.body && r.body.error) { b.innerHTML = '<div class="v-empty">' + esc(r.body.error) + "</div>"; return; }
         var checks = d.checks || [];
-        if (!checks.length) { b.innerHTML = '<div class="v-empty">' + esc(d.missing && d.missing.length ? "数据不足：" + d.missing.join("、") : "无 FCF 数据") + "</div>"; return; }
+        if (!checks.length) { b.innerHTML = '<div class="v-empty">' + esc(d.missing && d.missing.length ? "数据不足：" + d.missing.join("、") : "无现金流数据") + "</div>"; return; }
         var bad = checks.filter(function (c) { return c.status && c.status !== "ok"; });
         b.innerHTML = statKpis([
-          ["判定", d.verdict || "—", bad.length ? "down" : "up"],
-          ["异常项", bad.length + " / " + checks.length, bad.length ? "down" : ""],
+          /* 2026-11-17 涨红跌绿：异常/不通过应为红(up)，通过为绿(down)；原写法反了（异常显绿） */
+          ["判定", d.verdict || "—", bad.length ? "up" : "down"],
+          ["异常项", bad.length + " / " + checks.length, bad.length ? "up" : ""],
           ["报告期", d.period || "—"],
           ["对比期", d.compare_period || "—"]
         ]) + '<div class="v7-preview-table" style="margin-top:8px"><table><tr><th>检查项</th><th>本期</th><th>上期</th><th>状态</th><th>说明</th></tr>' +
@@ -447,14 +450,14 @@
     if (ns) {
       Array.prototype.forEach.call(document.querySelectorAll("[data-news-sort]"), function (b) { b.classList.toggle("on", b === ns); });
       W7.st.newsSort = ns.getAttribute("data-news-sort");
-      loadNews("AI 资讯流");
+      loadNews("智能资讯流");
       return true;
     }
     var nr = event.target.closest ? event.target.closest("[data-news-region]") : null;
     if (nr) {
       Array.prototype.forEach.call(document.querySelectorAll("[data-news-region]"), function (b) { b.classList.toggle("on", b === nr); });
       W7.st.newsRegion = nr.getAttribute("data-news-region");
-      loadNews("AI 资讯流");
+      loadNews("智能资讯流");
       return true;
     }
     var nsearch = event.target.closest ? event.target.closest("[data-news-search]") : null;

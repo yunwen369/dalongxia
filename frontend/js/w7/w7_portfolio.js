@@ -184,7 +184,7 @@
         item.style.gridColumn = "span " + curSpan;
         if (meta) {
           meta.textContent = "span " + curSpan + " · " + (V7_SPAN_LABEL[curSpan] || "—") +
-            " / 48 列 · 高 " + curH + "px（松手保存）";
+            " / 48 列 · 高 " + curH + "像素（松手保存）";
         }
       }
       function move(ev) {
@@ -206,7 +206,7 @@
           dashboards: list, activeId: data.activeId, groups: data.groups || [] }) })
           .then(function (r) {
             var ok = r.ok && r.body && !r.body.error;
-            toast(ok ? "卡片尺寸已保存（span " + curSpan + " · 高 " + curH + "px）"
+            toast(ok ? "卡片尺寸已保存（跨度 " + curSpan + " · 高 " + curH + "像素）"
               : ((r.body && r.body.error) || "尺寸保存失败"));
           });
       }
@@ -345,7 +345,7 @@
     "L-02": function (d) {   // 北向 Top10
       var items = d.items || [];
       if (!items.length) { return d.empty_note ? "季度披露口径，当日无数据" : "无数据"; }
-      return "Top1 <b>" + esc(items[0].name || "") + "</b>";
+      return "第一名 <b>" + esc(items[0].name || "") + "</b>";
     },
     "L-03": function (d) {   // 龙虎榜
       var items = d.items || [];
@@ -924,7 +924,7 @@
         ["收益率", pct(ret), ret >= 0 ? "up" : "down"],
         ["年化（近似）", pct(annual), annual >= 0 ? "up" : "down"],
         ["区间", rows[0].date + " ~ " + last.date]
-      ]) + '<div class="v-hint" style="margin-top:6px">口径：按选定频率定期定额买入，份额=当日单位净值；年化为现金流近似折算，非严格 XIRR。</div>' };
+      ]) + '<div class="v-hint" style="margin-top:6px">口径：按选定频率定期定额买入，份额=当日单位净值；年化为现金流近似折算，非严格年化收益率。</div>' };
       box.innerHTML = dcaCache.html;
     }).catch(function (e) {
       box.innerHTML = '<div class="v-empty">' + esc(e.message || "定投计算失败") + "</div>";
@@ -1035,7 +1035,8 @@
       ["快照数", String(items.length)],
       ["最新市值(元)", secFixed(last.market_value, 2)],
       ["最新成本(元)", secFixed(last.cost, 2)],
-      ["浮动盈亏(元)", secSignedText(last.pnl, 2)],
+      /* 2026-11-17 涨红跌绿：补方向 class，否则被 v6 主题的 .k-value 统一红色覆盖 */
+      ["浮动盈亏(元)", secSignedText(last.pnl, 2), (parseFloat(last.pnl) || 0) >= 0 ? "up" : "down"],
       ["区间", (items[0] || {}).date + " ~ " + (last.date || "—")]
     ]) + '<div id="v7-trend-chart" style="height:240px;margin-top:8px"></div>' +
       '<div class="v7-sec-note">口径：交易日 15:05 后落盘的本地快照序列，缺日即断点、不补值（周末与节假日无数据点）。</div>';
@@ -1127,8 +1128,10 @@
         ["持仓数", String(t.count)],
         ["市值(元)", secFixed(t.value, 2)],
         ["成本(元)", secFixed(t.cost, 2)],
-        ["浮动盈亏(元)", secSignedText(t.pnl, 2)],
-        ["盈亏率", t.pnl_pct == null ? "—" : secSignedText(t.pnl_pct, 2, "%")]
+        /* 2026-11-17 涨红跌绿：盈亏/盈亏率补方向 class，缺失时不着色 */
+        ["浮动盈亏(元)", secSignedText(t.pnl, 2), (parseFloat(t.pnl) || 0) >= 0 ? "up" : "down"],
+        ["盈亏率", t.pnl_pct == null ? "—" : secSignedText(t.pnl_pct, 2, "%"),
+          t.pnl_pct == null ? "" : ((parseFloat(t.pnl_pct) || 0) >= 0 ? "up" : "down")]
       ]);
       html += '<div class="v7-hint" style="margin:10px 0 4px">收益贡献（贡献=权重×盈亏率，单位百分点）</div>' +
         '<div class="v7-preview-table"><table><tr><th>标的</th><th>市场</th><th>行业</th>' +

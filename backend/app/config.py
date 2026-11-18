@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # 一、应用身份与服务参数（规范 §5.4 / §5.6）
 # =============================================================
 APP_NAME = "大龙虾投研工作台"  # 应用中文名，写入健康检查与窗口标题
-APP_VERSION = "3.7.4"  # 语义化版本号：3.7.4 = 安装器自证版本（NSIS 写 VERSION.txt，N-01）+ 仓库忽略规则；运行时行为与 3.7.3 零差异
-BUILD_TAG = "v3.7.4-20261117"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+APP_VERSION = "3.7.5"  # 语义化版本号：3.7.5 = AI 接入修复（配置落位 + 推理模型探测）+ AI 多轮上下文修复 + 界面全面中文化（修订号批次，无新增功能模块）
+BUILD_TAG = "v3.7.5-20261118"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
@@ -270,6 +270,10 @@ TTL: Dict[str, int] = {
     "flow_tier": 600,  # 板块四档资金流聚合（10 分钟）
     "fund_fee_table": 86400,  # 基金费率批量表（24 小时）
     "breadth": 60,  # 市场宽度（涨跌家数，1 分钟）
+    # 大盘云图整市场快照：A 股 5,564 只需 56 页并发抓取（约 2~3 秒），
+    # 缓存太短会让每次进云图都重走一遍全市场；60 秒与 PRD §7.1 refresh 口径一致。
+    "market_cloud": 60,  # 大盘云图全市场快照（1 分钟）
+    "market_cloud_index": 43200,  # 指数成分名录（沪深300/中证A500，月频，12 小时）
     "page_probe": 86400,  # 页面上下文只读探测（24 小时，原 page_context._PROBE_TTL）
     "ths_board_list": 3600,  # 同花顺行业名清单（1 小时，原 fund_combo._THS_BOARD_TTL）
 }

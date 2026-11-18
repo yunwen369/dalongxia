@@ -1028,11 +1028,14 @@ class TestFrontendViews:
             assert node in index, f"定稿外壳缺少节点 {node}"
 
     def test_topnav_groups_cover_view_groups(self):
-        """定稿前端：顶栏 data-group 与 views.js 的 group 集合完全一致（8 组），sidebar 合法。
+        """定稿前端：顶栏 data-group 与 views.js 的 group 集合相容（9 组视图 / 8 组顶栏），sidebar 合法。
 
         契约变更（2026-11-11 整站替换）：原 test_menu_covers_all_views 断言 index.html
         的 data-view 覆盖 VIEW_IDS；定稿前端改为「顶栏 8 个 group + 侧栏按 sidebar
         分组由 app.js 动态生成（SIDEBAR_GROUPS）」，故改为断言 group 集合一致 + sidebar 合法。
+        2026-11-18：新增 cloud（大盘云图全屏视图，从侧栏进入、不占顶栏一级
+        导航），视图分组扩为 9 组，顶栏仍为 8 组；断言改为「topnav 为 views group
+        的合法子集」，并放行 sidebar 的 cloud 分组。
         """
         import re
 
@@ -1041,9 +1044,9 @@ class TestFrontendViews:
         sidebars = set(re.findall(r'sidebar:\s*"([a-z]+)"', source))
         index = self._read("index.html")
         topnav = set(re.findall(r'data-group="([a-z]+)"', index))
-        assert len(groups) == 8, f"视图应归属 8 个一级分组，实际 {len(groups)}：{sorted(groups)}"
-        assert topnav == groups, f"顶栏 group 与视图 group 不一致：顶栏 {sorted(topnav)} / 视图 {sorted(groups)}"
-        assert sidebars <= {"overview", "market", "research", "my", "sys"}, f"非法 sidebar 分组：{sorted(sidebars)}"
+        assert len(groups) == 9, f"视图应归属 9 个一级分组，实际 {len(groups)}：{sorted(groups)}"
+        assert topnav <= groups, f"顶栏 group 不属于视图分组：{sorted(topnav - groups)}"
+        assert sidebars <= {"cloud", "overview", "market", "research", "my", "sys"}, f"非法 sidebar 分组：{sorted(sidebars)}"
 
     # 2026-11-12 架构重构 B1：以下 4 个旧契约用例随旧前端模块归档废止删除
     # （test_new_views_wired_in_router / test_chart_settings_i18n_keys_defined /
