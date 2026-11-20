@@ -15,6 +15,9 @@
      启用后端 /api/ai/chat 已支持的多轮上下文（保留最近 10 轮）。 */
   var chatHistory = [];
 
+  /* 指令性 pill：点击后直接发送，不再仅填入输入框（否则用户点完无任何反馈）。 */
+  var DIRECT_SEND = { "解读大盘": 1, "诊断持仓": 1, "同业对比": 1, "生成复盘": 1 };
+
   function bindAi() {
     document.addEventListener("keydown", function (event) {
       var input = $("v7-ai-input");
@@ -31,16 +34,25 @@
       }
       var pill = event.target.closest(".v7-pill");
       if (pill) {
-        if (pill.textContent.trim() === "翻译" && $("v7-ai-input")) {
+        var txt = pill.textContent.trim();
+        if (txt === "翻译" && $("v7-ai-input")) {
           translateText(($("v7-ai-input").value || "").trim());
           $("v7-ai-input").value = "";
           return;
         }
-        if (pill.textContent.trim() === "清空会话") {
+        if (txt === "清空会话") {
           clearAiHistory();
           return;
         }
-        if ($("v7-ai-input")) { $("v7-ai-input").value = pill.textContent; $("v7-ai-input").focus(); }
+        /* 2026-11-18 修复：指令性问题（诊断持仓等）点击即发送，带输入框补充内容；
+           发送后界面立即出现「思考中…」，保证点击必有反馈。 */
+        if (DIRECT_SEND[txt]) {
+          var inp = $("v7-ai-input");
+          var extra = ((inp && inp.value) || "").trim();
+          sendAiDirect(txt + (extra ? "（补充：" + extra + "）" : ""));
+          return;
+        }
+        if ($("v7-ai-input")) { $("v7-ai-input").value = txt; $("v7-ai-input").focus(); }
       }
     });
   }
@@ -56,13 +68,43 @@
     return el;
   }
 
+  /* 2026-11-18 修复：等待兜底。推理模型单轮可达 15–70 秒，30 秒后追加进度提示，
+     避免「思考中…」长时间无变化被用户误认为没反应。 */
+  function startWaitingTip(loading) {
+    if (!loading) { return null; }
+    return setTimeout(function () {
+      if (!loading || !loading.parentNode) { return; }
+      var tip = document.createElement("div");
+      tip.className = "v7-wait-tip";
+      tip.textContent = "模型思考中，推理模型响应较慢，请稍候…";
+      loading.appendChild(tip);
+      host_scroll(loading);
+    }, 30000);
+  }
+
+  function host_scroll(el) {
+    var host = document.querySelector(".v7-chat");
+    if (host && el) { host.scrollTop = host.scrollHeight; }
+  }
+
+  /** 指令性问题直接发送（不依赖输入框内容）。 */
+  function sendAiDirect(text) {
+    var input = $("v7-ai-input");
+    if (input) { input.value = ""; }
+    sendAiText(text);
+  }
+
   function sendAi(input) {
     var text = (input.value || "").trim();
     if (!text) { return; }
+    sendAiText(text);
+  }
+
+  function sendAiText(text) {
     appendMsg("me", text);
-    input.value = "";
     var loading = appendMsg("ai", "思考中…");
-    var history = chatHistory.slice(-10);
+    var waitTip = startWaitingTip(loading);
+    var history = chatHistory.slice();  // 完整历史，由后端按上下文 KB 预算裁剪
     history.push({ role: "user", content: text });
     apiJson("/api/ai/chat", { method: "POST", body: JSON.stringify({
       messages: history, page: currentId(),
@@ -73,7 +115,17 @@
           (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ||
           (r.body && r.body.error) || "无返回";
         if (loading) { loading.remove(); }
-        appendMsg("ai", reply, '<div class="v7-warn">⚠️ 非投资建议 · 数据以真实接口为准</div>');
+        if (waitTip) { clearTimeout(waitTip); waitTip = null; }
+        /* 2026-11-18 修复：同步后端上下文信息（context_used + 实际携带轮数），
+           输入输出与上下文不再只在后端处理、前端不可见。 */
+        var ctxHtml = "";
+        if (!(r.body && r.body.error) && data.context_used) {
+          var n = (data.messages || history).length;
+          ctxHtml = '<div class="v7-ctx-note">已注入当前页面真实数值上下文 · 携带 ' + n + " 轮会话</div>";
+        } else if (!(r.body && r.body.error) && (data.messages || []).length) {
+          ctxHtml = '<div class="v7-ctx-note">携带 ' + data.messages.length + " 轮会话</div>";
+        }
+        appendMsg("ai", reply, ctxHtml + '<div class="v7-warn">⚠️ 非投资建议 · 数据以真实接口为准</div>');
         /* 仅成功时落历史；失败回滚，避免空回复进入上下文 */
         if (!(r.body && r.body.error) && reply && reply !== "无返回") {
           chatHistory.push({ role: "assistant", content: reply });
@@ -81,6 +133,7 @@
       })
       .catch(function () {
         if (loading) { loading.remove(); }
+        if (waitTip) { clearTimeout(waitTip); waitTip = null; }
         appendMsg("ai", "请求失败，请检查智能配置（设置页）");
       });
   }
@@ -101,7 +154,9 @@
       .then(function (r) {
         var data = (r.body && r.body.data) || {};
         if (loading) { loading.remove(); }
-        appendMsg("ai", data.text || data.translation || data.result || (r.body && r.body.error) || "无返回");
+        /* 2026-11-18 修复：后端 /api/ai/translate 成功字段是 translated，
+           原解析链（text/translation/result）三者均不匹配，翻译界面必然显示「无返回」 */
+        appendMsg("ai", data.translated || data.text || data.translation || data.result || (r.body && r.body.error) || "无返回");
       });
   }
 
@@ -157,8 +212,99 @@
     }
   }
 
+  /* ---------- 33b. AI 配置卡（2026-11-18：思考强度/上下文/输出配置） ---------- */
+  /* 设置页「智能配置」唯一入口：密钥 / 引用地址 / 模型 / 思考强度 / 上下文输入 / 输出配置，
+     保存走 /api/ai/config，读取走 /api/ai/config 回显。连接测试卡复用本卡字段。 */
+  function injectAiConfigCard() {
+    if (currentId() !== "settings") { return; }
+    var body = $("view-body");
+    if (!body || body.querySelector(".v7-ai-cfg")) { return; }
+    var card = document.createElement("div");
+    card.className = "card v7-ai-cfg";
+    card.innerHTML =
+      '<div class="card-head"><span class="card-title"><span class="badge-ico">✦</span>智能配置</span>' +
+        '<span class="card-note">密钥不回显；思考强度与上下文/输出配置保存后立即应用于对话</span></div>' +
+        '<div class="v-body">' +
+          '<div class="v7-form">' +
+            '<div><label>密钥（api_key）</label><input id="v7-ai-key" type="password" placeholder="留空则保留已保存密钥"></div>' +
+            '<div><label>引用地址（base_url）</label><input id="v7-ai-baseurl" placeholder="https://api.xxx.com/v1"></div>' +
+            '<div><label>模型名称（model）</label><input id="v7-ai-model" placeholder="如 GLM-5.3-Flash"></div>' +
+            '<div><label>思考强度（reasoning_effort）</label><select id="v7-ai-effort">' +
+              ['', "弱", "中", "高", "强", "极致"].map(function (x) {
+                return '<option value="' + esc(x) + '">' + (x || "不指定（上游默认）") + "</option>";
+              }).join("") +
+            "</select></div>" +
+            '<div><label>上下文输入（KB，0=上游默认）</label><input id="v7-ai-ctxkb" type="number" min="0" max="512" placeholder="如 8，留空=上游默认"></div>' +
+            '<div><label>输出配置（token，0=上游默认）</label><input id="v7-ai-tokens" type="number" min="0" max="8192" placeholder="0=不传，按模型默认"></div>' +
+            '<div><button class="v7-btn primary" data-act="ai-cfg-save" type="button">保存配置</button>' +
+            '<span class="v7-hint" id="v7-ai-cfg-hint"></span></div>' +
+          "</div>" +
+        "</div>";
+    body.insertBefore(card, body.firstChild);
+    /* 回显已保存配置（密钥仅掩码，不接受明文回显） */
+    apiJson("/api/ai/config").then(function (r) {
+      var d = (r.body && r.body.data) || {};
+      var k = $("v7-ai-key"), b = $("v7-ai-baseurl"), m = $("v7-ai-model");
+      var e = $("v7-ai-effort"), c = $("v7-ai-ctxkb"), t = $("v7-ai-tokens");
+      if (k) { k.value = ""; }  // 密钥不回显、不接受明文，留空保留原值
+      if (b && d.base_url) { b.value = d.base_url; }
+      if (m && d.model) { m.value = d.model; }
+      if (e) { e.value = d.reasoning_effort_label || ""; }
+      if (c && d.context_kb != null) { c.value = String(d.context_kb); }
+      if (t && d.max_tokens != null) { t.value = String(d.max_tokens); }
+    });
+    /* 保存：复用连接测试卡与对话链路读取的同一字段来源 */
+    card.addEventListener("click", function (ev) {
+      var btn = ev.target.closest('[data-act="ai-cfg-save"]');
+      if (!btn) { return; }
+      saveAiConfig(btn);
+    });
+  }
+
+  /** 保存智能配置到 /api/ai/config，返回中文结果提示。 */
+  function saveAiConfig(btn) {
+    var hint = $("v7-ai-cfg-hint");
+    if (!hint) { return; }
+    var key = ((($("v7-ai-key") || {}).value) || "").trim();
+    var base = ((($("v7-ai-baseurl") || {}).value) || "").trim();
+    var model = ((($("v7-ai-model") || {}).value) || "").trim();
+    var effort = ((($("v7-ai-effort") || {}).value) || "").trim();
+    var ctxKb = ((($("v7-ai-ctxkb") || {}).value) || "").trim();
+    var tokens = ((($("v7-ai-tokens") || {}).value) || "").trim();
+    if (!base) { hint.textContent = "请填写引用地址（base_url）"; hint.className = "v7-hint bad"; return; }
+    if (!model) { hint.textContent = "请填写模型名称（model）"; hint.className = "v7-hint bad"; return; }
+    if (key && !/^sk-/.test(key) && !/^[A-Za-z0-9_\-]{16,}$/.test(key)) {
+      hint.textContent = "密钥格式异常，请检查后重试"; hint.className = "v7-hint bad"; return;
+    }
+    var body = { base_url: base, model: model };
+    if (key) { body.api_key = key; }
+    if (effort) { body.reasoning_effort = effort; }
+    // 2026-11-19：上下文/输出随表单提交：留空或 0 = 不裁剪/不传，按上游默认
+    if (ctxKb) { body.context_kb = parseInt(ctxKb, 10); }
+    if (tokens) { body.max_tokens = parseInt(tokens, 10); }
+    btn.disabled = true;
+    hint.textContent = "保存中…"; hint.className = "v7-hint";
+    apiJson("/api/ai/config", { method: "POST", body: JSON.stringify(body) })
+      .then(function (r) {
+        btn.disabled = false;
+        if (r.body && r.body.error) {
+          hint.textContent = r.body.error;
+          hint.className = "v7-hint bad";
+          return;
+        }
+        hint.textContent = "已保存，配置立即生效";
+        hint.className = "v7-hint ok";
+        toast("AI 配置已保存");
+      })
+      .catch(function () {
+        btn.disabled = false;
+        hint.textContent = "保存失败，请重试";
+        hint.className = "v7-hint bad";
+      });
+  }
+
   /* ---------- 33. AI 连接测试（v3.4.0：恢复 ai/test） ---------- */
-  /** 设置页注入 AI 连通性测试卡。 */
+  /** 设置页注入 AI 连通性测试卡（复用智能配置卡字段，避免双源不一致）。 */
   function injectAiTestPanel() {
     if (currentId() !== "settings") { return; }
     var body = $("view-body");
@@ -170,18 +316,13 @@
         '<span class="card-note">最小请求验证鉴权与模型（120s 超时，推理模型响应较慢）</span></div>' +
         '<div class="v-body">' +
           '<div class="v7-form" style="margin-bottom:8px">' +
-            '<div><label>接口地址</label><input id="v7-ai-base" placeholder="https://api.xxx.com/v1"></div>' +
-            '<div><label>模型</label><input id="v7-ai-model" placeholder="如 deepseek-chat"></div>' +
             '<div><button class="v7-btn primary" data-act="ai-test" type="button">测试连接</button></div>' +
           "</div>" +
-          '<div id="v7-ai-test-body"><div class="v7-hint">密钥沿用已保存配置（此页不回显、不接受明文输入）</div></div>' +
+          '<div id="v7-ai-test-body"><div class="v7-hint">密钥沿用「智能配置」中已保存配置（此页不回显、不接受明文输入）</div></div>' +
         "</div>";
     body.insertBefore(card, body.firstChild);
     apiJson("/api/ai/config").then(function (r) {
       var d = (r.body && r.body.data) || {};
-      var b = $("v7-ai-base"), m = $("v7-ai-model");
-      if (b && d.base_url) { b.value = d.base_url; }
-      if (m && d.model) { m.value = d.model; }
       var tip = $("v7-ai-test-body");
       if (tip && !d.configured) {
         tip.innerHTML = '<div class="v7-sec-miss">未配置智能服务：请先在上方「智能配置」保存 接口地址 / 密钥 / 模型，再回来测试。</div>';
@@ -189,13 +330,14 @@
     });
   }
 
-  /** 执行 AI 连通性测试（ai/test）。 */
+  /** 执行 AI 连通性测试（ai/test），读取智能配置卡字段。 */
   function runAiTest() {
     var box = $("v7-ai-test-body");
     if (!box) { return; }
-    var base = ((($("v7-ai-base") || {}).value) || "").trim();
+    var base = ((($("v7-ai-baseurl") || {}).value) || "").trim();
     var model = ((($("v7-ai-model") || {}).value) || "").trim();
-    if (!base) { box.innerHTML = '<div class="v-empty">请填写 Base URL（以 http(s):// 开头）</div>'; return; }
+    if (!base) { box.innerHTML = '<div class="v-empty">请先在「智能配置」填写 Base URL（以 http(s):// 开头）</div>'; return; }
+    if (!model) { box.innerHTML = '<div class="v-empty">请先在「智能配置」填写模型名称</div>'; return; }
     box.innerHTML = '<div class="loading">测试中（最长 120 秒，推理模型响应较慢）…</div>';
     apiJson("/api/ai/test", { method: "POST", body: JSON.stringify({ base_url: base, model: model }) })
       .then(function (r) {
@@ -355,6 +497,8 @@
   W7.ai = W7.ai || {};
   W7.ai.bindAi = bindAi;
   W7.ai.clearAiHistory = clearAiHistory;
+  W7.ai.injectAiConfigCard = injectAiConfigCard;
+  W7.ai.saveAiConfig = saveAiConfig;
   W7.ai.injectAiTestPanel = injectAiTestPanel;
   W7.ai.injectFinSummaryCard = injectFinSummaryCard;
   W7.ai.loadAiSummary = loadAiSummary;

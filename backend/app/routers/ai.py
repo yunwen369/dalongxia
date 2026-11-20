@@ -77,7 +77,12 @@ def save_config(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """保存 AI 配置。
 
     Body:
-        {base_url, api_key?, model?}；api_key 留空表示保留原值。
+        {base_url, api_key?, model?, reasoning_effort?, context_kb?, max_tokens?}；
+        api_key 留空表示保留原值；后三项为可选扩展配置：
+        reasoning_effort 接受中文标签（弱/中/高/强/极致）或上游取值
+        （low/medium/high/xhigh/max）；context_kb 上下文输入 KB 字符预算 0–512
+        （留空/0=不裁剪，按上游上下文默认）；max_tokens 输出预算 0–8192
+        （留空/0=不传该参数，按上游输出默认）。
 
     Args:
         payload: 请求体（JSON 对象）。
@@ -115,6 +120,35 @@ def save_config(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     if not new_key:
         return api_error(ErrorCode.INVALID_PARAM, "首次保存必须填写 api_key。")
 
+    # 2026-11-18/19：思考强度/上下文/输出配置的解析与校验
+    from backend.app.config import (
+        _parse_int_clamped,
+        _parse_reasoning_effort,
+    )
+
+    effort_raw = str(payload.get("reasoning_effort") or "").strip()
+    reasoning_effort = _parse_reasoning_effort(effort_raw)
+    if effort_raw and not reasoning_effort:
+        return api_error(
+            ErrorCode.INVALID_PARAM,
+            "思考强度仅支持：弱 / 中 / 高 / 强 / 极致（或 low/medium/high/xhigh/max）。",
+        )
+    # 留空表示沿用已有值；已有值缺失时为空串（不传该参数）
+    if not effort_raw:
+        reasoning_effort = _parse_reasoning_effort(existing.get("reasoning_effort"))
+
+    # 2026-11-19：上下文输入改为 KB 字符预算（0–512）、输出预算（0–8192）；
+    # 字段随表单提交时：留空/0 = 不裁剪/不传，按上游上下文与输出默认处理；
+    # 请求未携带该字段时保留原文件值
+    if "context_kb" in payload:
+        context_kb = _parse_int_clamped(payload.get("context_kb"), 0, 512, 0)
+    else:
+        context_kb = _parse_int_clamped(existing.get("context_kb"), 0, 512, 0)
+    if "max_tokens" in payload:
+        max_tokens = _parse_int_clamped(payload.get("max_tokens"), 0, 8192, 0)
+    else:
+        max_tokens = _parse_int_clamped(existing.get("max_tokens"), 0, 8192, 0)
+
     # 落盘前加密：DPAPI 不可用时拒绝写明文（规范 §5.6 / §12.3）
     try:
         encrypted_key = secure_store.encrypt_text(new_key)
@@ -129,6 +163,11 @@ def save_config(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "base_url": base_url,
         "api_key_enc": encrypted_key,
         "model": model or existing.get("model") or "",
+        # 2026-11-18/19：扩展配置一并落盘，读取时应用；
+        # 上下文输入为 KB 字符预算，输出 0=不传用上游默认
+        "reasoning_effort": reasoning_effort,
+        "context_kb": context_kb,
+        "max_tokens": max_tokens,
         "updated_at": _now(),
     }
     # R3-09：统一原子写助手（含 fsync + 0o600 权限），替代手动 temp + os.replace + os.chmod
@@ -162,10 +201,11 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         dict: 统一信封；data 含 ok / latency_ms / detail。
 
     Notes:
-        真实发送一次最小请求（max_tokens=64，兼容推理模型：token 会先消耗在
-        reasoning 上，max_tokens=1 时正文恒空），超时 120 秒（推理模型首字延迟
-        可达数十秒，与摘要链路 LLM_TIMEOUT=120 对齐）；
-        失败时区分未配置 / 鉴权失败 / 超时 / 上游异常，文案均中文。
+        真实发送一次最小请求（max_tokens=512，兼容推理模型：token 会先消耗在
+        reasoning 上，max_tokens=1/64 时正文可能为空——实测 reasoning_tokens=66
+        曾超过 64 预算导致 content 恒空、测试结果不稳定，故留足思考+输出预算），
+        超时 120 秒（推理模型首字延迟可达数十秒，与摘要链路 LLM_TIMEOUT=120 对齐）；
+        失败时区分未配置 / 鉴权失败 / 连接超时 / 读超时 / 上游异常，文案均中文。
         响应绝不回显密钥，只在 detail 里给状态说明。
     """
     base_url = str(payload.get("base_url") or "").strip()
@@ -203,14 +243,19 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 64,
+                "max_tokens": 512,
                 "temperature": 0,
             },
             timeout=120,
         )
+    except requests.exceptions.ConnectTimeout:
+        # 连接层超时：通常远早于 120 秒即抛出，属网络/上游拒接，勿报「超时（120 秒）」误导
+        return api_error(ErrorCode.UPSTREAM_TIMEOUT,
+                         "连接 AI 接口超时：网络链路或上游服务响应慢，请稍后重试。",
+                         data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
     except requests.exceptions.Timeout:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
-                         "测试超时（120 秒）：该模型响应较慢，请稍后重试或更换更轻量的模型。",
+                         "测试超时（读响应超过 120 秒）：该模型响应较慢，请稍后重试或更换更轻量的模型。",
                          data={"ok": False, "latency_ms": int((time.time() - started) * 1000)})
     except requests.exceptions.RequestException as exc:
         # 真实网络类异常（连接拒绝/DNS 失败/TLS 等）：中文分因，保留 latency_ms
@@ -264,7 +309,7 @@ def test_connection(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         "model": model,
         "detail": f"连接成功，模型 {model} 可用",
         "source": base_url,
-        "caliber": "真实最小请求（max_tokens=64，兼容推理模型思考消耗）探测，不产生计费对话记录之外的额外用量",
+        "caliber": "真实最小请求（max_tokens=512，兼容推理模型思考消耗）探测，不产生计费对话记录之外的额外用量",
         "as_of": _now(),
         "market_status": "连通性测试",
         "is_realtime": True,
@@ -286,16 +331,29 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     Returns:
         dict: 统一返回结构 `{data, error, error_code}`；data 内附 source/caliber/as_of/market_status/is_realtime/context_used。
     """
+    ai = config.load_ai_config()
     raw_messages = payload.get("messages")
     messages: List[Dict[str, str]] = []
     if isinstance(raw_messages, list) and raw_messages:
-        for item in raw_messages[-10:]:  # 只保留最近 10 轮，避免上下文无限增长
+        # 2026-11-19：上下文输入改为 KB 字符预算（context_kb）：
+        # 从最新消息向前累积，超出预算即截断；0/留空=不裁剪（按上游上下文默认）
+        _CHARS_PER_KB = 1024
+        budget = (ai.context_kb or 0) * _CHARS_PER_KB
+        picked: List[Dict[str, str]] = []
+        total_chars = 0
+        for item in reversed(raw_messages):
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "user")
             content = str(item.get("content") or "").strip()
-            if content and role in ("user", "assistant", "system"):
-                messages.append({"role": role, "content": content})
+            if not content or role not in ("user", "assistant", "system"):
+                continue
+            cost = len(content) + 16  # 每条消息的 JSON 结构开销近似
+            if picked and budget and total_chars + cost > budget:
+                break
+            picked.append({"role": role, "content": content})
+            total_chars += cost
+        messages = list(reversed(picked))
     else:
         message = str(payload.get("message") or "").strip()
         if message:
@@ -304,7 +362,6 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     if not messages:
         return api_error(ErrorCode.INVALID_PARAM, "请提供 message 或 messages，不能为空。")
 
-    ai = config.load_ai_config()
     if not ai.api_key or not ai.base_url:
         return api_error(
             ErrorCode.NOT_CONFIGURED,
@@ -329,17 +386,32 @@ def chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
     url = ai.base_url.rstrip("/") + "/chat/completions"
     started = time.time()
+    # 2026-11-18/19：应用思考强度（仅当配置了合法档位时传参）；
+    # 输出配置 0/留空表示不传 max_tokens，按上游模型默认输出
+    request_body: Dict[str, Any] = {
+        "model": ai.model or "gpt-4o-mini",
+        "messages": messages,
+        "temperature": 0.3,
+    }
+    if ai.max_tokens > 0:
+        request_body["max_tokens"] = ai.max_tokens
+    if ai.reasoning_effort:
+        request_body["reasoning_effort"] = ai.reasoning_effort
     try:
         response = netfix.http_request(
             "POST",
             url,
             headers={"Authorization": f"Bearer {ai.api_key}", "Content-Type": "application/json"},
-            json={"model": ai.model or "gpt-4o-mini", "messages": messages, "temperature": 0.3},
+            json=request_body,
             timeout=180,
         )
+    except requests.exceptions.ConnectTimeout:
+        # 连接层超时：通常远早于 180 秒即抛出，属网络/上游拒接，勿报「超时（180 秒）」误导
+        return api_error(ErrorCode.UPSTREAM_TIMEOUT,
+                         "连接 AI 接口超时：网络链路或上游服务响应慢，请稍后重试。", data={"configured": True})
     except requests.exceptions.Timeout:
         return api_error(ErrorCode.UPSTREAM_TIMEOUT,
-                         "AI 响应超时（180 秒）：该模型响应较慢，请稍后重试或缩短问题。", data={"configured": True})
+                         "AI 响应超时（读响应超过 180 秒）：该模型响应较慢，请稍后重试或缩短问题。", data={"configured": True})
     except requests.exceptions.RequestException as exc:
         logger.warning("AI 对话连接失败（网络类 %s）：%s", type(exc).__name__, exc)
         return api_error(ErrorCode.UPSTREAM_ERROR,

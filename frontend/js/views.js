@@ -548,9 +548,14 @@
     render: function (m) {
       var a = d(m, "a");
       var p = d(m, "p");
-      return card("智能配置（只读）", '<div class="v-form"><label>已配置</label><div class="v-form-value">' +
+      /* 2026-11-18：配置表单由 w7 注入层「智能配置」卡提供（支持思考强度/上下文/输出），
+         此处仅保留配置状态与来源只读说明，避免双卡重复。 */
+      return card("智能配置状态", '<div class="v-form"><label>已配置</label><div class="v-form-value">' +
         (a.configured ? "是" : "否") + "</div><label>模型</label><div class=\"v-form-value\">" + esc(a.model || "未配置") +
-        "</div><label>接口地址</label><div class=\"v-form-value\">" + esc(a.base_url || "未配置") + "</div></div>",
+        "</div><label>接口地址</label><div class=\"v-form-value\">" + esc(a.base_url || "未配置") +
+        "</div><label>思考强度</label><div class=\"v-form-value\">" + esc(a.reasoning_effort_label || "未指定（上游默认）") +
+        "</div><label>配置来源</label><div class=\"v-form-value\">" +
+        esc({ env: "环境变量", dotenv: ".env", file: "本地配置文件", none: "未配置" }[a.source] || a.source || "—") + "</div></div>",
         "/api/ai/config", "智") +
         card("桌面偏好（只读）", '<div class="v-form"><label>关闭动作</label><div class="v-form-value">' +
           esc(p.close_action) + "</div><label>可选项</label><div class=\"v-form-value\">" +

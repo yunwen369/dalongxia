@@ -123,9 +123,10 @@ def test_ai_test_really_hits_network(stub_base: str) -> None:
     assert call["path"] == "/v1/chat/completions"
     assert call["auth"] == "Bearer sk-stub"
     assert call["body"]["model"] == "stub-model"
-    # 2026-11-18 AI 修复：/api/ai/test 的 max_tokens 由 1 改为 64，
-    # 兼容 GLM 推理模型的思考消耗（max_tokens=1 时 token 全被思考消耗、content 恒空）
-    assert call["body"]["max_tokens"] == 64
+    # 2026-11-18 AI 修复：/api/ai/test 的 max_tokens 由 1 先改为 64、再提为 512，
+    # 兼容 GLM 推理模型的思考消耗（实测 reasoning_tokens=66 曾超过 64 预算导致
+    # content 恒空、测试结果不稳定，故留足思考+输出预算）
+    assert call["body"]["max_tokens"] == 512
 
 
 def test_ai_chat_really_hits_network(stub_base: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,7 +141,8 @@ def test_ai_chat_really_hits_network(stub_base: str, monkeypatch: pytest.MonkeyP
     """
     monkeypatch.setattr(
         ai_router.config, "load_ai_config",
-        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model"),
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
     )
     body = client.post("/api/ai/chat", json={"message": "你好，做个自我介绍"}).json()
 
@@ -150,6 +152,75 @@ def test_ai_chat_really_hits_network(stub_base: str, monkeypatch: pytest.MonkeyP
     assert _StubHandler.calls and _StubHandler.calls[-1]["path"] == "/v1/chat/completions"
     sent = _StubHandler.calls[-1]["body"]
     assert sent["messages"][-1] == {"role": "user", "content": "你好，做个自我介绍"}
+
+
+def test_ai_chat_max_tokens_zero_omitted_from_request(
+    stub_base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """输出配置 max_tokens=0 → 不传该参数，按上游模型默认（2026-11-19 KB 配置改造）。"""
+    monkeypatch.setattr(
+        ai_router.config, "load_ai_config",
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
+    )
+    client.post("/api/ai/chat", json={"message": "hi"})
+    sent = _StubHandler.calls[-1]["body"]
+    assert "max_tokens" not in sent
+    assert sent["model"] == "stub-model"
+
+
+def test_ai_chat_max_tokens_positive_is_sent(
+    stub_base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """输出配置 max_tokens>0 → 原样透传给上游。"""
+    monkeypatch.setattr(
+        ai_router.config, "load_ai_config",
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=2048),
+    )
+    client.post("/api/ai/chat", json={"message": "hi"})
+    assert _StubHandler.calls[-1]["body"]["max_tokens"] == 2048
+
+
+def test_ai_chat_context_kb_budget_truncates_older_messages(
+    stub_base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """上下文输入 context_kb>0：按 KB 字符预算从最新消息向前累积，旧消息被裁掉。"""
+    monkeypatch.setattr(
+        ai_router.config, "load_ai_config",
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=1, max_tokens=0),
+    )
+    history = [
+        {"role": "user", "content": "A" * 900},
+        {"role": "assistant", "content": "B" * 900},
+        {"role": "user", "content": "最新问题"},
+    ]
+    client.post("/api/ai/chat", json={"messages": history})
+    sent = _StubHandler.calls[-1]["body"]["messages"]
+    assert sent[-1] == {"role": "user", "content": "最新问题"}
+    # 1KB 预算装不下两条 900 字历史，第一条必须被裁掉
+    assert all(m["content"] != "A" * 900 for m in sent)
+
+
+def test_ai_chat_context_kb_zero_keeps_all_messages(
+    stub_base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """context_kb=0 → 不裁剪，完整历史送达上游。"""
+    monkeypatch.setattr(
+        ai_router.config, "load_ai_config",
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
+    )
+    history = [
+        {"role": "user", "content": "问题一"},
+        {"role": "assistant", "content": "回答一"},
+        {"role": "user", "content": "问题二"},
+    ]
+    client.post("/api/ai/chat", json={"messages": history})
+    sent = _StubHandler.calls[-1]["body"]["messages"]
+    assert len(sent) == 3
+    assert sent[0] == {"role": "user", "content": "问题一"}
 
 
 def test_ai_test_unreachable_is_network_not_nameerror(caplog: pytest.LogCaptureFixture) -> None:
@@ -235,7 +306,8 @@ def test_ai_chat_internal_defect_maps_to_internal_error(
 
     monkeypatch.setattr(
         ai_router.config, "load_ai_config",
-        lambda: SimpleNamespace(base_url="https://api.example.com/v1", api_key="sk-x", model="m"),
+        lambda: SimpleNamespace(base_url="https://api.example.com/v1", api_key="sk-x", model="m",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
     )
     monkeypatch.setattr(ai_router, "netfix", SimpleNamespace(http_request=_boom))
     with caplog.at_level(logging.ERROR):

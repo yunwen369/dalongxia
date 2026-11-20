@@ -268,6 +268,54 @@ def _crowding_summary() -> Optional[str]:
     return None
 
 
+def _portfolio_summary() -> Optional[str]:
+    """智能助手页摘要：用户持仓台账（「诊断持仓」/持仓提问的上下文，与持仓页同源）。
+
+    区分三种状态（2026-11-19 BUG-20261119-02 修复，避免「AI 空壳」观感）：
+    1. 有持仓 → 注入真实台账，AI 引用数据作答；
+    2. 空持仓（用户真实状态，非异常）→ 注入明确说明，AI 直接告知未读取到持仓
+       并引导先添加，替代无数据时输出通用方法论的“空壳”观感；
+    3. 读取异常 → None，对话主链路零降级。
+
+    Returns:
+        Optional[str]: 摘要文本；读取异常或不可得返回 None。
+    """
+    try:
+        from backend.app.datasource import portfolio as portfolio_provider
+
+        store = portfolio_provider.load()
+    except Exception as exc:  # noqa: BLE001 - 持仓读取失败=无上下文，不阻断对话
+        logger.info("持仓上下文构建失败（portfolio.load）：%s", type(exc).__name__)
+        return None
+    items = store.get("items") or []
+    if not isinstance(items, list):
+        return None
+    if not items:
+        return ("【当前页面上下文】用户正停留在「智能助手」页。当前持仓台账为空："
+                "尚未在「持仓」页录入任何持仓记录。回答持仓诊断等相关问题时，"
+                "必须先明确告知用户未读取到持仓数据，并引导其前往持仓页添加持仓后再诊断，"
+                "不得输出通用的持仓分析方法论来代替真实诊断。")
+    lines = ["【当前页面上下文】用户正停留在「智能助手」页，其持仓台账如下（数据与持仓页同源）。"]
+    listed = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        market = str(item.get("market") or "a").upper()
+        symbol = str(item.get("symbol") or "?")
+        name = str(item.get("name") or "") or symbol
+        parts = [f"{name}（{market} {symbol}）"]
+        if item.get("shares") is not None:
+            parts.append(f"份额 {item['shares']}")
+        if item.get("cost") is not None:
+            parts.append(f"成本 {item['cost']}")
+        lines.append("· " + " · ".join(parts))
+        listed += 1
+    if not listed:
+        return None
+    lines.append("回答持仓诊断等相关问题必须引用上述台账数据，不得编造；台账中无的标的不得臆测。")
+    return "\n".join(lines)
+
+
 _BUILDERS = {
     "sectors": lambda p: _industry_summary(),
     "stock": _stock_summary,
@@ -275,6 +323,7 @@ _BUILDERS = {
     "market": lambda p: _market_summary(),
     "news": lambda p: _news_summary(),
     "crowding": lambda p: _crowding_summary(),
+    "ai": lambda p: _portfolio_summary(),
 }
 
 

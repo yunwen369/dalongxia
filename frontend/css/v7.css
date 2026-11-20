@@ -85,6 +85,9 @@ body.v7-custom{font-size:var(--v7-font);}
 
 /* ---------- AI 视图 ---------- */
 .v7-chat{display:flex;flex-direction:column;gap:8px;min-height:160px;}
+/* 2026-11-18：等待兜底进度提示与上下文同步说明 */
+.v7-wait-tip{font-size:12px;color:#8a7bff;padding:4px 0 0;border-top:1px dashed rgba(138,123,255,.4);margin-top:4px;}
+.v7-ctx-note{font-size:12px;color:#6b7280;padding:3px 0 0;}
 .v7-msg{max-width:82%;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.65;}
 .v7-msg.me{align-self:flex-end;background:var(--accent,var(--c-cyan-65));color:var(--c-white-100);}
 .v7-msg.ai{align-self:flex-start;background:var(--bg-hover);}

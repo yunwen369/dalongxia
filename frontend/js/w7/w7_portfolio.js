@@ -9,6 +9,7 @@
   var esc = function () { return W7.forms.esc.apply(null, arguments); };
   var injectAboutCard = function () { return W7.forms.injectAboutCard.apply(null, arguments); };
   var injectAiTestPanel = function () { return W7.ai.injectAiTestPanel.apply(null, arguments); };
+  var injectAiConfigCard = function () { return W7.ai.injectAiConfigCard.apply(null, arguments); };
   var injectFinSummaryCard = function () { return W7.ai.injectFinSummaryCard.apply(null, arguments); };
   var injectAlertsToolbar = function () { return W7.misc.injectAlertsToolbar.apply(null, arguments); };
   var injectComboPanel = function () { return W7.fund.injectComboPanel.apply(null, arguments); };
@@ -963,6 +964,7 @@
         injectAlertsToolbar();
         injectConnectorsTest();
         injectScreenerPanel();
+        injectAiConfigCard();
         injectAiTestPanel();
         injectFinSummaryCard();
         bindImport();

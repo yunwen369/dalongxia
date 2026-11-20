@@ -40,6 +40,20 @@
   };
   var sparkSeq = 0;
   var VIEWS = window.V6_VIEWS || {};
+  /* BUG-20261119-01：持有用户输入/会话状态的交互型视图，禁止 12 秒定时静默重渲染
+     （host.innerHTML 重建会清空聊天、输入框、表单与计算结果）。 */
+  var INTERACTIVE_VIEWS = {
+    "ai": 1,                    // 智能助手：聊天会话 + 输入框
+    "backtest": 1,              // 组合回测：参数表单 + 结果
+    "dca": 1,                   // 定投计算器：参数表单 + 结果
+    "screener": 1,              // 智能选股：筛选表单 + 结果
+    "settings": 1,              // 系统设置：配置表单
+    "connectors": 1,            // 连接器：开关与选择
+    "dashboard-manage": 1,      // 仪表板管理：管理操作
+    "watchlist-edit": 1,        // 编辑自选：表单
+    "alerts-edit": 1,           // 编辑提醒：表单
+    "portfolio-edit": 1         // 编辑持仓：表单
+  };
   var SIDEBAR_GROUPS = [
     ["cloud", "大盘云图"], ["overview", "总览"], ["market", "市场"], ["research", "投研"],
     ["my", "我的"], ["sys", "系统"]
@@ -603,9 +617,11 @@
       try {
         live.ticks += 1;
         var id = currentViewId();
-        if (id !== "home") {
-          await renderGeneric(id, true);
-        } else {
+        /* BUG-20261119-01：交互型视图（对话/表单/编辑）持有用户输入状态，
+           12 秒定时重渲染会执行 host.innerHTML 整体重建，导致智能助手聊天内容
+           与输入框每 12 秒被清空（输入到一半一闪消失、回复不到两秒消失）。
+           此类视图不参与静默定时重渲染，仅首次进入时渲染一次。 */
+        if (id === "home") {
           var payload = await OB.http.getJSON("/api/market/index?market=a").catch(function () { return null; });
           var items = (payload && payload.data && payload.data.items) || [];
           document.querySelectorAll(".index-value").forEach(function (node, i) {

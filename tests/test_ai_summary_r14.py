@@ -46,6 +46,9 @@ def _stub_ai_config(monkeypatch, base_url: str = "https://api.test/v1", model: s
         "base_url": base_url,
         "model": model,
         "api_key": api_key,
+        "reasoning_effort": "",
+        "context_kb": 0,
+        "max_tokens": 0,
     })
     monkeypatch.setattr(config, "load_ai_config", lambda: _AI())
 

@@ -202,7 +202,8 @@ def test_chat_injects_system_when_page_supported(
 
     monkeypatch.setattr(
         ai_router.config, "load_ai_config",
-        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model"),
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
     )
     import backend.app.datasource.tencent as tencent_module
 
@@ -229,7 +230,8 @@ def test_chat_without_page_is_unchanged(
 
     monkeypatch.setattr(
         ai_router.config, "load_ai_config",
-        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model"),
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
     )
     body = client.post("/api/ai/chat", json={
         "messages": [{"role": "user", "content": "你好"}], "page": "settings",
@@ -248,10 +250,82 @@ def test_chat_summary_failure_never_blocks_reply(
 
     monkeypatch.setattr(
         ai_router.config, "load_ai_config",
-        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model"),
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
     )
     monkeypatch.setattr(page_context, "build_summary",
                         lambda page, params=None: (_ for _ in ()).throw(RuntimeError("构造炸了")))
     body = client.post("/api/ai/chat", json={"message": "hi", "page": "sectors"}).json()
     assert body["error"] is None and body["data"]["reply"] == "STUB-OK"
     assert body["data"]["context_used"] is False
+
+
+# ============================================================
+# 面 4：智能助手页持仓上下文（2026-11-18「诊断持仓」修复）
+# ============================================================
+
+def test_ai_page_summary_includes_holdings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """「诊断持仓」上下文：ai 页摘要必须含持仓台账的真实标的/份额/成本。"""
+    import backend.app.datasource.portfolio as portfolio_module
+
+    monkeypatch.setattr(portfolio_module, "load", lambda: {
+        "items": [
+            {"market": "a", "symbol": "600519", "name": "贵州茅台", "shares": 100, "cost": 1680.5},
+            {"market": "a", "symbol": "300750", "name": "宁德时代", "shares": 200, "cost": 180.2},
+        ],
+        "updated_at": None,
+    })
+    text = page_context.build_summary("ai", {})
+    assert text is not None
+    assert "贵州茅台" in text and "600519" in text
+    assert "宁德时代" in text and "300750" in text
+    assert "100" in text and "1680.5" in text
+    assert "不得编造" in text
+
+
+def test_ai_page_summary_empty_portfolio_injects_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """零持仓（用户真实状态，非异常）→ 注入明确说明，AI 告知未读取到持仓并引导添加，
+    替代空数据下输出通用方法论的“空壳”观感（2026-11-19 BUG-20261119-02）。"""
+    import backend.app.datasource.portfolio as portfolio_module
+    from backend.app.datasource import page_context
+
+    monkeypatch.setattr(portfolio_module, "load", lambda: {"items": [], "updated_at": None})
+    text = page_context.build_summary("ai", {})
+    assert text is not None
+    assert "持仓台账为空" in text
+    assert "未读取到持仓数据" in text
+
+
+def test_ai_page_summary_load_failure_never_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """持仓读取抛错 → 返回 None，对话主链路不受影响。"""
+    import backend.app.datasource.portfolio as portfolio_module
+    from backend.app.datasource import page_context
+
+    monkeypatch.setattr(portfolio_module, "load", lambda: (_ for _ in ()).throw(RuntimeError("读炸了")))
+    assert page_context.build_summary("ai", {}) is None
+
+
+def test_chat_ai_page_injects_portfolio_context(
+    client: Any, stub_base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端到端：page=ai 时 /api/ai/chat 必须注入持仓 system 上下文并回传 context_used。"""
+    from backend.app.routers import ai as ai_router
+    import backend.app.datasource.portfolio as portfolio_module
+
+    monkeypatch.setattr(
+        ai_router.config, "load_ai_config",
+        lambda: SimpleNamespace(base_url=stub_base + "/v1", api_key="sk-stub", model="stub-model",
+                                reasoning_effort="", context_kb=0, max_tokens=0),
+    )
+    monkeypatch.setattr(portfolio_module, "load", lambda: {
+        "items": [{"market": "a", "symbol": "600519", "name": "贵州茅台", "shares": 100, "cost": 1680.5}],
+        "updated_at": None,
+    })
+    body = client.post("/api/ai/chat", json={
+        "messages": [{"role": "user", "content": "诊断持仓"}], "page": "ai",
+    }).json()
+    assert body["error"] is None
+    assert body["data"]["context_used"] is True
+    sent = _StubHandler.calls[-1]["body"]["messages"]
+    sys_msg = next(m for m in sent if m["role"] == "system")
+    assert "贵州茅台" in sys_msg["content"] and "600519" in sys_msg["content"]

@@ -331,12 +331,21 @@ class AIConfig:
         api_key: 接口密钥，repr=False 确保对象被打印时不会泄露。
         model: 模型名称。
         source: 配置来源，取值 env / dotenv / file / none。
+        reasoning_effort: 思考强度，弱/中/高/强/极致 → low/medium/high/xhigh/max；
+            空串表示不传该参数（由上游按模型默认处理）。
+        context_kb: 上下文输入配置——会话历史的字符预算（KB，0–512；0/留空表示
+            不裁剪，按上游上下文默认处理）。
+        max_tokens: 输出配置——单次回复的最大 token 预算（0–8192；0/留空表示
+            不传该参数，由上游按模型默认处理）。
     """
 
     base_url: str = ""
     api_key: str = field(default="", repr=False)
     model: str = ""
     source: str = "none"
+    reasoning_effort: str = ""
+    context_kb: int = 0
+    max_tokens: int = 0
 
     @property
     def configured(self) -> bool:
@@ -471,6 +480,54 @@ def _first_non_empty(*values: Optional[str]) -> str:
     return ""
 
 
+# 思考强度档位：界面中文 → 上游 OpenAI 兼容 reasoning_effort 取值
+# （五档已全部对当前 GLM 上游实测 200，映射如下；空串表示不传该参数）
+REASONING_EFFORT_MAP: Dict[str, str] = {
+    "弱": "low", "中": "medium", "高": "high", "强": "xhigh", "极致": "max",
+}
+# 反向映射：上游值回显界面时用
+REASONING_EFFORT_LABELS: Dict[str, str] = {v: k for k, v in REASONING_EFFORT_MAP.items()}
+
+
+def _parse_reasoning_effort(raw: Any) -> str:
+    """解析思考强度，返回上游 reasoning_effort 取值（low/medium/high/xhigh/max）或空串。
+
+    Args:
+        raw: 配置源原始值（界面中文标签或上游英文值均可）。
+
+    Returns:
+        str: 合法取值；无法识别或为空时返回空串（不传该参数）。
+    """
+    text = str(raw or "").strip().lower()
+    if not text:
+        return ""
+    if text in REASONING_EFFORT_MAP.values():
+        return text
+    for label, value in REASONING_EFFORT_MAP.items():
+        if text == label.lower():
+            return value
+    return ""
+
+
+def _parse_int_clamped(raw: Any, lo: int, hi: int, default: int) -> int:
+    """解析整数并夹取到 [lo, hi] 区间；无法解析时返回默认值。
+
+    Args:
+        raw: 配置源原始值。
+        lo: 下限。
+        hi: 上限。
+        default: 解析失败时的默认值。
+
+    Returns:
+        int: 夹取后的整数。
+    """
+    try:
+        num = int(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, num))
+
+
 def load_ai_config() -> AIConfig:
     """按优先级加载 AI 配置。
 
@@ -515,7 +572,20 @@ def load_ai_config() -> AIConfig:
     else:
         source = "none"
 
-    return AIConfig(base_url=base_url, api_key=api_key, model=model, source=source)
+    # 2026-11-18：思考强度/上下文/输出配置仅支持文件配置（界面保存入口唯一），
+    # 环境变量与 .env 不承载该三项，避免双源不一致。
+    # 2026-11-19：上下文输入改为 KB 字符预算（context_kb），0/留空=不裁剪用上游默认；
+    # 输出配置 max_tokens 0/留空=不传该参数，用上游默认。
+    reasoning_effort = _parse_reasoning_effort(file_config.get("reasoning_effort"))
+    context_kb = _parse_int_clamped(file_config.get("context_kb"), 0, 512, 0)
+    max_tokens = _parse_int_clamped(file_config.get("max_tokens"), 0, 8192, 0)
+
+    return AIConfig(
+        base_url=base_url, api_key=api_key, model=model, source=source,
+        reasoning_effort=reasoning_effort,
+        context_kb=context_kb,
+        max_tokens=max_tokens,
+    )
 
 
 def mask_secret(secret: str) -> str:
@@ -547,6 +617,12 @@ def get_public_ai_config() -> Dict[str, Any]:
         "model": config.model,
         "api_key": mask_secret(config.api_key),
         "source": config.source,
+        # 2026-11-18：思考强度回显（中文标签，界面直读）；
+        # 2026-11-19：上下文输入改为 KB 字符预算、输出预算 0=不传用上游默认
+        "reasoning_effort": config.reasoning_effort,
+        "reasoning_effort_label": REASONING_EFFORT_LABELS.get(config.reasoning_effort, ""),
+        "context_kb": config.context_kb,
+        "max_tokens": config.max_tokens,
     }
 
 

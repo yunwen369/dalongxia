@@ -59,6 +59,9 @@ data/yjb_secret.json
 # ---------- 运行数据与缓存（运行时生成，不入库） ----------
 data/portfolio.json
 data/watchlist.json
+# 2026-11-20 上线批次：briefs.json 为每日确定性规则研判的运行产物（随交易日累积），
+# 与持仓/提醒等用户本地运行数据同性质，移出跟踪、本地保留、不入库
+data/briefs.json
 # 第七轮波次 5 新增运行时数据：提醒规则/事件、筛选器全市场快照（每日 18:00 自动重建）
 data/alerts.json
 data/screener_snapshot.json
