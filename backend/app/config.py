@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # =============================================================
 APP_NAME = "大龙虾投研工作台"  # 应用中文名，写入健康检查与窗口标题
 APP_VERSION = "3.7.5"  # 语义化版本号：3.7.5 = AI 接入修复（配置落位 + 推理模型探测）+ AI 多轮上下文修复 + 界面全面中文化（修订号批次，无新增功能模块）
-BUILD_TAG = "v3.7.5-20261118"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
+BUILD_TAG = "v3.7.5-20261120"  # 构建标识：v{APP_VERSION}-{YYYYMMDD}，写入 /api/health 的 build 字段
 # 版本号单一来源（规范 v7.4 §2.11 第 6 条第 2 款）：installer.nsi 的 APPVER/APPVER4/OutFile
 # 与 VERSION.txt 一律由 tools/build_and_gate.py 从本文件派生，禁止手工改 NSI 或写死版本；
 # tests/test_version_consistency.py 会在门禁中校验四处（config / NSI / VERSION / 状态文档）一致。
